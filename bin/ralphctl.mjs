@@ -1,9 +1,6 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { spawn } from "node:child_process";
-import path from "node:path";
 import {
-  CONTROL_PLANE_ROOT,
   createContext,
   createSession,
   createTask,
@@ -14,7 +11,6 @@ import {
   listSessions,
   listTasks,
 } from "../src/lib/control-plane.mjs";
-import { createControlPlaneServer } from "../src/server/server.mjs";
 
 main().catch((error) => {
   console.error(`ralphctl: ${error.message}`);
@@ -30,24 +26,11 @@ async function main() {
     return;
   }
 
-  if (command === "dev" || command === "gui") {
-    const subcommand = parsed._[1] || "";
-    if (command === "gui" && subcommand && subcommand !== "open") {
-      throw new Error(`unknown gui command: ${subcommand}`);
-    }
-    await launchDesktopGui(parsed);
-    return;
-  }
-
-  if (command === "serve") {
-    await serveWeb(parsed, { open: Boolean(parsed.open) });
-    return;
-  }
-
   const context = createContext({
     projectRoot: parsed.project,
     deskRoot: parsed["desk-root"],
     worktreesRoot: parsed["worktrees-root"],
+    codexCli: parsed["codex-cli"],
   });
 
   if (command === "tasks") {
@@ -61,68 +44,6 @@ async function main() {
   }
 
   throw new Error(`unknown command: ${command}`);
-}
-
-async function launchDesktopGui(parsed) {
-  const electronPath = path.join(
-    CONTROL_PLANE_ROOT,
-    "node_modules",
-    ".bin",
-    process.platform === "win32" ? "electron.cmd" : "electron",
-  );
-  const child = spawn(electronPath, buildDesktopArgs(parsed), {
-    cwd: CONTROL_PLANE_ROOT,
-    stdio: "inherit",
-  });
-  const exitCode = await new Promise((resolve) => {
-    child.on("error", (error) => {
-      console.error(`ralphctl: failed to launch AgentDesk desktop app: ${error.message}`);
-      resolve(1);
-    });
-    child.on("close", (code) => resolve(code ?? 0));
-  });
-  process.exit(exitCode);
-}
-
-function buildDesktopArgs(parsed) {
-  const args = [path.join(CONTROL_PLANE_ROOT, "src", "desktop", "main.mjs")];
-  for (const key of ["host", "port", "project", "desk-root", "worktrees-root"]) {
-    if (parsed[key]) {
-      args.push(`--${key}`, String(parsed[key]));
-    }
-  }
-  if (parsed.devtools) {
-    args.push("--devtools");
-  }
-  return args;
-}
-
-async function serveWeb(parsed, options = {}) {
-  const host = parsed.host || "127.0.0.1";
-  const port = Number(parsed.port || 4317);
-  const initialContext = parsed.project ? createContext({
-    projectRoot: parsed.project,
-    deskRoot: parsed["desk-root"],
-    worktreesRoot: parsed["worktrees-root"],
-  }) : null;
-  const server = createControlPlaneServer(initialContext, {
-    deskRoot: parsed["desk-root"],
-    worktreesRoot: parsed["worktrees-root"],
-  });
-  await new Promise((resolve, reject) => {
-    const onError = (error) => reject(error);
-    server.once("error", onError);
-    server.listen(port, host, () => {
-      server.off("error", onError);
-      resolve();
-    });
-  });
-  const url = `http://${host}:${port}`;
-  if (options.open) {
-    openBrowser(url);
-  }
-  console.log(`AgentDesk web server: ${url}`);
-  console.log(initialContext ? `Project: ${initialContext.projectRoot}` : "Project: choose in the web UI");
 }
 
 async function handleTasks(context, parsed) {
@@ -203,7 +124,9 @@ async function handleSessions(context, parsed) {
   if (subcommand === "start") {
     const taskId = required(parsed._[2], "task id");
     const result = await createSession(context, taskId, {
-      parallelism: parsed.parallel || parsed.parallelism,
+      parallelism: parsed.parallel || parsed.parallelism || parsed.concurrency || parsed["codex-count"],
+      model: parsed.model,
+      reasoning: parsed.reasoning || parsed.effort,
     });
     return output(parsed, result, () => `Started session: ${result.sessionId}`);
   }
@@ -273,34 +196,29 @@ async function readStdinIfAvailable() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function openBrowser(url) {
-  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-  const child = spawn(command, args, {
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
-}
-
 function printHelp() {
   console.log(`AgentDesk control plane
 
 Usage:
-  ralphctl dev [--host 127.0.0.1] [--port 4317]
-  ralphctl gui [open] [--host 127.0.0.1] [--port 4317] [--project DIR] [--devtools]
-  ralphctl serve [--host 127.0.0.1] [--port 4317] [--project DIR] [--open]
   ralphctl tasks list [--json]
   ralphctl tasks show <taskId> [--json]
   ralphctl tasks create [--title TEXT] [--brief TEXT] [--json]
   ralphctl sessions list [--task <taskId>] [--json]
   ralphctl sessions show <sessionId> [--json]
-  ralphctl sessions start <taskId> [--parallel N] [--json]
+  ralphctl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--json]
   ralphctl sessions logs <sessionId> <agentId> [--json]
 
 Global options:
-  --project DIR          Project root to inspect. For gui/serve/dev, this is optional.
+  --project DIR          Project root to inspect. Defaults to the current git root.
   --desk-root DIR        Override the AgentDesk state root. Default: <project>/.agent-desk.
   --worktrees-root DIR   Override the persistent git worktrees root.
+  --codex-cli PATH       Override the Codex CLI executable path.
+
+Session start options:
+  --model MODEL          Codex model for subagents. Default: gpt-5.5.
+  --reasoning EFFORT     Reasoning effort: low, medium, high, or xhigh. Default: xhigh.
+  --parallel N           Maximum concurrent Codex CLI subagents. Default: 6, max: 24.
+  --concurrency N        Alias for --parallel.
+  --codex-count N        Alias for --parallel.
 `);
 }

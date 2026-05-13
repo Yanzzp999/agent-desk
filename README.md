@@ -1,40 +1,33 @@
 # AgentDesk
 
-<img src="src/web/assets/agentdesk-icon.png" alt="AgentDesk logo" width="96">
+AgentDesk 是一个以 CLI 为中心的项目编排工具，用来通过 Codex 生成 `task.md`，
+再把任务拆分给多个 Codex CLI 子代理执行。
 
-AgentDesk is a standalone project orchestrator for Codex-driven task generation
-and multi-subagent execution.
+它围绕三个概念工作：
 
-It is built around three concepts:
+- `Project`：任意一个本地 git 仓库
+- `Task`：存放在 `<project>/.agent-desk/tasks` 下的 `task.md`
+- `Session`：一次执行运行，会把 `task.md` 里的子任务分发给多个 Codex CLI 子代理
 
-- `Project`: any local directory you want to manage
-- `Task`: a generated `task.md` document stored in `<project>/.agent-desk/tasks`
-- `Session`: one execution run that fans a task out to multiple Codex subagents
+AgentDesk 不再提供 GUI、Electron 外壳或本地 Web 应用。当前支持的主要入口是
+`ralphctl`。
 
-## What Changed
+## 默认配置
 
-This version no longer uses `prd.json`, and it no longer includes Gemini CLI
-or Claude Code compatibility layers.
+每次执行 session 默认使用：
 
-AgentDesk now works like this:
+- 模型：`gpt-5.5`
+- 思考深度：`xhigh`
+- 服务层级：`fast`
+- 并发 Codex CLI 子代理数量：`6`
+- 启动批次大小：`6`
+- 集成分支：`master`
 
-- select a project directory
-- generate a `task.md` file from a feature brief using Codex
-- choose a task and start a session with a configurable parallel agent count
-- let AgentDesk launch subagents in batches of 6
-- keep one persistent git worktree per subagent
-- integrate completed subagent branches into `master`
-- update session documentation after subagents finish
+启动 session 时可以配置模型、思考深度和并发 Codex CLI 数量。
 
-Every execution subagent is pinned to:
+## 状态目录
 
-- model: `gpt-5.5`
-- reasoning: `xhigh`
-- service tier: `fast`
-
-## State Layout
-
-Each project stores orchestration state in:
+每个项目会把编排状态保存在：
 
 ```text
 <project>/.agent-desk/
@@ -60,95 +53,100 @@ Each project stores orchestration state in:
           stderr.log
 ```
 
-Persistent git worktrees are stored outside the project by default under:
+持久化 git worktree 默认存放在项目目录之外：
 
 ```text
 ~/.agent-desk/worktrees/<project-key>/<sessionId>/<agentId>
 ```
 
-AgentDesk never auto-deletes those worktrees.
+AgentDesk 不会自动删除这些 worktree。
 
-## Quick Start
+## 快速开始
 
-Requires Node.js 22.12 or newer.
+需要 Node.js 22.12 或更新版本，并且本机可以执行 Codex CLI。
 
 ```sh
 npm install
-npm run dev
+./scripts/ralphctl.sh tasks create \
+  --project /absolute/path/to/project \
+  --title "Checkout flow" \
+  --brief "Implement the checkout flow end to end"
 ```
 
-You can also run the local server or CLI directly:
+任务生成会通过 `codex exec` 执行，并把 markdown 写入：
+
+```text
+<project>/.agent-desk/tasks/<taskId>/task.md
+```
+
+列出和查看任务：
 
 ```sh
-./scripts/ralphctl.sh gui
-./scripts/ralphctl.sh serve --project /absolute/path/to/project
 ./scripts/ralphctl.sh tasks list --project /absolute/path/to/project
+./scripts/ralphctl.sh tasks show <taskId> --project /absolute/path/to/project
 ```
 
-## CLI
+启动 Codex 子代理 session：
+
+```sh
+./scripts/ralphctl.sh sessions start <taskId> \
+  --project /absolute/path/to/project \
+  --model gpt-5.5 \
+  --reasoning xhigh \
+  --parallel 6
+```
+
+## CLI 命令
 
 ```text
-ralphctl dev
-ralphctl gui
-ralphctl gui open
-ralphctl serve
-ralphctl tasks list
-ralphctl tasks show <taskId>
-ralphctl tasks create --title "Checkout flow" --brief "..."
-ralphctl sessions list
-ralphctl sessions show <sessionId>
-ralphctl sessions start <taskId> --parallel 8
-ralphctl sessions logs <sessionId> <agentId>
+ralphctl tasks list [--json]
+ralphctl tasks show <taskId> [--json]
+ralphctl tasks create [--title TEXT] [--brief TEXT] [--json]
+ralphctl sessions list [--task <taskId>] [--json]
+ralphctl sessions show <sessionId> [--json]
+ralphctl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--json]
+ralphctl sessions logs <sessionId> <agentId> [--json]
 ```
 
-Global options:
+全局参数：
 
-- `--project DIR` selects the project root
-- `--desk-root DIR` overrides `<project>/.agent-desk`
-- `--worktrees-root DIR` overrides the persistent worktree root
+- `--project DIR`：选择项目根目录
+- `--desk-root DIR`：覆盖 `<project>/.agent-desk`
+- `--worktrees-root DIR`：覆盖持久化 git worktree 根目录
+- `--codex-cli PATH`：覆盖 Codex CLI 可执行文件路径
 
-## Runtime Behavior
+启动 session 的参数：
 
-Task generation:
+- `--model MODEL`：选择 Codex 模型，默认 `gpt-5.5`
+- `--reasoning EFFORT`：选择 `low`、`medium`、`high` 或 `xhigh`，默认 `xhigh`
+- `--parallel N`：限制并发 Codex CLI 子代理数量，默认 `6`，最大 `24`
+- `--concurrency N`：`--parallel` 的别名
+- `--codex-count N`：`--parallel` 的别名
 
-- runs through `codex exec`
-- writes markdown only to `task.md`
-- is intended to produce subagent-ready checkbox subtasks
+## 运行行为
 
-Session execution:
+任务生成：
 
-- parses subtasks from `task.md`
-- starts one Codex subagent per subtask
-- launches new subagents in batches of 6
-- respects the session's selected parallelism cap
-- assigns each subagent its own git branch and git worktree
-- rebases finished subagent branches onto `master`
-- fast-forwards `master` to integrate completed work
+- 通过 `codex exec` 运行
+- 只把 markdown 写入 `task.md`
+- 生成适合子代理执行的 markdown checkbox 子任务
 
-The session documentation file `session.md` is regenerated after subagents
-finish so the main orchestrator always leaves behind a current summary.
+Session 执行：
 
-## API
+- 从 `task.md` 解析子任务
+- 每个子任务启动一个 Codex CLI 子代理
+- 每批最多启动 6 个新的子代理
+- 遵守 session 选择的并发 Codex CLI 上限
+- 为每个子代理创建独立 git branch 和 git worktree
+- 将完成的子代理分支 rebase 到 `master`
+- 通过 fast-forward 更新 `master` 集成完成的工作
 
-Core endpoints:
+`session.md` 会随着子代理完成不断重新生成，所以编排器会留下最新执行摘要。
 
-```text
-GET  /api/health
-GET  /api/projects
-POST /api/projects/select
-GET  /api/tasks
-POST /api/tasks
-GET  /api/tasks/:taskId
-GET  /api/tasks/:taskId/sessions
-POST /api/tasks/:taskId/sessions
-GET  /api/sessions
-GET  /api/sessions/:sessionId
-GET  /api/sessions/:sessionId/agents/:agentId/logs
-GET  /api/events
-```
-
-## Verification
+## 验证
 
 ```sh
 npm test
+./scripts/ralphctl.sh help
+codex --version
 ```

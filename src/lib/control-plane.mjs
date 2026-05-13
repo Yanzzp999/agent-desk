@@ -19,13 +19,16 @@ export const DEFAULT_SUBAGENT_REASONING = "xhigh";
 export const DEFAULT_SERVICE_TIER = "fast";
 export const DEFAULT_PARALLELISM = 6;
 export const DEFAULT_LAUNCH_BATCH_SIZE = 6;
-const MAX_PARALLELISM = 24;
+export const MAX_PARALLELISM = 24;
 const SCHEMA_VERSION = 2;
 const TASK_STATUSES = new Set(["received", "generating", "ready", "running", "succeeded", "failed"]);
 const SESSION_STATUSES = new Set(["queued", "running", "succeeded", "failed"]);
 const AGENT_STATUSES = new Set(["queued", "running", "integrating", "succeeded", "failed"]);
 const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const BOOLEAN_FALSE_VALUES = new Set(["0", "false", "no", "off"]);
+const SUPPORTED_REASONING_EFFORTS = new Set(
+  CODEX_REASONING_EFFORT_OPTIONS.map((option) => option.value).filter(Boolean),
+);
 const SUBAGENT_REPORT_SCHEMA_PATH = path.join(CONTROL_PLANE_ROOT, "src", "lib", "subagent-report.schema.json");
 
 export function findProjectRoot(cwd = process.cwd()) {
@@ -631,22 +634,41 @@ function normalizeTaskRequest(request = {}) {
   return { brief, title };
 }
 
-function normalizeSessionRequest(request = {}) {
+export function normalizeSessionRequest(request = {}) {
   return {
     parallelism: normalizeParallelism(request.parallelism),
-    model: normalizeOptionalString(request.model) || DEFAULT_SUBAGENT_MODEL,
-    reasoning: normalizeOptionalString(request.reasoning) || DEFAULT_SUBAGENT_REASONING,
+    model: normalizeSubagentModel(request.model),
+    reasoning: normalizeReasoningEffort(request.reasoning),
     serviceTier: DEFAULT_SERVICE_TIER,
     launchPrompt: normalizeOptionalString(request.launchPrompt),
   };
 }
 
 function normalizeParallelism(value) {
-  const number = Number(value || DEFAULT_PARALLELISM);
-  if (!Number.isFinite(number) || number <= 0) {
+  if (value === undefined || value === null || value === "") {
     return DEFAULT_PARALLELISM;
   }
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    throw new Error("parallelism must be a positive number");
+  }
   return Math.max(1, Math.min(MAX_PARALLELISM, Math.floor(number)));
+}
+
+function normalizeSubagentModel(value) {
+  const model = normalizeOptionalString(value) || DEFAULT_SUBAGENT_MODEL;
+  if (/\s/.test(model)) {
+    throw new Error("model must be a single Codex CLI model id");
+  }
+  return model;
+}
+
+function normalizeReasoningEffort(value) {
+  const effort = normalizeOptionalString(value) || DEFAULT_SUBAGENT_REASONING;
+  if (!SUPPORTED_REASONING_EFFORTS.has(effort)) {
+    throw new Error(`unsupported reasoning effort: ${effort}`);
+  }
+  return effort;
 }
 
 function normalizeFastMetadata(fast) {
@@ -935,7 +957,7 @@ async function integrateBranchIntoMaster(context, worktreePath, baseCommit, head
   }
 }
 
-async function runCodexPrompt(options) {
+export function buildCodexExecArgs(options = {}) {
   const args = [
     "exec",
     "-m",
@@ -960,6 +982,11 @@ async function runCodexPrompt(options) {
     args.push("--output-schema", options.outputSchemaFile);
   }
   args.push("-");
+  return args;
+}
+
+async function runCodexPrompt(options) {
+  const args = buildCodexExecArgs(options);
   return spawnStreamingCapture(options.context.codexCli || "codex", args, {
     cwd: options.cwd,
     stdin: options.prompt,

@@ -5,16 +5,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   AGENT_DESK_STATE_DIRNAME,
+  buildCodexExecArgs,
   createContext,
   getAgentLogs,
   getSession,
   getTask,
   listSessions,
   listTasks,
+  normalizeSessionRequest,
   parseTaskMarkdownItems,
   renderSessionDocument,
 } from "../src/lib/control-plane.mjs";
-import { createControlPlaneServer } from "../src/server/server.mjs";
 
 test("createContext uses project-scoped .agent-desk roots", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-context-"));
@@ -164,105 +165,60 @@ test("reads task, session, and agent log state from .agent-desk", async () => {
   assert.match(logs.stderr, /stderr line/);
 });
 
-test("server starts without a project and selects one at runtime", async () => {
-  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-select-project-"));
-  const stateFile = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-state-file-")), "projects.json");
-  const taskDir = path.join(projectRoot, ".agent-desk", "tasks", "task-demo");
-
-  await fs.mkdir(taskDir, { recursive: true });
-  await fs.writeFile(path.join(taskDir, "meta.json"), `${JSON.stringify({
-    schemaVersion: 2,
-    taskId: "task-demo",
-    title: "Selectable task",
-    brief: "Generated task markdown",
-    status: "ready",
-    createdAt: "2026-05-13T12:00:00.000Z",
-    updatedAt: "2026-05-13T12:00:00.000Z",
-    completedAt: "2026-05-13T12:00:00.000Z",
-    lastError: "",
-    subtaskCount: 1,
-    paths: {
-      taskDir,
-      briefMd: path.join(taskDir, "brief.md"),
-      promptMd: path.join(taskDir, "prompt.md"),
-      taskMd: path.join(taskDir, "task.md"),
-      metaJson: path.join(taskDir, "meta.json"),
-      stdoutLog: path.join(taskDir, "stdout.log"),
-      stderrLog: path.join(taskDir, "stderr.log"),
-    },
-  }, null, 2)}\n`);
-  await fs.writeFile(path.join(taskDir, "task.md"), "# Selectable task\n\n- [ ] Do the work\n");
-
-  const server = createControlPlaneServer(null, { stateFile });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address();
-  const baseUrl = `http://127.0.0.1:${port}`;
-
-  try {
-    const initialHealth = await requestJson(`${baseUrl}/api/health`);
-    assert.equal(initialHealth.needsProject, true);
-
-    const tasksBeforeProject = await fetch(`${baseUrl}/api/tasks`);
-    assert.equal(tasksBeforeProject.status, 400);
-
-    const selected = await requestJson(`${baseUrl}/api/projects/select`, {
-      method: "POST",
-      body: { projectRoot },
-    });
-    assert.equal(selected.current.projectRoot, projectRoot);
-
-    const selectedHealth = await requestJson(`${baseUrl}/api/health`);
-    assert.equal(selectedHealth.needsProject, false);
-    assert.equal(selectedHealth.projectRoot, projectRoot);
-
-    const tasks = await requestJson(`${baseUrl}/api/tasks`);
-    assert.equal(tasks.items.length, 1);
-    assert.equal(tasks.items[0].taskId, "task-demo");
-  } finally {
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  }
-});
-
-test("server persists project order changes", async () => {
-  const projectA = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-project-a-"));
-  const projectB = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-project-b-"));
-  const stateFile = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-order-state-")), "projects.json");
-  const server = createControlPlaneServer(null, { stateFile });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address();
-  const baseUrl = `http://127.0.0.1:${port}`;
-
-  try {
-    await requestJson(`${baseUrl}/api/projects/select`, {
-      method: "POST",
-      body: { projectRoot: projectA },
-    });
-    const selectedB = await requestJson(`${baseUrl}/api/projects/select`, {
-      method: "POST",
-      body: { projectRoot: projectB },
-    });
-    assert.deepEqual(selectedB.items.map((project) => project.projectRoot), [projectB, projectA]);
-
-    const reordered = await requestJson(`${baseUrl}/api/projects/reorder`, {
-      method: "POST",
-      body: { projectRoot: projectA, direction: "up" },
-    });
-    assert.deepEqual(reordered.items.map((project) => project.projectRoot), [projectA, projectB]);
-
-    const saved = JSON.parse(await fs.readFile(stateFile, "utf8"));
-    assert.deepEqual(saved.projects.map((project) => project.projectRoot), [projectA, projectB]);
-  } finally {
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  }
-});
-
-async function requestJson(url, options = {}) {
-  const response = await fetch(url, {
-    method: options.method || "GET",
-    headers: options.body ? { "Content-Type": "application/json" } : {},
-    body: options.body ? JSON.stringify(options.body) : undefined,
+test("normalizes configurable session defaults and overrides", () => {
+  assert.deepEqual(normalizeSessionRequest(), {
+    parallelism: 6,
+    model: "gpt-5.5",
+    reasoning: "xhigh",
+    serviceTier: "fast",
+    launchPrompt: "",
   });
-  const payload = await response.json();
-  assert.equal(response.ok, true, payload.error || response.statusText);
-  return payload;
-}
+
+  assert.deepEqual(normalizeSessionRequest({
+    parallelism: "2",
+    model: "gpt-5.4",
+    reasoning: "high",
+    launchPrompt: "Prefer small patches",
+  }), {
+    parallelism: 2,
+    model: "gpt-5.4",
+    reasoning: "high",
+    serviceTier: "fast",
+    launchPrompt: "Prefer small patches",
+  });
+
+  assert.equal(normalizeSessionRequest({ parallelism: "999" }).parallelism, 24);
+  assert.throws(() => normalizeSessionRequest({ parallelism: "0" }), /positive number/);
+  assert.throws(() => normalizeSessionRequest({ model: "bad model" }), /single Codex CLI model id/);
+  assert.throws(() => normalizeSessionRequest({ reasoning: "extreme" }), /unsupported reasoning effort/);
+});
+
+test("builds Codex exec args with selected model, reasoning, service tier, and output schema", () => {
+  assert.deepEqual(buildCodexExecArgs({
+    cwd: "/tmp/project-worktree",
+    model: "gpt-5.5",
+    reasoning: "high",
+    serviceTier: "fast",
+    outputFile: "/tmp/report.json",
+    outputSchemaFile: "/tmp/schema.json",
+  }), [
+    "exec",
+    "-m",
+    "gpt-5.5",
+    "-c",
+    "model_reasoning_effort=\"high\"",
+    "-c",
+    "service_tier=\"fast\"",
+    "-s",
+    "danger-full-access",
+    "-a",
+    "never",
+    "-C",
+    "/tmp/project-worktree",
+    "-o",
+    "/tmp/report.json",
+    "--output-schema",
+    "/tmp/schema.json",
+    "-",
+  ]);
+});
