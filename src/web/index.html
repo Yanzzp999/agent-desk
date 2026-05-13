@@ -18,18 +18,27 @@
             <span class="nav-subtitle">Project Orchestrator</span>
           </div>
         </div>
+        <section id="sidebar-summary" class="sidebar-summary" aria-label="Current workspace"></section>
         <nav class="nav" aria-label="Primary">
-          <button data-view="overview" class="active" type="button"><span>Overview</span><small>Projects and activity</small></button>
+          <button data-view="sessions" class="active" type="button"><span>Sessions</span><small>Project and run history</small></button>
           <button data-view="tasks" type="button"><span>Tasks</span><small>Generate and launch</small></button>
-          <button data-view="sessions" type="button"><span>Sessions</span><small>Subagent execution</small></button>
+          <button data-view="overview" type="button"><span>Overview</span><small>Workspace health</small></button>
           <button data-view="settings" type="button"><span>Settings</span><small>Runtime and paths</small></button>
         </nav>
+        <section class="sidebar-section" aria-label="Recent projects">
+          <div class="sidebar-section-head">
+            <span>Projects</span>
+            <small>Recent workspaces</small>
+          </div>
+          <div id="sidebar-projects" class="sidebar-projects"></div>
+        </section>
       </aside>
       <main class="main">
         <header class="topbar">
           <div class="topbar-meta">
-            <p class="eyebrow project-path" id="project-root">Loading project</p>
-            <h1 id="page-title">Overview</h1>
+            <p class="eyebrow" id="page-kicker">Loading workspace</p>
+            <h1 id="page-title">Sessions</h1>
+            <p class="project-path" id="project-root">Loading project</p>
           </div>
           <div class="top-actions">
             <span class="connection" id="connection-state">Connecting</span>

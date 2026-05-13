@@ -1,5 +1,7 @@
+const STARTABLE_TASK_STATUSES = new Set(["ready", "running", "succeeded", "failed"]);
+
 const state = {
-  view: "overview",
+  view: "sessions",
   health: null,
   projects: { current: null, items: [] },
   tasks: [],
@@ -15,8 +17,11 @@ const state = {
 
 const app = document.querySelector("#app");
 const title = document.querySelector("#page-title");
+const pageKicker = document.querySelector("#page-kicker");
 const projectRoot = document.querySelector("#project-root");
 const connection = document.querySelector("#connection-state");
+const sidebarSummary = document.querySelector("#sidebar-summary");
+const sidebarProjects = document.querySelector("#sidebar-projects");
 
 document.querySelector("#refresh-button").addEventListener("click", () => refreshAll({ forceSelections: true }));
 document.querySelectorAll(".nav button").forEach((button) => {
@@ -77,27 +82,32 @@ document.body.addEventListener("submit", async (event) => {
   }
 });
 
+document.body.addEventListener("change", (event) => {
+  if (event.target instanceof HTMLSelectElement && event.target.name === "taskId") {
+    state.selectedTaskId = String(event.target.value || "");
+    render();
+  }
+});
+
 start();
 
 async function start() {
-  hydrateShell();
   await refreshAll({ forceSelections: true });
   connectEvents();
   setInterval(() => refreshAll(), 7000);
 }
 
-function hydrateShell() {
-  projectRoot.classList.add("project-path");
-}
-
 async function refreshAll(options = {}) {
   try {
-    state.projects = await api("/api/projects");
-    state.health = await api("/api/health");
-    const hasProject = Boolean(state.health.projectRoot);
-    projectRoot.textContent = hasProject ? state.health.projectRoot : "Choose a project";
-    projectRoot.title = hasProject ? state.health.projectRoot : "";
+    const [projects, health] = await Promise.all([
+      api("/api/projects"),
+      api("/api/health"),
+    ]);
 
+    state.projects = projects;
+    state.health = health;
+
+    const hasProject = Boolean(state.health.projectRoot);
     if (!hasProject) {
       clearLoadedProjectState();
       setConnectionState("connected", "Connected");
@@ -154,7 +164,7 @@ async function selectProject(projectPath) {
     });
     state.projects = result;
     state.message = `Selected ${result.current?.name || trimmed}`;
-    state.view = "overview";
+    state.view = "sessions";
     clearLoadedProjectState();
     await refreshAll({ forceSelections: true });
   } catch (error) {
@@ -183,8 +193,11 @@ async function createTask(payload) {
 
 async function startSession(taskId, parallelism) {
   if (!taskId) {
+    state.message = "Choose a task before starting a session.";
+    render();
     return;
   }
+
   try {
     const session = await api(`/api/tasks/${encodeURIComponent(taskId)}/sessions`, {
       method: "POST",
@@ -287,16 +300,23 @@ function connectEvents() {
   };
 }
 
-function setConnectionState(nextState, label) {
+function setConnectionState(nextState, labelText) {
   connection.dataset.state = nextState;
-  connection.textContent = label;
+  connection.textContent = labelText;
 }
 
 function render() {
-  title.textContent = viewTitle(state.view);
+  const meta = viewMeta(state.view);
+  title.textContent = meta.title;
+  pageKicker.textContent = state.health?.projectRoot ? meta.kicker : "Choose a workspace";
+  projectRoot.textContent = state.health?.projectRoot || "Choose a project root to unlock tasks and sessions.";
+  projectRoot.title = state.health?.projectRoot || "";
+
   document.querySelectorAll(".nav button").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === state.view);
   });
+
+  renderSidebar();
 
   if (!state.health?.projectRoot) {
     app.innerHTML = [renderMessage(), renderProjectPicker()].filter(Boolean).join("");
@@ -310,7 +330,60 @@ function render() {
     settings: renderSettings,
   };
 
-  app.innerHTML = [renderMessage(), views[state.view]?.() || renderOverview()].filter(Boolean).join("");
+  app.innerHTML = [renderMessage(), (views[state.view] || renderOverview)()].filter(Boolean).join("");
+}
+
+function renderSidebar() {
+  sidebarSummary.innerHTML = renderSidebarSummary();
+  sidebarProjects.innerHTML = renderSidebarProjectList(state.projects?.items || []);
+}
+
+function renderSidebarSummary() {
+  const project = currentProject();
+  if (!project) {
+    return `
+      <div class="sidebar-card ghost">
+        <span class="sidebar-label">Workspace</span>
+        <strong>No project selected</strong>
+        <p>Pick a repository to turn AgentDesk into a living session desk.</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="sidebar-card">
+      <span class="sidebar-label">Current workspace</span>
+      <strong>${escapeHtml(project.name || project.projectRoot)}</strong>
+      <p class="sidebar-path mono">${escapeHtml(project.projectRoot)}</p>
+      <div class="sidebar-stats">
+        <div>
+          <span>Tasks</span>
+          <strong>${escapeHtml(String(state.health?.counts?.tasks || project.taskCount || 0))}</strong>
+        </div>
+        <div>
+          <span>Sessions</span>
+          <strong>${escapeHtml(String(state.health?.counts?.sessions || project.sessionCount || 0))}</strong>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSidebarProjectList(projects) {
+  if (!projects.length) {
+    return `<p class="sidebar-empty">Recent projects will stay here once you open one.</p>`;
+  }
+
+  return projects.slice(0, 6).map((project) => `
+    <button
+      class="sidebar-project-item ${project.projectRoot === state.health?.projectRoot ? "selected" : ""}"
+      data-project-root="${escapeAttr(project.projectRoot)}"
+      type="button"
+    >
+      <span>${escapeHtml(project.name || basename(project.projectRoot))}</span>
+      <small>${escapeHtml(project.hasDeskState ? `${project.taskCount || 0} tasks · ${project.sessionCount || 0} sessions` : "No AgentDesk state yet")}</small>
+    </button>
+  `).join("");
 }
 
 function renderMessage() {
@@ -323,75 +396,122 @@ function renderMessage() {
 function renderProjectPicker() {
   const items = state.projects?.items || [];
   return `
-    <section class="hero project-picker">
-      <div class="hero-copy">
-        <p class="eyebrow">Project selection</p>
-        <h2>Choose a project root to manage tasks and subagent sessions.</h2>
-        <p class="section-copy">Each project keeps its own task markdown files, session history, and orchestration state inside <code>.agent-desk/</code>.</p>
+    <section class="landing-grid">
+      <div class="surface hero-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">Project workspace</p>
+          <h2>Pick a repository, then keep its tasks and sessions together like a proper Codex desk.</h2>
+          <p class="section-copy">Each project keeps its own <code>task.md</code> files, session history, and orchestration state inside <code>.agent-desk/</code>, so you can move between codebases without losing the thread.</p>
+        </div>
+        <div class="hero-points">
+          ${renderMiniPoint("Project", "One workspace per repo, with recent history on the side.")}
+          ${renderMiniPoint("Tasks", "Generate new task briefs and reopen earlier plans later.")}
+          ${renderMiniPoint("Sessions", "Browse multi-agent execution runs as a living timeline.")}
+        </div>
       </div>
-      <form id="project-form" class="project-form">
-        <label>
-          Project path
-          <input name="projectRoot" placeholder="/absolute/path/to/project" autocomplete="off">
-        </label>
-        <button class="button primary" type="submit">Select project</button>
-      </form>
+      <div class="surface connect-panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Connect a project</p>
+            <h2>Start with a local path</h2>
+          </div>
+        </div>
+        <form id="project-form" class="stack-form">
+          <label>
+            Project path
+            <input name="projectRoot" placeholder="/absolute/path/to/project" autocomplete="off">
+          </label>
+          <button class="button primary" type="submit">Select project</button>
+        </form>
+        <p class="field-hint">AgentDesk will inspect the directory, keep project-specific state under <code>.agent-desk</code>, and bring recent workspaces back into the sidebar automatically.</p>
+      </div>
     </section>
-    ${renderProjectTable(items)}
+    <section class="content-grid two">
+      <div class="surface">
+        <div class="section-head">
+          <div>
+            <h2>Recent projects</h2>
+            <p class="section-copy">Reopen earlier workspaces with one click.</p>
+          </div>
+        </div>
+        ${renderProjectList(items)}
+      </div>
+      <div class="surface">
+        <div class="section-head">
+          <div>
+            <h2>How the desk flows</h2>
+            <p class="section-copy">The product stays focused on project selection, task generation, session history, and subagent orchestration.</p>
+          </div>
+        </div>
+        <div class="flow-list">
+          ${renderFlowStep("1", "Choose a project root", "Keep one isolated workspace state per repository.")}
+          ${renderFlowStep("2", "Generate task.md", "Write a feature brief and let Codex produce executable subtasks.")}
+          ${renderFlowStep("3", "Launch a session", "Fan work out to subagents with explicit parallelism and fixed runtime defaults.")}
+          ${renderFlowStep("4", "Review the run", "Inspect agent logs, changed files, risks, and session documentation in one place.")}
+        </div>
+      </div>
+    </section>
   `;
 }
 
 function renderOverview() {
-  const latestTask = state.tasks[0] || null;
+  const readyTasks = countStatuses(state.tasks, ["ready", "running", "succeeded", "failed"]);
+  const activeSessions = countStatuses(state.sessions, ["queued", "running"]);
   const latestSession = state.sessions[0] || null;
+  const latestTask = state.tasks[0] || null;
+
   return `
-    <section class="hero">
+    <section class="surface hero-panel">
       <div class="hero-copy">
         <p class="eyebrow">Workspace overview</p>
-        <h2>Generate task markdown, launch Codex subagents, and review session history from one place.</h2>
-        <p class="section-copy">Task generation is markdown-first, sessions run on <code>gpt-5.5</code> with <code>xhigh</code> reasoning and <code>fast</code> service tier, and every subagent keeps its own git worktree.</p>
+        <h2>${escapeHtml(currentProject()?.name || "Project workspace")}</h2>
+        <p class="section-copy">This workspace keeps task planning, session execution, and subagent follow-through close together so you can move from idea to integration without leaving the desk.</p>
       </div>
-      <div class="hero-stats">
-        <div>
-          <span>Tasks</span>
-          <strong>${escapeHtml(String(state.health?.counts?.tasks || 0))}</strong>
-          <p>${escapeHtml(latestTask ? latestTask.title : "No generated task yet")}</p>
-        </div>
-        <div>
-          <span>Sessions</span>
-          <strong>${escapeHtml(String(state.health?.counts?.sessions || 0))}</strong>
-          <p>${escapeHtml(latestSession ? `${label(latestSession.status)} · ${latestSession.taskTitle}` : "No execution session yet")}</p>
-        </div>
-        <div>
-          <span>Default batch</span>
-          <strong>6 agents</strong>
-          <p>New subagents are launched in batches of six while respecting the selected parallelism.</p>
-        </div>
-        <div>
-          <span>Integration target</span>
-          <strong>master</strong>
-          <p>Finished subagent branches are rebased and integrated into <code>master</code>; worktrees are kept.</p>
-        </div>
+      <div class="metric-grid">
+        ${metricTile("Tasks", String(state.health?.counts?.tasks || 0), latestTask ? latestTask.title : "No generated task yet", "accent")}
+        ${metricTile("Launchable", String(readyTasks), "Tasks that can start a session right now.", "positive")}
+        ${metricTile("Sessions", String(state.health?.counts?.sessions || 0), latestSession ? latestSession.taskTitle || latestSession.sessionId : "No execution history yet", "active")}
+        ${metricTile("Active runs", String(activeSessions), activeSessions ? "Queued or running sessions need attention here." : "Nothing currently running.", "warning")}
       </div>
     </section>
-    <section class="split-layout secondary">
-      <div class="stack-card">
-        <div class="section-header">
-          <div>
-            <h2>Recent tasks</h2>
-            <p class="section-copy">Pick one to inspect markdown and launch a new session.</p>
-          </div>
-        </div>
-        ${renderTasksTable(state.tasks.slice(0, 6))}
-      </div>
-      <div class="stack-card">
-        <div class="section-header">
+    <section class="content-grid three">
+      <div class="surface">
+        <div class="section-head">
           <div>
             <h2>Recent sessions</h2>
-            <p class="section-copy">Review the latest subagent execution batches.</p>
+            <p class="section-copy">Jump back into the latest execution runs.</p>
           </div>
         </div>
-        ${renderSessionsTable(state.sessions.slice(0, 6))}
+        ${renderSessionList(state.sessions.slice(0, 8), { emptyTitle: "No sessions", emptyBody: "Launch a session from a task to start building history." })}
+      </div>
+      <div class="surface">
+        <div class="section-head">
+          <div>
+            <h2>Task queue</h2>
+            <p class="section-copy">Tasks stay reusable so you can relaunch from the same planning doc later.</p>
+          </div>
+        </div>
+        ${renderTaskList(state.tasks.slice(0, 8), { emptyTitle: "No tasks", emptyBody: "Generate your first task.md to populate the queue." })}
+      </div>
+      <div class="surface">
+        <div class="section-head">
+          <div>
+            <h2>Workspace map</h2>
+            <p class="section-copy">Important runtime paths and fixed execution defaults.</p>
+          </div>
+        </div>
+        <div class="info-grid">
+          ${infoTile("Project root", state.health?.projectRoot || "-")}
+          ${infoTile(".agent-desk", state.health?.deskRoot || "-")}
+          ${infoTile("Worktrees root", state.health?.worktreesRoot || "-")}
+          ${infoTile("Codex CLI", state.health?.runtime?.metadata?.codexCliPath || state.health?.runtime?.codexBin || "-")}
+        </div>
+        <div class="pill-row">
+          ${renderRuntimeCapability("Model", "enabled", "gpt-5.5")}
+          ${renderRuntimeCapability("Reasoning", "enabled", "xhigh")}
+          ${renderRuntimeCapability("Service tier", "enabled", "fast")}
+          ${renderRuntimeCapability("Batch size", "enabled", "6")}
+        </div>
       </div>
     </section>
   `;
@@ -399,17 +519,17 @@ function renderOverview() {
 
 function renderTasks() {
   return `
-    <section class="runs-layout">
-      <div class="detail-stack">
-        <div class="stack-card">
-          <div class="section-header">
+    <section class="workbench two-pane">
+      <div class="column-stack">
+        <div class="surface">
+          <div class="section-head">
             <div>
               <p class="eyebrow">Generate task markdown</p>
-              <h2>Create a new <code>task.md</code> with Codex</h2>
-              <p class="section-copy">This replaces the old PRD JSON workflow. Describe the feature once and AgentDesk will generate subagent-ready markdown.</p>
+              <h2>Create a new <code>task.md</code></h2>
+              <p class="section-copy">Describe the feature once. AgentDesk keeps the result markdown-first and ready for subagent fan-out.</p>
             </div>
           </div>
-          <form id="task-form" class="form-grid">
+          <form id="task-form" class="stack-form">
             <label>
               Task title
               <input name="title" placeholder="Optional title">
@@ -421,96 +541,191 @@ function renderTasks() {
             <button class="button primary" type="submit">Generate task.md</button>
           </form>
         </div>
-        <div class="stack-card">
-          <div class="section-header">
+        <div class="surface">
+          <div class="section-head">
             <div>
               <h2>Project tasks</h2>
-              <p class="section-copy">Each project can keep multiple task markdown files and revisit earlier ones later.</p>
+              <p class="section-copy">Every generated planning doc stays available for later launches and review.</p>
             </div>
           </div>
-          ${renderTasksTable(state.tasks)}
+          ${renderTaskList(state.tasks, {
+            emptyTitle: "No tasks",
+            emptyBody: "Generate a task markdown file to start orchestrating work.",
+          })}
         </div>
       </div>
-      <div class="drawer">
-        ${state.taskDetail ? renderTaskDetail(state.taskDetail) : emptyState("No task selected", "Choose a task to inspect its markdown and execution history.")}
-      </div>
+      ${state.taskDetail ? renderTaskDetail(state.taskDetail) : renderEmptyDetail("No task selected", "Choose a task to inspect its markdown, previous sessions, and launch controls.")}
     </section>
   `;
 }
 
 function renderTaskDetail(task) {
   const sessions = task.sessions || [];
+  const launchable = isTaskStartable(task);
   return `
-    <div class="detail-stack">
-      <div class="stack-card">
-        <div class="section-header">
-          <div>
-            <p class="eyebrow">Selected task</p>
-            <h2>${escapeHtml(task.title || task.taskId)}</h2>
-            <p class="section-copy">${escapeHtml(task.brief || "")}</p>
-          </div>
-          ${badge(task.status)}
+    <div class="surface detail-pane">
+      <header class="detail-header">
+        <div>
+          <p class="eyebrow">Selected task</p>
+          <h2>${escapeHtml(task.title || task.taskId)}</h2>
+          <p class="section-copy">${escapeHtml(task.brief || "No brief available.")}</p>
         </div>
-        <div class="info-grid">
-          ${infoTile("Task ID", task.taskId)}
-          ${infoTile("Subtasks", String(task.subtaskCount || 0))}
-          ${infoTile("Sessions", String(task.sessionCount || sessions.length || 0))}
-          ${infoTile("task.md", task.paths?.taskMd || "-")}
-        </div>
+        ${badge(task.status)}
+      </header>
+      <div class="info-grid">
+        ${infoTile("Task ID", task.taskId)}
+        ${infoTile("Subtasks", String(task.subtaskCount || 0))}
+        ${infoTile("Sessions", String(task.sessionCount || sessions.length || 0))}
+        ${infoTile("task.md", task.paths?.taskMd || "-")}
       </div>
-      <div class="stack-card">
-        <div class="section-header">
+      <section class="detail-section">
+        <div class="section-head">
           <div>
-            <h2>Launch session</h2>
-            <p class="section-copy">Choose how many agents may run in parallel. AgentDesk still launches new subagents in batches of six.</p>
+            <h3>Launch session</h3>
+            <p class="section-copy">Pick a parallelism cap. AgentDesk still launches fresh subagents in batches of six.</p>
           </div>
         </div>
-        <form id="session-form" class="project-form">
+        <form id="session-form" class="stack-form compact-form">
           <input type="hidden" name="taskId" value="${escapeAttr(task.taskId)}">
-          <label>
-            Parallel agents
-            <input name="parallelism" type="number" min="1" max="24" value="6">
-          </label>
-          <button class="button primary" type="submit">Start session</button>
+          <div class="inline-fields">
+            <label>
+              Parallel agents
+              <input name="parallelism" type="number" min="1" max="24" value="6">
+            </label>
+            <button class="button primary" type="submit"${launchable ? "" : " disabled"}>Start session</button>
+          </div>
         </form>
-      </div>
-      <div class="stack-card">
-        <div class="section-header">
+        ${launchable
+          ? `<p class="field-hint">This task can be launched immediately.</p>`
+          : `<p class="field-hint">This task must finish generation before it can start a session.</p>`}
+      </section>
+      <section class="detail-section">
+        <div class="section-head">
           <div>
-            <h2>Previous sessions</h2>
-            <p class="section-copy">You can reopen earlier sessions for the same task at any time.</p>
+            <h3>Previous sessions</h3>
+            <p class="section-copy">Reopen earlier execution runs for the same task at any time.</p>
           </div>
         </div>
-        ${renderSessionsTable(sessions)}
-      </div>
-      <div class="stack-card">
-        <div class="section-header">
+        ${renderSessionList(sessions, {
+          emptyTitle: "No sessions",
+          emptyBody: "Launch the first session from this task when you're ready.",
+        })}
+      </section>
+      <section class="detail-section">
+        <div class="section-head">
           <div>
-            <h2>task.md</h2>
-            <p class="section-copy">Generated markdown used to fan work out to subagents.</p>
+            <h3>task.md</h3>
+            <p class="section-copy">Generated markdown used as the source of truth for subagent work.</p>
           </div>
         </div>
         <pre class="markdown-preview">${escapeHtml(task.markdown || "")}</pre>
-      </div>
+      </section>
     </div>
   `;
 }
 
 function renderSessions() {
+  const selectedTask = state.tasks.find((task) => task.taskId === state.selectedTaskId) || state.tasks[0] || null;
+  const canLaunchSelectedTask = selectedTask ? isTaskStartable(selectedTask) : false;
+
   return `
-    <section class="runs-layout">
-      <div class="stack-card">
-        <div class="section-header">
-          <div>
-            <h2>Sessions</h2>
-            <p class="section-copy">Inspect all subagent runs across the current project.</p>
+    <section class="session-studio">
+      <div class="column-stack">
+        <div class="surface">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Project workspace</p>
+              <h2>${escapeHtml(currentProject()?.name || "Project")}</h2>
+              <p class="section-copy">Keep project switching, task selection, and session launch controls in the same lane.</p>
+            </div>
+          </div>
+          <div class="info-grid">
+            ${infoTile("Project root", state.health?.projectRoot || "-")}
+            ${infoTile("Tasks", String(state.health?.counts?.tasks || 0))}
+            ${infoTile("Sessions", String(state.health?.counts?.sessions || 0))}
+            ${infoTile("Worktrees", state.health?.worktreesRoot || "-")}
+          </div>
+          <form id="project-form" class="stack-form compact-form">
+            <label>
+              Switch project path
+              <input name="projectRoot" value="${escapeAttr(state.health?.projectRoot || "")}" placeholder="/absolute/path/to/project" autocomplete="off">
+            </label>
+            <button class="button" type="submit">Switch project</button>
+          </form>
+          <div class="subsection">
+            <div class="subsection-head">
+              <strong>Recent projects</strong>
+              <span>${escapeHtml(String((state.projects?.items || []).length))}</span>
+            </div>
+            ${renderProjectList(state.projects?.items || [], {
+              emptyTitle: "No recent projects",
+              emptyBody: "Once you select a workspace it will stay here.",
+            })}
           </div>
         </div>
-        ${renderSessionsTable(state.sessions)}
+        <div class="surface">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Launch</p>
+              <h2>Start a new session</h2>
+              <p class="section-copy">Choose a task, set the parallelism cap, and let AgentDesk fan the work out.</p>
+            </div>
+          </div>
+          <form id="session-form" class="stack-form">
+            <label>
+              Task
+              <select name="taskId">
+                ${state.tasks.length
+                  ? state.tasks.map((task) => `
+                    <option value="${escapeAttr(task.taskId)}"${task.taskId === selectedTask?.taskId ? " selected" : ""}>
+                      ${escapeHtml(`${task.title || task.taskId} · ${label(task.status)}`)}
+                    </option>
+                  `).join("")
+                  : `<option value="">No tasks available</option>`}
+              </select>
+            </label>
+            <label>
+              Parallel agents
+              <input name="parallelism" type="number" min="1" max="24" value="6">
+            </label>
+            <button class="button primary" type="submit"${canLaunchSelectedTask ? "" : " disabled"}>Launch session</button>
+          </form>
+          <p class="field-hint">
+            ${selectedTask
+              ? escapeHtml(`Selected task: ${selectedTask.title || selectedTask.taskId}${canLaunchSelectedTask ? "" : " (not launchable yet)."}`)
+              : "Generate a task first to enable session launch."}
+          </p>
+          <div class="subsection">
+            <div class="subsection-head">
+              <strong>Task queue</strong>
+              <span>${escapeHtml(String(state.tasks.length))}</span>
+            </div>
+            ${renderTaskList(state.tasks.slice(0, 8), {
+              emptyTitle: "No tasks",
+              emptyBody: "Generate a task markdown file to populate this queue.",
+            })}
+          </div>
+        </div>
       </div>
-      <div class="drawer">
-        ${state.sessionDetail ? renderSessionDetail(state.sessionDetail) : emptyState("No session selected", "Choose a session to inspect agent results, docs, and logs.")}
+      <div class="surface sessions-rail">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Timeline</p>
+            <h2>Sessions</h2>
+            <p class="section-copy">Browse execution runs the way you would browse conversations: newest first, details on the right.</p>
+          </div>
+          <div class="pill-row compact">
+            <span class="pill"><span>Total</span><strong>${escapeHtml(String(state.sessions.length))}</strong></span>
+            <span class="pill positive"><span>Succeeded</span><strong>${escapeHtml(String(countStatuses(state.sessions, ["succeeded"])))}</strong></span>
+            <span class="pill warning"><span>Active</span><strong>${escapeHtml(String(countStatuses(state.sessions, ["queued", "running"])))}</strong></span>
+          </div>
+        </div>
+        ${renderSessionList(state.sessions, {
+          emptyTitle: "No sessions",
+          emptyBody: "Launch a session from the task queue to start building run history.",
+        })}
       </div>
+      ${state.sessionDetail ? renderSessionDetail(state.sessionDetail) : renderEmptyDetail("No session selected", "Choose a session to inspect subagent results, logs, and session documentation.")}
     </section>
   `;
 }
@@ -518,56 +733,54 @@ function renderSessions() {
 function renderSessionDetail(session) {
   const selectedAgent = session.agents.find((agent) => agent.id === state.selectedAgentId) || null;
   return `
-    <div class="detail-stack">
-      <div class="stack-card">
-        <div class="section-header">
-          <div>
-            <p class="eyebrow">Selected session</p>
-            <h2>${escapeHtml(session.task?.title || session.title || session.sessionId)}</h2>
-            <p class="section-copy">Session <code>${escapeHtml(session.sessionId)}</code></p>
-          </div>
-          ${badge(session.status)}
+    <div class="surface detail-pane">
+      <header class="detail-header">
+        <div>
+          <p class="eyebrow">Selected session</p>
+          <h2>${escapeHtml(session.task?.title || session.title || session.sessionId)}</h2>
+          <p class="section-copy">Session <code>${escapeHtml(session.sessionId)}</code></p>
         </div>
-        <div class="info-grid">
-          ${infoTile("Parallelism", String(session.parallelism || 0))}
-          ${infoTile("Batch size", String(session.batchSize || 0))}
-          ${infoTile("Succeeded", String(session.succeededAgents || 0))}
-          ${infoTile("Failed", String(session.failedAgents || 0))}
-          ${infoTile("Started", formatDate(session.startedAt))}
-          ${infoTile("Completed", formatDate(session.completedAt))}
-          ${infoTile("Session doc", session.paths?.docMd || "-")}
-          ${infoTile("Task", session.task?.taskId || session.taskId)}
-        </div>
+        ${badge(session.status)}
+      </header>
+      <div class="info-grid session-facts">
+        ${infoTile("Parallelism", String(session.parallelism || 0))}
+        ${infoTile("Batch size", String(session.batchSize || 0))}
+        ${infoTile("Succeeded", String(session.succeededAgents || 0))}
+        ${infoTile("Failed", String(session.failedAgents || 0))}
+        ${infoTile("Started", formatDate(session.startedAt))}
+        ${infoTile("Completed", formatDate(session.completedAt))}
+        ${infoTile("Session doc", session.paths?.docMd || "-")}
+        ${infoTile("Task", session.task?.taskId || session.taskId)}
       </div>
-      <div class="stack-card">
-        <div class="section-header">
+      <section class="detail-section">
+        <div class="section-head">
           <div>
-            <h2>Subagents</h2>
-            <p class="section-copy">Each subtask runs in its own git worktree and integrates into <code>master</code> when done.</p>
+            <h3>Subagents</h3>
+            <p class="section-copy">Each subtask runs in its own git worktree and integrates back into <code>master</code> once it succeeds.</p>
           </div>
         </div>
-        ${renderAgentsTable(session.agents || [])}
-      </div>
+        ${renderAgentList(session.agents || [])}
+      </section>
       ${selectedAgent ? renderAgentDetail(selectedAgent) : ""}
-      <div class="stack-card">
-        <div class="section-header">
+      <section class="detail-section">
+        <div class="section-head">
           <div>
-            <h2>Session documentation</h2>
-            <p class="section-copy">This file is updated by the main orchestrator after subagents finish.</p>
+            <h3>Session documentation</h3>
+            <p class="section-copy">The orchestrator updates this document after the run progresses or finishes.</p>
           </div>
         </div>
         <pre class="markdown-preview">${escapeHtml(session.docContent || "")}</pre>
-      </div>
+      </section>
     </div>
   `;
 }
 
 function renderAgentDetail(agent) {
   return `
-    <div class="stack-card">
-      <div class="section-header">
+    <section class="detail-section">
+      <div class="section-head">
         <div>
-          <h2>${escapeHtml(agent.id)} · ${escapeHtml(agent.title)}</h2>
+          <h3>${escapeHtml(agent.id)} · ${escapeHtml(agent.title)}</h3>
           <p class="section-copy">${escapeHtml(agent.summary || "No summary yet.")}</p>
         </div>
         ${badge(agent.status)}
@@ -578,51 +791,51 @@ function renderAgentDetail(agent) {
         ${infoTile("Base commit", agent.baseCommit || "-")}
         ${infoTile("Integrated master", agent.mergedCommit || "-")}
       </div>
-      <div class="grid two">
-        <div class="stack-card">
-          <h3>Changed files</h3>
+      <div class="detail-split">
+        <div class="content-block">
+          <h4>Changed files</h4>
           ${agent.changedFiles?.length
             ? `<pre class="markdown-preview">${escapeHtml(agent.changedFiles.join("\n"))}</pre>`
             : emptyState("No changed files", "The subagent has not produced repository changes yet.")}
         </div>
-        <div class="stack-card">
-          <h3>Tests and risks</h3>
+        <div class="content-block">
+          <h4>Tests and risks</h4>
           <pre class="markdown-preview">${escapeHtml([
             "Tests:",
-            ...(agent.testsRun || []).map((entry) => `- ${entry}`),
+            ...(agent.testsRun?.length ? agent.testsRun.map((entry) => `- ${entry}`) : ["- None recorded"]),
             "",
             "Risks:",
-            ...(agent.risks || []).map((entry) => `- ${entry}`),
+            ...(agent.risks?.length ? agent.risks.map((entry) => `- ${entry}`) : ["- None recorded"]),
             "",
             "Notes:",
-            ...(agent.notes || []).map((entry) => `- ${entry}`),
+            ...(agent.notes?.length ? agent.notes.map((entry) => `- ${entry}`) : ["- None recorded"]),
           ].join("\n"))}</pre>
         </div>
       </div>
-      <div class="code-grid">
-        <div class="code-card">
-          <h3>stdout</h3>
+      <div class="log-grid">
+        <div class="content-block">
+          <h4>stdout</h4>
           <pre>${escapeHtml(state.agentLogs?.stdout || "")}</pre>
         </div>
-        <div class="code-card">
-          <h3>stderr</h3>
+        <div class="content-block">
+          <h4>stderr</h4>
           <pre>${escapeHtml(state.agentLogs?.stderr || "")}</pre>
         </div>
       </div>
-    </div>
+    </section>
   `;
 }
 
 function renderSettings() {
   const runtime = state.health?.runtime?.metadata || {};
   return `
-    <section class="detail-stack">
-      <div class="stack-card">
-        <div class="section-header">
+    <section class="content-grid two">
+      <div class="surface">
+        <div class="section-head">
           <div>
             <p class="eyebrow">Project paths</p>
-            <h2>Current runtime roots</h2>
-            <p class="section-copy">Project-specific state is stored in <code>.agent-desk</code>. Subagent worktrees are kept outside the repo and never auto-deleted.</p>
+            <h2>Workspace roots</h2>
+            <p class="section-copy">Project-specific state stays inside <code>.agent-desk</code>, while subagent worktrees live outside the repo and stay persistent.</p>
           </div>
         </div>
         <div class="info-grid">
@@ -632,188 +845,183 @@ function renderSettings() {
           ${infoTile("Codex CLI", runtime.codexCliPath || state.health?.runtime?.codexBin || "-")}
         </div>
       </div>
-      <div class="stack-card">
-        <div class="section-header">
+      <div class="surface">
+        <div class="section-head">
           <div>
             <h2>Execution defaults</h2>
-            <p class="section-copy">Session execution is fixed to the Codex runtime requested in the product requirements.</p>
+            <p class="section-copy">User-facing defaults stay explicit and fixed to the current product direction.</p>
           </div>
         </div>
-        <div class="runtime-capabilities">
+        <div class="pill-row settings-pills">
           ${renderRuntimeCapability("Model", "enabled", "gpt-5.5")}
           ${renderRuntimeCapability("Reasoning", "enabled", "xhigh")}
           ${renderRuntimeCapability("Service tier", "enabled", "fast")}
           ${renderRuntimeCapability("Batch size", "enabled", "6")}
         </div>
+        <div class="flow-list compact">
+          ${renderFlowStep("A", "Project selection", "One active repo at a time, with recent projects kept handy.")}
+          ${renderFlowStep("B", "Markdown tasks", "Generate and store reusable task.md plans per project.")}
+          ${renderFlowStep("C", "Session history", "Inspect finished and in-flight multi-agent runs from the same desk.")}
+        </div>
       </div>
-      <div class="stack-card">
-        <div class="section-header">
+      <div class="surface">
+        <div class="section-head">
           <div>
             <h2>Switch project</h2>
-            <p class="section-copy">You can jump between different directories and keep each project's tasks and sessions separate.</p>
+            <p class="section-copy">Jump between repositories without losing each workspace's local state.</p>
           </div>
         </div>
-        <form id="project-form" class="project-form inline">
+        <form id="project-form" class="stack-form compact-form">
           <label>
             Project path
             <input name="projectRoot" value="${escapeAttr(state.health?.projectRoot || "")}" placeholder="/absolute/path/to/project" autocomplete="off">
           </label>
-          <button class="button primary" type="submit">Switch</button>
+          <button class="button primary" type="submit">Switch project</button>
         </form>
-        ${renderProjectTable(state.projects?.items || [])}
+        ${renderProjectList(state.projects?.items || [], {
+          emptyTitle: "No recent projects",
+          emptyBody: "Selected workspaces will appear here.",
+        })}
+      </div>
+      <div class="surface">
+        <div class="section-head">
+          <div>
+            <h2>Runtime metadata</h2>
+            <p class="section-copy">A compact snapshot of what the local Codex runtime reported.</p>
+          </div>
+        </div>
+        <div class="info-grid">
+          ${infoTile("Discovery source", runtime.source || "-")}
+          ${infoTile("Fast tier", runtime.fast?.tier || "-")}
+          ${infoTile("Model count", String(runtime.modelChoices?.length || 0))}
+          ${infoTile("Reasoning options", String(runtime.reasoningEfforts?.length || 0))}
+        </div>
       </div>
     </section>
   `;
 }
 
-function renderProjectTable(projects) {
+function renderProjectList(projects, options = {}) {
   if (!projects.length) {
-    return emptyState("No recent projects", "Select a project once and it will stay available here.");
+    return emptyState(options.emptyTitle || "No recent projects", options.emptyBody || "Select a project once and it will stay available here.");
   }
+
   return `
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Project</th>
-            <th>State</th>
-            <th>Tasks</th>
-            <th>Sessions</th>
-            <th>Selected</th>
-            <th>Path</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${projects.map((project) => `
-            <tr data-project-root="${escapeAttr(project.projectRoot)}" class="${project.projectRoot === state.health?.projectRoot ? "selected" : ""}">
-              <td>
-                <div class="row-title">
-                  <strong>${escapeHtml(project.name || "Project")}</strong>
-                  <span>${escapeHtml(project.hasDeskState ? "AgentDesk state found" : "No .agent-desk state yet")}</span>
-                </div>
-              </td>
-              <td>${project.hasDeskState ? badge("ready") : badge("empty")}</td>
-              <td>${escapeHtml(String(project.taskCount || 0))}</td>
-              <td>${escapeHtml(String(project.sessionCount || 0))}</td>
-              <td>${escapeHtml(formatDate(project.selectedAt))}</td>
-              <td class="mono">${escapeHtml(project.projectRoot)}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
+    <div class="list-stack">
+      ${projects.map((project) => `
+        <button
+          class="list-item project-item ${project.projectRoot === state.health?.projectRoot ? "selected" : ""}"
+          data-project-root="${escapeAttr(project.projectRoot)}"
+          type="button"
+        >
+          <div class="list-item-head">
+            <div class="list-copy">
+              <strong>${escapeHtml(project.name || basename(project.projectRoot))}</strong>
+              <span>${escapeHtml(project.hasDeskState ? "AgentDesk state found" : "No .agent-desk state yet")}</span>
+            </div>
+            ${badge(project.hasDeskState ? "ready" : "empty")}
+          </div>
+          <div class="meta-row">
+            <span>${escapeHtml(`${project.taskCount || 0} tasks`)}</span>
+            <span>${escapeHtml(`${project.sessionCount || 0} sessions`)}</span>
+            <span>${escapeHtml(formatDate(project.selectedAt))}</span>
+          </div>
+          <p class="path-copy mono">${escapeHtml(project.projectRoot)}</p>
+        </button>
+      `).join("")}
     </div>
   `;
 }
 
-function renderTasksTable(tasks) {
+function renderTaskList(tasks, options = {}) {
   if (!tasks.length) {
-    return emptyState("No tasks", "Generate a task markdown file to start orchestrating work.");
+    return emptyState(options.emptyTitle || "No tasks", options.emptyBody || "Generate a task markdown file to start orchestrating work.");
   }
+
   return `
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Task</th>
-            <th>Status</th>
-            <th>Subtasks</th>
-            <th>Sessions</th>
-            <th>Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tasks.map((task) => `
-            <tr data-task-id="${escapeAttr(task.taskId)}" class="${task.taskId === state.selectedTaskId ? "selected" : ""}">
-              <td>
-                <div class="row-title">
-                  <strong>${escapeHtml(task.title || task.taskId)}</strong>
-                  <span>${escapeHtml(task.taskId)}</span>
-                </div>
-              </td>
-              <td>${badge(task.status)}</td>
-              <td>${escapeHtml(String(task.subtaskCount || 0))}</td>
-              <td>${escapeHtml(String(task.sessionCount || 0))}</td>
-              <td>${escapeHtml(formatDate(task.updatedAt))}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
+    <div class="list-stack">
+      ${tasks.map((task) => `
+        <button
+          class="list-item ${task.taskId === state.selectedTaskId ? "selected" : ""}"
+          data-task-id="${escapeAttr(task.taskId)}"
+          type="button"
+        >
+          <div class="list-item-head">
+            <div class="list-copy">
+              <strong>${escapeHtml(task.title || task.taskId)}</strong>
+              <span>${escapeHtml(task.taskId)}</span>
+            </div>
+            ${badge(task.status)}
+          </div>
+          <p class="list-description">${escapeHtml(excerpt(task.brief || "Task markdown ready for review and launch.", 150))}</p>
+          <div class="meta-row">
+            <span>${escapeHtml(`${task.subtaskCount || 0} subtasks`)}</span>
+            <span>${escapeHtml(`${task.sessionCount || 0} sessions`)}</span>
+            <span>${escapeHtml(formatDate(task.updatedAt))}</span>
+          </div>
+        </button>
+      `).join("")}
     </div>
   `;
 }
 
-function renderSessionsTable(sessions) {
+function renderSessionList(sessions, options = {}) {
   if (!sessions.length) {
-    return emptyState("No sessions", "Start a session from a task to launch Codex subagents.");
+    return emptyState(options.emptyTitle || "No sessions", options.emptyBody || "Start a session from a task to launch Codex subagents.");
   }
+
   return `
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Session</th>
-            <th>Status</th>
-            <th>Parallel</th>
-            <th>Succeeded</th>
-            <th>Failed</th>
-            <th>Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${sessions.map((session) => `
-            <tr data-session-id="${escapeAttr(session.sessionId)}" class="${session.sessionId === state.selectedSessionId ? "selected" : ""}">
-              <td>
-                <div class="row-title">
-                  <strong>${escapeHtml(session.taskTitle || session.title || session.sessionId)}</strong>
-                  <span>${escapeHtml(session.sessionId)}</span>
-                </div>
-              </td>
-              <td>${badge(session.status)}</td>
-              <td>${escapeHtml(String(session.parallelism || 0))}</td>
-              <td>${escapeHtml(String(session.succeededAgents || 0))}</td>
-              <td>${escapeHtml(String(session.failedAgents || 0))}</td>
-              <td>${escapeHtml(formatDate(session.updatedAt))}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
+    <div class="list-stack">
+      ${sessions.map((session) => `
+        <button
+          class="list-item session-item ${session.sessionId === state.selectedSessionId ? "selected" : ""}"
+          data-session-id="${escapeAttr(session.sessionId)}"
+          type="button"
+        >
+          <div class="list-item-head">
+            <div class="list-copy">
+              <strong>${escapeHtml(session.taskTitle || session.title || session.sessionId)}</strong>
+              <span>${escapeHtml(session.sessionId)}</span>
+            </div>
+            ${badge(session.status)}
+          </div>
+          <div class="meta-row">
+            <span>${escapeHtml(`${session.parallelism || 0} parallel`)}</span>
+            <span>${escapeHtml(`${session.succeededAgents || 0} ok · ${session.failedAgents || 0} failed`)}</span>
+            <span>${escapeHtml(formatDate(session.updatedAt))}</span>
+          </div>
+        </button>
+      `).join("")}
     </div>
   `;
 }
 
-function renderAgentsTable(agents) {
+function renderAgentList(agents) {
   if (!agents.length) {
-    return emptyState("No agents yet", "Agents will appear here once the session expands task.md into subtasks.");
+    return emptyState("No agents yet", "Agents will appear here once the session expands task.md into executable subtasks.");
   }
+
   return `
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Agent</th>
-            <th>Status</th>
-            <th>Branch</th>
-            <th>Worktree</th>
-            <th>Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${agents.map((agent) => `
-            <tr data-agent-id="${escapeAttr(agent.id)}" class="${agent.id === state.selectedAgentId ? "selected" : ""}">
-              <td>
-                <div class="row-title">
-                  <strong>${escapeHtml(agent.id)}</strong>
-                  <span>${escapeHtml(agent.title)}</span>
-                </div>
-              </td>
-              <td>${badge(agent.status)}</td>
-              <td class="mono">${escapeHtml(agent.branchName || "-")}</td>
-              <td class="mono">${escapeHtml(agent.worktreePath || "-")}</td>
-              <td>${escapeHtml(formatDate(agent.updatedAt || agent.completedAt || agent.startedAt))}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
+    <div class="list-stack dense">
+      ${agents.map((agent) => `
+        <button
+          class="list-item agent-item ${agent.id === state.selectedAgentId ? "selected" : ""}"
+          data-agent-id="${escapeAttr(agent.id)}"
+          type="button"
+        >
+          <div class="list-item-head">
+            <div class="list-copy">
+              <strong>${escapeHtml(agent.id)}</strong>
+              <span>${escapeHtml(agent.title || "No title")}</span>
+            </div>
+            ${badge(agent.status)}
+          </div>
+          <div class="meta-row">
+            <span class="mono">${escapeHtml(agent.branchName || "-")}</span>
+            <span>${escapeHtml(formatDate(agent.updatedAt || agent.completedAt || agent.startedAt))}</span>
+          </div>
+        </button>
+      `).join("")}
     </div>
   `;
 }
@@ -827,6 +1035,37 @@ function renderRuntimeCapability(labelText, stateText, description) {
   `;
 }
 
+function renderMiniPoint(titleText, bodyText) {
+  return `
+    <div class="mini-point">
+      <strong>${escapeHtml(titleText)}</strong>
+      <p>${escapeHtml(bodyText)}</p>
+    </div>
+  `;
+}
+
+function renderFlowStep(index, titleText, bodyText) {
+  return `
+    <div class="flow-step">
+      <span>${escapeHtml(index)}</span>
+      <div>
+        <strong>${escapeHtml(titleText)}</strong>
+        <p>${escapeHtml(bodyText)}</p>
+      </div>
+    </div>
+  `;
+}
+
+function metricTile(labelText, value, bodyText, tone = "") {
+  return `
+    <div class="metric ${escapeAttr(tone)}">
+      <span>${escapeHtml(labelText)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <p>${escapeHtml(bodyText)}</p>
+    </div>
+  `;
+}
+
 function infoTile(labelText, value) {
   return `
     <div class="info-tile">
@@ -836,13 +1075,19 @@ function infoTile(labelText, value) {
   `;
 }
 
+function renderEmptyDetail(titleText, bodyText) {
+  return `
+    <div class="surface detail-pane empty-pane">
+      ${emptyState(titleText, bodyText)}
+    </div>
+  `;
+}
+
 function emptyState(titleText, bodyText) {
   return `
-    <div class="empty empty-state">
-      <div>
-        <strong>${escapeHtml(titleText)}</strong>
-        <p>${escapeHtml(bodyText)}</p>
-      </div>
+    <div class="empty-state">
+      <strong>${escapeHtml(titleText)}</strong>
+      <p>${escapeHtml(bodyText)}</p>
     </div>
   `;
 }
@@ -858,14 +1103,53 @@ function label(value) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function viewTitle(view) {
+function viewMeta(view) {
   const titles = {
-    overview: "Overview",
-    tasks: "Tasks",
-    sessions: "Sessions",
-    settings: "Settings",
+    overview: { title: "Overview", kicker: "Workspace health" },
+    tasks: { title: "Tasks", kicker: "Generate and reuse planning docs" },
+    sessions: { title: "Sessions", kicker: "Project + run history" },
+    settings: { title: "Settings", kicker: "Runtime defaults and roots" },
   };
-  return titles[view] || "Overview";
+  return titles[view] || titles.overview;
+}
+
+function currentProject() {
+  const currentRoot = state.health?.projectRoot;
+  if (!currentRoot) {
+    return null;
+  }
+  return state.projects?.items?.find((item) => item.projectRoot === currentRoot)
+    || state.projects?.current
+    || {
+      projectRoot: currentRoot,
+      name: basename(currentRoot),
+      taskCount: state.health?.counts?.tasks || 0,
+      sessionCount: state.health?.counts?.sessions || 0,
+    };
+}
+
+function isTaskStartable(task) {
+  return STARTABLE_TASK_STATUSES.has(String(task?.status || "").toLowerCase());
+}
+
+function countStatuses(items, statuses) {
+  const allowed = new Set(statuses.map((status) => String(status).toLowerCase()));
+  return (items || []).filter((item) => allowed.has(String(item?.status || "").toLowerCase())).length;
+}
+
+function basename(pathname) {
+  return String(pathname || "")
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .pop() || String(pathname || "");
+}
+
+function excerpt(value, max = 120) {
+  const text = String(value || "").trim().replace(/\s+/g, " ");
+  if (text.length <= max) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
 function formatDate(value) {
