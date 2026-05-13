@@ -47,31 +47,50 @@ export function createContext(options = {}) {
   };
 }
 
-function resolveRalphCli(explicitPath, projectRoot, relativeSegments) {
+export function resolveRalphCli(explicitPath, projectRoot, relativeSegments) {
   if (explicitPath) {
     return path.resolve(explicitPath);
   }
 
-  const configuredSkillsRoot = process.env.RALPH_SKILLS_ROOT
-    ? [path.resolve(process.env.RALPH_SKILLS_ROOT)]
-    : [];
-  const candidateRoots = [
-    ...configuredSkillsRoot,
-    path.join(projectRoot, "skills"),
-    path.join(projectRoot, ".codex", "skills"),
-    path.join(CONTROL_PLANE_ROOT, "skills"),
-    path.join(path.dirname(CONTROL_PLANE_ROOT), "skills"),
-    path.join(os.homedir(), ".codex", "skills"),
-  ];
+  const candidateRoots = resolveSkillRoots(projectRoot);
 
-  for (const root of uniquePaths(candidateRoots)) {
+  for (const root of candidateRoots) {
     const candidate = path.join(root, ...relativeSegments);
     if (fs.existsSync(candidate)) {
       return candidate;
     }
   }
 
-  return path.join(os.homedir(), ".codex", "skills", ...relativeSegments);
+  return path.join(preferredSkillRoot(candidateRoots), ...relativeSegments);
+}
+
+function resolveSkillRoots(projectRoot) {
+  const configuredSkillsRoot = process.env.RALPH_SKILLS_ROOT
+    ? [path.resolve(process.env.RALPH_SKILLS_ROOT)]
+    : [];
+  return uniquePaths([
+    ...configuredSkillsRoot,
+    path.join(projectRoot, "skills"),
+    path.join(projectRoot, ".codex", "skills"),
+    path.join(projectRoot, ".gemini", "skills"),
+    path.join(projectRoot, ".claude", "skills"),
+    path.join(CONTROL_PLANE_ROOT, "skills"),
+    path.join(path.dirname(CONTROL_PLANE_ROOT), "skills"),
+    path.join(os.homedir(), ".codex", "skills"),
+    path.join(os.homedir(), ".gemini", "skills"),
+    path.join(os.homedir(), ".claude", "skills"),
+  ]);
+}
+
+function preferredSkillRoot(candidateRoots) {
+  const existingRoot = candidateRoots.find((root) => {
+    try {
+      return fs.statSync(root).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  return existingRoot || path.join(os.homedir(), ".codex", "skills");
 }
 
 function uniquePaths(paths) {

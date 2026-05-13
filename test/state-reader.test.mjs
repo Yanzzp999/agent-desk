@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -10,6 +11,7 @@ import {
   getTaskResult,
   listArtifacts,
   listRuns,
+  resolveRalphCli,
 } from "../src/lib/control-plane.mjs";
 
 test("reads Ralph run state, logs, results, and artifacts", async () => {
@@ -74,4 +76,40 @@ test("reads Ralph run state, logs, results, and artifacts", async () => {
   const artifacts = await listArtifacts(context);
   assert.equal(artifacts.items.some((item) => item.kind === "run-report"), true);
   assert.equal(artifacts.items.some((item) => item.kind === "task-result"), true);
+});
+
+test("resolves Ralph scripts from project-local Gemini and Claude skills roots", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ralph-multi-cli-project-"));
+  const geminiPlanCli = path.join(projectRoot, ".gemini", "skills", "ralph", "scripts", "ralph.sh");
+  const claudeRunCli = path.join(projectRoot, ".claude", "skills", "ralph-run", "scripts", "ralph-run.sh");
+
+  await fs.mkdir(path.dirname(geminiPlanCli), { recursive: true });
+  await fs.mkdir(path.dirname(claudeRunCli), { recursive: true });
+  await fs.writeFile(geminiPlanCli, "#!/bin/sh\n", "utf8");
+  await fs.writeFile(claudeRunCli, "#!/bin/sh\n", "utf8");
+
+  const context = createContext({ projectRoot });
+  assert.equal(context.ralphPlanCli, geminiPlanCli);
+  assert.equal(context.ralphRunCli, claudeRunCli);
+});
+
+test("falls back to user-level Gemini and Claude skills roots when project-local scripts are missing", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ralph-multi-cli-home-project-"));
+  const homeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ralph-home-"));
+  const geminiPlanCli = path.join(homeRoot, ".gemini", "skills", "custom-ralph", "scripts", "ralph.sh");
+  const claudeRunCli = path.join(homeRoot, ".claude", "skills", "custom-ralph-run", "scripts", "ralph-run.sh");
+  const originalHome = process.env.HOME;
+
+  await fs.mkdir(path.dirname(geminiPlanCli), { recursive: true });
+  await fs.mkdir(path.dirname(claudeRunCli), { recursive: true });
+  await fs.writeFile(geminiPlanCli, "#!/bin/sh\n", "utf8");
+  await fs.writeFile(claudeRunCli, "#!/bin/sh\n", "utf8");
+
+  process.env.HOME = homeRoot;
+  try {
+    assert.equal(resolveRalphCli("", projectRoot, ["custom-ralph", "scripts", "ralph.sh"]), geminiPlanCli);
+    assert.equal(resolveRalphCli("", projectRoot, ["custom-ralph-run", "scripts", "ralph-run.sh"]), claudeRunCli);
+  } finally {
+    process.env.HOME = originalHome;
+  }
 });

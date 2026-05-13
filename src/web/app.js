@@ -101,17 +101,40 @@ document.body.addEventListener("submit", async (event) => {
 start();
 
 async function start() {
+  hydrateShell();
   await refreshAll({ forceRun: true });
   connectEvents();
   setInterval(() => refreshAll(), 7000);
+}
+
+function hydrateShell() {
+  projectRoot.classList.add("project-path");
+  document.querySelectorAll(".nav button").forEach((button) => {
+    if (button.querySelector("small, .nav-subtitle")) {
+      return;
+    }
+    const view = button.dataset.view;
+    const subtitles = {
+      overview: "Daily health",
+      runs: "Task control",
+      planner: "Plan jobs",
+      artifacts: "Outputs",
+      settings: "Runtime",
+    };
+    button.innerHTML = `
+      <span>${escapeHtml(button.textContent)}</span>
+      <small class="nav-subtitle">${escapeHtml(subtitles[view] || "")}</small>
+    `;
+  });
 }
 
 async function refreshAll(options = {}) {
   try {
     state.health = await api("/api/health");
     projectRoot.textContent = state.health.projectRoot;
+    projectRoot.title = state.health.projectRoot;
     await Promise.all([loadRuns(), loadPlans(), loadArtifacts()]);
-    if (options.forceRun && state.selectedRunId) {
+    if ((options.forceRun || state.selectedRunId) && state.selectedRunId) {
       await selectRun(state.selectedRunId, { quiet: true });
     }
     if (state.selectedPlanId) {
@@ -120,10 +143,10 @@ async function refreshAll(options = {}) {
     if (state.selectedArtifactPath) {
       await selectArtifact(state.selectedArtifactPath, { quiet: true });
     }
-    connection.textContent = "Connected";
+    setConnectionState("connected", "Connected");
   } catch (error) {
     state.message = error.message;
-    connection.textContent = "Offline";
+    setConnectionState("offline", "Offline");
   }
   render();
 }
@@ -132,19 +155,31 @@ async function loadRuns() {
   const query = state.runFilter ? `?status=${encodeURIComponent(state.runFilter)}` : "";
   const result = await api(`/api/runs${query}`);
   state.runs = result.items || [];
-  if (!state.selectedRunId && state.runs[0]) {
-    state.selectedRunId = state.runs[0].runId;
+  if (!state.runs.some((run) => run.runId === state.selectedRunId)) {
+    state.selectedRunId = state.runs[0]?.runId || "";
+    state.runDetail = null;
+    state.selectedTaskId = "";
+    state.taskLogs = null;
+    state.taskResult = null;
   }
 }
 
 async function loadPlans() {
   const result = await api("/api/plans");
   state.plans = result.items || [];
+  if (!state.plans.some((plan) => plan.planJobId === state.selectedPlanId)) {
+    state.selectedPlanId = state.plans[0]?.planJobId || "";
+    state.planDetail = null;
+  }
 }
 
 async function loadArtifacts() {
   const result = await api("/api/artifacts");
   state.artifacts = result.items || [];
+  if (!state.artifacts.some((artifact) => artifact.path === state.selectedArtifactPath)) {
+    state.selectedArtifactPath = state.artifacts[0]?.path || "";
+    state.artifactPreview = null;
+  }
 }
 
 async function selectRun(runId, options = {}) {
@@ -248,21 +283,97 @@ function renderOverview() {
     .reduce((inner, [, count]) => inner + count, 0), 0);
   const runningTasks = state.runs.reduce((sum, run) => sum + Number(run.counts?.running || 0), 0);
   const activePlans = state.plans.filter((plan) => ["received", "running"].includes(plan.status)).length;
+  const latestRun = state.runs[0] || null;
+  const latestPlan = state.plans[0] || null;
+  const latestArtifact = state.artifacts[0] || null;
   return `
-    <div class="grid metrics">
-      ${metric("Active runs", activeRuns)}
-      ${metric("Running tasks", runningTasks)}
-      ${metric("Tasks needing attention", attention)}
-      ${metric("Active planner jobs", activePlans)}
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Current workspace</p>
+        <h2>Keep Ralph work visible without digging through state files.</h2>
+        <p class="section-copy">
+          Track active runs, planner jobs, and generated artifacts from one operator-friendly surface.
+        </p>
+      </div>
+      <div class="hero-stats">
+        <div>
+          <span>Selected run</span>
+          <strong>${escapeHtml(state.selectedRunId || latestRun?.runId || "No active run")}</strong>
+          <p>${escapeHtml(latestRun ? `${label(latestRun.status)} · ${latestRun.totalTasks} tasks` : "Waiting for Ralph state")}</p>
+        </div>
+        <div>
+          <span>Newest planner job</span>
+          <strong>${escapeHtml(latestPlan?.planJobId || "No planner job")}</strong>
+          <p>${escapeHtml(latestPlan ? `${label(latestPlan.status)} · ${label(latestPlan.stage)}` : "No recent planner activity")}</p>
+        </div>
+      </div>
+    </section>
+    <div class="stats-grid">
+      ${metric("Active runs", activeRuns, "Runs still executing or waiting.", activeRuns ? "accent" : "")}
+      ${metric("Running tasks", runningTasks, "Workers currently doing work.", runningTasks ? "active" : "")}
+      ${metric("Needs attention", attention, attention ? "Failures, stale tasks, or stopped work." : "No open attention items right now.", attention ? "danger" : "positive")}
+      ${metric("Planner jobs", activePlans, activePlans ? "Planner jobs still in flight." : "Planner queue is quiet.", activePlans ? "warning" : "")}
     </div>
-    <div class="grid two" style="margin-top:16px">
-      <section class="panel">
-        <h2>Recent Runs</h2>
+    <div class="split-layout">
+      <section class="stack-card list-card">
+        <div class="section-header">
+          <div>
+            <h2>Recent Runs</h2>
+            <p class="section-copy">Quick access to the runs most likely to need a closer look.</p>
+          </div>
+          <div class="pill-group">
+            ${renderPill("Running", activeRuns, activeRuns ? "active" : "")}
+            ${renderPill("Attention", attention, attention ? "danger" : "positive")}
+          </div>
+        </div>
         ${renderRunTable(state.runs.slice(0, 8))}
       </section>
-      <section class="panel">
-        <h2>Recent Planner Jobs</h2>
+      <section class="stack-card list-card">
+        <div class="section-header">
+          <div>
+            <h2>Recent Planner Jobs</h2>
+            <p class="section-copy">Keep an eye on PRD generation and JSON conversion without leaving the dashboard.</p>
+          </div>
+          <div class="pill-group">
+            ${renderPill("Queued", state.plans.filter((plan) => plan.status === "received").length, state.plans.some((plan) => plan.status === "received") ? "warning" : "")}
+            ${renderPill("Running", state.plans.filter((plan) => plan.status === "running").length, state.plans.some((plan) => plan.status === "running") ? "active" : "")}
+          </div>
+        </div>
         ${renderPlanTable(state.plans.slice(0, 8))}
+      </section>
+    </div>
+    <div class="split-layout secondary">
+      <section class="stack-card detail-card">
+        <div class="section-header">
+          <div>
+            <h2>Status Snapshot</h2>
+            <p class="section-copy">Across all loaded runs.</p>
+          </div>
+        </div>
+        <div class="pill-group">
+          ${renderPill("Succeeded", state.runs.reduce((sum, run) => sum + sumCounts(run.counts, ["succeeded"]), 0), "positive")}
+          ${renderPill("Running", state.runs.reduce((sum, run) => sum + sumCounts(run.counts, ["running", "launching"]), 0), "active")}
+          ${renderPill("Queued", state.runs.reduce((sum, run) => sum + sumCounts(run.counts, ["queued"]), 0), "warning")}
+          ${renderPill("Attention", state.runs.reduce((sum, run) => sum + sumCounts(run.counts, ["failed", "stale", "stopped", "needs_attention"]), 0), attention ? "danger" : "")}
+        </div>
+        <p class="field-hint">${escapeHtml(latestRun ? `Latest run updated ${formatDate(latestRun.updatedAt)}.` : "Load a Ralph project to see run activity.")}</p>
+      </section>
+      <section class="stack-card detail-card">
+        <div class="section-header">
+          <div>
+            <h2>Latest Artifact</h2>
+            <p class="section-copy">The freshest generated output available for inspection.</p>
+          </div>
+        </div>
+        ${latestArtifact ? `
+          <div class="artifact-meta">
+            <div><span>Title</span><strong>${escapeHtml(latestArtifact.title)}</strong></div>
+            <div><span>Kind</span><strong>${escapeHtml(label(latestArtifact.kind))}</strong></div>
+            <div><span>Updated</span><strong>${escapeHtml(formatDate(latestArtifact.updatedAt))}</strong></div>
+            <div><span>Size</span><strong>${escapeHtml(formatFileSize(latestArtifact.size))}</strong></div>
+          </div>
+          <p class="field-hint mono">${escapeHtml(latestArtifact.path)}</p>
+        ` : emptyState("No artifacts yet", "Generated reports and task results will show up here once Ralph writes them.")}
       </section>
     </div>
   `;
@@ -272,24 +383,47 @@ function renderRuns() {
   const detail = state.runDetail;
   const selectedTask = detail?.tasks.find((task) => task.id === state.selectedTaskId);
   return `
-    <div class="toolbar" style="margin-bottom:16px">
-      <label style="max-width:220px">Status
-        <select id="run-filter">
-          ${["", "running", "queued", "succeeded", "needs_attention", "failed", "stale", "stopped"].map((status) => `
-            <option value="${status}" ${state.runFilter === status ? "selected" : ""}>${status || "all"}</option>
-          `).join("")}
-        </select>
-      </label>
-      <button class="button" data-action="collect" type="button" ${state.selectedRunId ? "" : "disabled"}>Collect</button>
-    </div>
-    <div class="grid two">
-      <section class="panel">
-        <h2>Runs</h2>
-        ${renderRunTable(state.runs)}
-        ${detail ? renderRunDetail(detail) : `<div class="empty">No run selected</div>`}
-      </section>
-      <aside class="drawer">
-        ${selectedTask ? renderTaskDrawer(selectedTask) : `<div class="empty">No task selected</div>`}
+    <section class="hero hero-compact">
+      <div class="hero-copy">
+        <p class="eyebrow">Execution tracking</p>
+        <h2>Inspect run health, task flow, and worker output.</h2>
+        <p class="section-copy">Filter the run list, switch task views, and act on retries or stops from the task drawer.</p>
+      </div>
+      <div class="hero-actions">
+        <label class="toolbar-field">
+          <span>Status filter</span>
+          <select id="run-filter">
+            ${["", "running", "queued", "succeeded", "needs_attention", "failed", "stale", "stopped"].map((status) => `
+              <option value="${status}" ${state.runFilter === status ? "selected" : ""}>${status || "all"}</option>
+            `).join("")}
+          </select>
+        </label>
+        <button class="button" data-action="collect" type="button" ${state.selectedRunId ? "" : "disabled"}>Collect Run</button>
+      </div>
+    </section>
+    <div class="runs-layout">
+      <div class="detail-stack">
+        <section class="stack-card list-card">
+          <div class="section-header">
+            <div>
+              <h2>Runs</h2>
+              <p class="section-copy">Select a run to inspect task details, dependency flow, and generated reports.</p>
+            </div>
+            <div class="pill-group">
+              ${renderPill("Loaded", state.runs.length)}
+              ${renderPill("Current", state.selectedRunId ? 1 : 0, state.selectedRunId ? "active" : "")}
+            </div>
+          </div>
+          ${renderRunTable(state.runs)}
+        </section>
+        ${detail ? renderRunDetail(detail) : `
+          <section class="stack-card detail-card">
+            ${emptyState("No run selected", "Pick a run from the table to review tasks and worker output.")}
+          </section>
+        `}
+      </div>
+      <aside class="drawer stack-card">
+        ${selectedTask ? renderTaskDrawer(selectedTask) : emptyState("No task selected", "Choose a task from the table, board, or graph to inspect logs and results.")}
       </aside>
     </div>
   `;
@@ -297,25 +431,39 @@ function renderRuns() {
 
 function renderRunDetail(detail) {
   return `
-    <div style="height:16px"></div>
-    <div class="grid metrics">
-      ${metric("Status", detail.run.status || "unknown")}
-      ${metric("Tasks", detail.tasks.length)}
-      ${metric("Max parallel", detail.run.maxParallel || "-")}
-      ${metric("Blocked", detail.summary.blockedTasks.length)}
-    </div>
-    <div class="toolbar" style="justify-content:space-between;margin:16px 0">
-      <div>
-        <h2 style="margin:0">${escapeHtml(detail.run.runId || state.selectedRunId)}</h2>
-        <p class="muted" style="margin:4px 0 0">${escapeHtml(detail.run.sourcePrd || "")}</p>
+    <section class="stack-card detail-card">
+      <div class="section-header">
+        <div>
+          <p class="eyebrow">Selected run</p>
+          <h2>${escapeHtml(detail.run.runId || state.selectedRunId)}</h2>
+          <p class="section-copy">${escapeHtml(detail.run.sourcePrd || "No PRD source recorded for this run.")}</p>
+        </div>
+        <div class="segmented">
+          ${["table", "board", "graph"].map((value) => `
+            <button type="button" name="task-view" value="${value}" class="${state.taskView === value ? "active" : ""}" data-action="task-view-${value}">${label(value)}</button>
+          `).join("")}
+        </div>
       </div>
-      <div class="segmented">
-        ${["table", "board", "graph"].map((value) => `
-          <button type="button" name="task-view" value="${value}" class="${state.taskView === value ? "active" : ""}" data-action="task-view-${value}">${label(value)}</button>
-        `).join("")}
+      <div class="stats-grid compact">
+        ${metric("Status", label(detail.run.status || "unknown"), "Current run state.", statusTone(detail.run.status))}
+        ${metric("Tasks", detail.tasks.length, "Total tasks in this run.")}
+        ${metric("Max parallel", detail.run.maxParallel || "-", "Concurrency budget from run metadata.")}
+        ${metric("Blocked", detail.summary.blockedTasks.length, detail.summary.blockedTasks.length ? "Queued tasks still waiting on dependencies." : "No blocked tasks right now.", detail.summary.blockedTasks.length ? "warning" : "positive")}
       </div>
-    </div>
-    ${renderTaskView(detail.tasks)}
+      <div class="info-grid">
+        ${infoTile("Project", detail.run.project || "-")}
+        ${infoTile("Branch", detail.run.branchName || "-")}
+        ${infoTile("Updated", formatDate(detail.run.updatedAt))}
+        ${infoTile("Report", detail.paths.reportPath)}
+      </div>
+      <div class="section-header compact">
+        <div>
+          <h3>Task View</h3>
+          <p class="section-copy">Switch between table, board, and dependency graph without losing the selected task.</p>
+        </div>
+      </div>
+      ${renderTaskView(detail.tasks)}
+    </section>
   `;
 }
 
@@ -331,20 +479,25 @@ function renderTaskView(tasks) {
 
 function renderTaskTable(tasks) {
   if (tasks.length === 0) {
-    return `<div class="empty">No tasks</div>`;
+    return emptyState("No tasks", "This run does not have any task records yet.");
   }
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>Status</th><th>Priority</th><th>Title</th><th>Dependencies</th></tr></thead>
+        <thead><tr><th>Task</th><th>Status</th><th>Priority</th><th>Dependencies</th><th>Attempts</th></tr></thead>
         <tbody>
           ${tasks.map((task) => `
             <tr data-task-id="${escapeAttr(task.id)}" class="${task.id === state.selectedTaskId ? "selected" : ""}">
-              <td class="mono">${escapeHtml(task.id)}</td>
+              <td>
+                <div class="row-title">
+                  <strong class="mono">${escapeHtml(task.id)}</strong>
+                  <span>${escapeHtml(task.title || "Untitled task")}</span>
+                </div>
+              </td>
               <td>${badge(task.status)}</td>
               <td>${escapeHtml(task.priority ?? "-")}</td>
-              <td>${escapeHtml(task.title || "")}</td>
               <td>${escapeHtml((task.dependencies || []).join(", ") || "-")}</td>
+              <td>${escapeHtml(task.attempts ?? "-")}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -361,11 +514,18 @@ function renderKanban(tasks) {
       : task.status === lane || (lane === "running" && task.status === "launching"));
     return `
       <section class="lane">
-        <h3>${label(lane)} <span class="muted">${laneTasks.length}</span></h3>
+        <div class="lane-header">
+          <h3>${label(lane)}</h3>
+          <span class="badge ${statusTone(lane)}">${escapeHtml(laneTasks.length)}</span>
+        </div>
         ${laneTasks.map((task) => `
           <div class="task-tile ${task.id === state.selectedTaskId ? "selected" : ""}" data-task-id="${escapeAttr(task.id)}">
-            <strong>${escapeHtml(task.id)}: ${escapeHtml(task.title || "")}</strong>
-            ${badge(task.status)}
+            <strong>${escapeHtml(task.id)}</strong>
+            <p>${escapeHtml(task.title || "Untitled task")}</p>
+            <div class="pill-group">
+              ${badge(task.status)}
+              ${renderPill("Prio", task.priority ?? "-", "")}
+            </div>
           </div>
         `).join("") || `<p class="muted">Empty</p>`}
       </section>
@@ -375,7 +535,7 @@ function renderKanban(tasks) {
 
 function renderGraph(tasks) {
   if (tasks.length === 0) {
-    return `<div class="empty">No graph</div>`;
+    return emptyState("No graph", "Tasks need ids and dependencies before a graph can be drawn.");
   }
   const width = 900;
   const height = Math.max(260, tasks.length * 62 + 40);
@@ -402,6 +562,7 @@ function renderGraph(tasks) {
   }
   return `
     <div class="graph-box">
+      <div class="graph-caption">Dependency graph for the currently selected run.</div>
       <svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Task dependency graph">
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
@@ -417,50 +578,81 @@ function renderGraph(tasks) {
 
 function renderTaskDrawer(task) {
   return `
-    <div class="toolbar" style="justify-content:space-between;margin-bottom:12px">
+    <div class="section-header">
       <div>
-        <h2 style="margin-bottom:4px">${escapeHtml(task.id)}</h2>
-        ${badge(task.status)}
+        <p class="eyebrow">Selected task</p>
+        <h2>${escapeHtml(task.id)}</h2>
+        <p class="section-copy">${escapeHtml(task.title || "Untitled task")}</p>
       </div>
       <div class="row-actions">
         <button class="button" data-action="retry" type="button">Retry</button>
         <button class="button danger" data-action="stop" type="button">Stop</button>
       </div>
     </div>
-    <h3>${escapeHtml(task.title || "")}</h3>
-    <p class="muted">${escapeHtml(task.description || "")}</p>
-    <dl class="kv">
-      ${kv("Priority", task.priority)}
-      ${kv("Dependencies", (task.dependencies || []).join(", ") || "-")}
-      ${kv("Allowed paths", (task.allowedPaths || []).join(", ") || "-")}
-      ${kv("Attempts", task.attempts ?? "-")}
-      ${kv("Branch", task.branch || "-")}
-      ${kv("Worktree", task.worktree || "-")}
-      ${kv("PID", task.pid || "-")}
-      ${kv("Started", task.startedAt || "-")}
-      ${kv("Completed", task.completedAt || "-")}
-      ${kv("Lease", task.leaseExpiresAt || "-")}
-      ${kv("Last error", task.lastError || "-")}
-    </dl>
-    <h3 style="margin-top:16px">Acceptance Criteria</h3>
+    <div class="pill-group">
+      ${badge(task.status)}
+      ${renderPill("Priority", task.priority ?? "-", "")}
+      ${renderPill("Attempts", task.attempts ?? "-", "")}
+    </div>
+    <p class="section-copy">${escapeHtml(task.description || "No task description recorded.")}</p>
+    <div class="info-grid">
+      ${infoTile("Dependencies", (task.dependencies || []).join(", ") || "-")}
+      ${infoTile("Allowed paths", (task.allowedPaths || []).join(", ") || "-")}
+      ${infoTile("Branch", task.branch || "-")}
+      ${infoTile("Worktree", task.worktree || "-")}
+      ${infoTile("PID", task.pid || "-")}
+      ${infoTile("Lease", task.leaseExpiresAt || "-")}
+      ${infoTile("Started", task.startedAt || "-")}
+      ${infoTile("Completed", task.completedAt || "-")}
+      ${infoTile("Last error", task.lastError || "-")}
+    </div>
+    <h3>Acceptance Criteria</h3>
     ${(task.acceptanceCriteria || []).length
-      ? `<ul>${task.acceptanceCriteria.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+      ? `<ul class="timeline-list">${task.acceptanceCriteria.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
       : `<p class="muted">None</p>`}
-    <h3>Log Tail</h3>
-    <pre>${escapeHtml(state.taskLogs?.content || "")}</pre>
-    <h3 style="margin-top:16px">Result</h3>
-    <pre>${escapeHtml(state.taskResult?.content || "")}</pre>
+    <div class="code-grid">
+      <section class="code-card">
+        <div class="section-header compact">
+          <div>
+            <h3>Log Tail</h3>
+            <p class="section-copy">Latest worker output.</p>
+          </div>
+        </div>
+        <pre>${escapeHtml(state.taskLogs?.content || "")}</pre>
+      </section>
+      <section class="code-card">
+        <div class="section-header compact">
+          <div>
+            <h3>Result</h3>
+            <p class="section-copy">Captured task artifact or result markdown.</p>
+          </div>
+        </div>
+        <pre>${escapeHtml(state.taskResult?.content || "")}</pre>
+      </section>
+    </div>
   `;
 }
 
 function renderPlanner() {
   const mode = document.querySelector("#planner-mode")?.value || "brief_to_json";
   return `
-    <div class="grid two">
-      <section class="panel">
-        <h2>New Planner Job</h2>
+    <section class="hero hero-compact">
+      <div class="hero-copy">
+        <p class="eyebrow">Planner control</p>
+        <h2>Kick off PRD generation and keep the contract files in view.</h2>
+        <p class="section-copy">Start a brief-to-JSON or PRD-to-JSON job and inspect the generated contract and logs below.</p>
+      </div>
+    </section>
+    <div class="split-layout">
+      <section class="stack-card detail-card">
+        <div class="section-header">
+          <div>
+            <h2>New Planner Job</h2>
+            <p class="section-copy">Choose the input mode, target output directory, and optional model overrides.</p>
+          </div>
+        </div>
         <form id="planner-form" class="form-grid">
-          <label>Mode
+          <label class="toolbar-field">Mode
             <select id="planner-mode" name="mode">
               <option value="brief_to_json" ${mode === "brief_to_json" ? "selected" : ""}>Brief to prd.json</option>
               <option value="prd_to_json" ${mode === "prd_to_json" ? "selected" : ""}>PRD to prd.json</option>
@@ -480,57 +672,107 @@ function renderPlanner() {
           <div><button class="button primary" type="submit">Start</button></div>
         </form>
       </section>
-      <section class="panel">
-        <h2>Planner Jobs</h2>
+      <section class="stack-card list-card">
+        <div class="section-header">
+          <div>
+            <h2>Planner Jobs</h2>
+            <p class="section-copy">Select a job to inspect logs and generated file paths.</p>
+          </div>
+        </div>
         ${renderPlanTable(state.plans)}
       </section>
     </div>
-    <div style="height:16px"></div>
-    ${state.planDetail ? renderPlanDetail(state.planDetail) : `<div class="empty">No planner job selected</div>`}
+    ${state.planDetail ? renderPlanDetail(state.planDetail) : `
+      <section class="stack-card detail-card">
+        ${emptyState("No planner job selected", "Pick a planner job to inspect its contract output and logs.")}
+      </section>
+    `}
   `;
 }
 
 function renderPlanDetail(plan) {
   const contract = plan.result?.contract || {};
   return `
-    <section class="panel">
-      <div class="toolbar" style="justify-content:space-between">
+    <section class="stack-card detail-card">
+      <div class="section-header">
         <div>
-          <h2 style="margin-bottom:4px">${escapeHtml(plan.planJobId)}</h2>
-          ${badge(plan.status)} ${badge(plan.stage)}
+          <p class="eyebrow">Selected planner job</p>
+          <h2>${escapeHtml(plan.planJobId)}</h2>
+          <p class="section-copy">Keep the generated contract files and logs close while the job is in flight.</p>
+        </div>
+        <div class="pill-group">
+          ${badge(plan.status)}
+          ${badge(plan.stage)}
         </div>
       </div>
-      <dl class="kv" style="margin:14px 0">
-        ${kv("Mode", plan.input.mode)}
-        ${kv("PRD file", contract.PRD_FILE || "-")}
-        ${kv("PRD JSON", contract.PRD_JSON || "-")}
-        ${kv("Progress", contract.PROGRESS_FILE || "-")}
-        ${kv("Last error", plan.lastError || "-")}
-      </dl>
-      <div class="grid two">
-        <div>
-          <h3>stdout</h3>
+      <div class="info-grid">
+        ${infoTile("Mode", plan.input.mode)}
+        ${infoTile("PRD file", contract.PRD_FILE || "-")}
+        ${infoTile("PRD JSON", contract.PRD_JSON || "-")}
+        ${infoTile("Progress", contract.PROGRESS_FILE || "-")}
+        ${infoTile("Updated", formatDate(plan.updatedAt))}
+        ${infoTile("Last error", plan.lastError || "-")}
+      </div>
+      <div class="code-grid">
+        <section class="code-card">
+          <div class="section-header compact">
+            <div>
+              <h3>stdout</h3>
+              <p class="section-copy">Normal planner output.</p>
+            </div>
+          </div>
           <pre>${escapeHtml(plan.stdout || "")}</pre>
-        </div>
-        <div>
-          <h3>stderr</h3>
+        </section>
+        <section class="code-card">
+          <div class="section-header compact">
+            <div>
+              <h3>stderr</h3>
+              <p class="section-copy">Errors and warnings.</p>
+            </div>
+          </div>
           <pre>${escapeHtml(plan.stderr || "")}</pre>
-        </div>
+        </section>
       </div>
     </section>
   `;
 }
 
 function renderArtifacts() {
+  const selectedArtifact = state.artifacts.find((artifact) => artifact.path === state.selectedArtifactPath) || null;
   return `
-    <div class="grid two">
-      <section class="panel">
-        <h2>Artifacts</h2>
+    <section class="hero hero-compact">
+      <div class="hero-copy">
+        <p class="eyebrow">Generated outputs</p>
+        <h2>Review reports, task results, and planner contract files in one place.</h2>
+        <p class="section-copy">Select an artifact to preview its contents without leaving the control plane.</p>
+      </div>
+    </section>
+    <div class="split-layout">
+      <section class="stack-card list-card">
+        <div class="section-header">
+          <div>
+            <h2>Artifacts</h2>
+            <p class="section-copy">Sorted by freshest update so the newest output is always near the top.</p>
+          </div>
+        </div>
         ${renderArtifactTable(state.artifacts)}
       </section>
-      <aside class="drawer">
-        <h2>Preview</h2>
-        <p class="muted mono">${escapeHtml(state.artifactPreview?.path || "")}</p>
+      <aside class="drawer stack-card">
+        <div class="section-header">
+          <div>
+            <h2>Preview</h2>
+            <p class="section-copy">Selected artifact contents.</p>
+          </div>
+        </div>
+        ${selectedArtifact ? `
+          <div class="artifact-meta">
+            <div><span>Title</span><strong>${escapeHtml(selectedArtifact.title)}</strong></div>
+            <div><span>Kind</span><strong>${escapeHtml(label(selectedArtifact.kind))}</strong></div>
+            <div><span>Updated</span><strong>${escapeHtml(formatDate(selectedArtifact.updatedAt))}</strong></div>
+            <div><span>Size</span><strong>${escapeHtml(formatFileSize(selectedArtifact.size))}</strong></div>
+          </div>
+        ` : ""}
+        <p class="muted mono artifact-path">${escapeHtml(state.artifactPreview?.path || "")}</p>
         <pre>${escapeHtml(state.artifactPreview?.content || "")}</pre>
       </aside>
     </div>
@@ -540,34 +782,59 @@ function renderArtifacts() {
 function renderSettings() {
   const health = state.health || {};
   return `
-    <section class="panel">
-      <h2>Settings</h2>
-      <dl class="kv">
-        ${kv("Project root", health.projectRoot || "-")}
-        ${kv("State root", health.stateRoot || "-")}
-        ${kv("UI state root", health.uiStateRoot || "-")}
-        ${kv("ralph-run", health.ralphRunCli || "-")}
-        ${kv("ralph", health.ralphPlanCli || "-")}
-      </dl>
+    <section class="hero hero-compact">
+      <div class="hero-copy">
+        <p class="eyebrow">Runtime configuration</p>
+        <h2>Confirm the project roots and Ralph tool paths behind this control plane.</h2>
+        <p class="section-copy">Useful when the UI is pointed at a different worktree or shared state directory.</p>
+      </div>
+      <div class="hero-stats">
+        <div>
+          <span>Health</span>
+          <strong>${escapeHtml(health.ok ? "Ready" : "Unknown")}</strong>
+          <p>${escapeHtml(health.projectRoot ? "Project root loaded." : "No project root reported yet.")}</p>
+        </div>
+      </div>
+    </section>
+    <section class="stack-card detail-card">
+      <div class="section-header">
+        <div>
+          <h2>Resolved Paths</h2>
+          <p class="section-copy">These values come from the current server context and drive every API lookup.</p>
+        </div>
+      </div>
+      <div class="info-grid">
+        ${infoTile("Project root", health.projectRoot || "-")}
+        ${infoTile("State root", health.stateRoot || "-")}
+        ${infoTile("UI state root", health.uiStateRoot || "-")}
+        ${infoTile("ralph-run", health.ralphRunCli || "-")}
+        ${infoTile("ralph", health.ralphPlanCli || "-")}
+      </div>
     </section>
   `;
 }
 
 function renderRunTable(runs) {
   if (!runs.length) {
-    return `<div class="empty">No runs</div>`;
+    return emptyState("No runs", "Ralph run state will appear here once the selected project has data.");
   }
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Run</th><th>Status</th><th>Tasks</th><th>Project</th><th>Updated</th></tr></thead>
+        <thead><tr><th>Run</th><th>Status</th><th>Tasks</th><th>Active</th><th>Attention</th><th>Updated</th></tr></thead>
         <tbody>
           ${runs.map((run) => `
             <tr data-run-id="${escapeAttr(run.runId)}" class="${run.runId === state.selectedRunId ? "selected" : ""}">
-              <td class="mono">${escapeHtml(run.runId)}</td>
+              <td>
+                <div class="row-title">
+                  <strong class="mono">${escapeHtml(run.runId)}</strong>
+                  <span>${escapeHtml(run.project || "-")}</span>
+                </div>
+              </td>
               <td>${badge(run.status)}</td>
               <td>${escapeHtml(run.totalTasks ?? 0)}</td>
-              <td>${escapeHtml(run.project || "-")}</td>
+              <td>${escapeHtml(sumCounts(run.counts, ["running", "launching", "queued"]))}</td>
+              <td>${escapeHtml(sumCounts(run.counts, ["failed", "stale", "stopped", "needs_attention"]))}</td>
               <td>${escapeHtml(formatDate(run.updatedAt))}</td>
             </tr>
           `).join("")}
@@ -579,17 +846,18 @@ function renderRunTable(runs) {
 
 function renderPlanTable(plans) {
   if (!plans.length) {
-    return `<div class="empty">No planner jobs</div>`;
+    return emptyState("No planner jobs", "Start a planner run to capture PRD conversion progress here.");
   }
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Job</th><th>Status</th><th>Stage</th><th>Updated</th></tr></thead>
+        <thead><tr><th>Job</th><th>Status</th><th>Mode</th><th>Stage</th><th>Updated</th></tr></thead>
         <tbody>
           ${plans.map((plan) => `
             <tr data-plan-id="${escapeAttr(plan.planJobId)}" class="${plan.planJobId === state.selectedPlanId ? "selected" : ""}">
               <td class="mono">${escapeHtml(plan.planJobId)}</td>
               <td>${badge(plan.status)}</td>
+              <td>${escapeHtml(label(plan.input?.mode || "-"))}</td>
               <td>${badge(plan.stage)}</td>
               <td>${escapeHtml(formatDate(plan.updatedAt))}</td>
             </tr>
@@ -602,17 +870,18 @@ function renderPlanTable(plans) {
 
 function renderArtifactTable(artifacts) {
   if (!artifacts.length) {
-    return `<div class="empty">No artifacts</div>`;
+    return emptyState("No artifacts", "Run reports, task results, and planner contract files show up here.");
   }
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Kind</th><th>Title</th><th>Updated</th><th>Path</th></tr></thead>
+        <thead><tr><th>Kind</th><th>Artifact</th><th>Size</th><th>Updated</th><th>Path</th></tr></thead>
         <tbody>
           ${artifacts.map((artifact) => `
             <tr data-artifact-path="${escapeAttr(artifact.path)}" class="${artifact.path === state.selectedArtifactPath ? "selected" : ""}">
               <td>${badge(artifact.kind)}</td>
               <td>${escapeHtml(artifact.title)}</td>
+              <td>${escapeHtml(formatFileSize(artifact.size))}</td>
               <td>${escapeHtml(formatDate(artifact.updatedAt))}</td>
               <td class="mono">${escapeHtml(artifact.path)}</td>
             </tr>
@@ -623,17 +892,77 @@ function renderArtifactTable(artifacts) {
   `;
 }
 
-function metric(labelText, value) {
-  return `<div class="metric"><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(value)}</strong></div>`;
+function metric(labelText, value, note = "", tone = "") {
+  return `
+    <article class="metric ${tone}">
+      <span>${escapeHtml(labelText)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${note ? `<p>${escapeHtml(note)}</p>` : ""}
+    </article>
+  `;
+}
+
+function renderPill(labelText, value, tone = "") {
+  return `
+    <span class="pill ${tone}">
+      <strong>${escapeHtml(value)}</strong>
+      <span>${escapeHtml(labelText)}</span>
+    </span>
+  `;
+}
+
+function infoTile(labelText, value) {
+  return `
+    <div class="info-tile">
+      <span>${escapeHtml(labelText)}</span>
+      <strong>${escapeHtml(value ?? "-")}</strong>
+    </div>
+  `;
+}
+
+function emptyState(titleText, copy = "") {
+  return `
+    <div class="empty empty-state">
+      <div>
+        <strong>${escapeHtml(titleText)}</strong>
+        ${copy ? `<p>${escapeHtml(copy)}</p>` : ""}
+      </div>
+    </div>
+  `;
 }
 
 function badge(value) {
   const text = String(value || "unknown");
-  return `<span class="badge ${escapeAttr(text)}">${escapeHtml(label(text))}</span>`;
+  return `<span class="badge ${escapeAttr(text)} ${statusTone(text)}">${escapeHtml(label(text))}</span>`;
 }
 
 function kv(key, value) {
   return `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value ?? "-")}</dd>`;
+}
+
+function sumCounts(counts = {}, statuses = []) {
+  return statuses.reduce((sum, status) => sum + Number(counts?.[status] || 0), 0);
+}
+
+function statusTone(status) {
+  if (["succeeded"].includes(status)) {
+    return "positive";
+  }
+  if (["failed", "stale", "stopped", "needs_attention"].includes(status)) {
+    return "danger";
+  }
+  if (["running", "launching", "connected"].includes(status)) {
+    return "active";
+  }
+  if (["queued", "received", "generating_prd", "converting_json"].includes(status)) {
+    return "warning";
+  }
+  return "";
+}
+
+function setConnectionState(status, text) {
+  connection.dataset.state = status;
+  connection.textContent = text;
 }
 
 function titleForView(view) {
@@ -658,6 +987,20 @@ function formatDate(value) {
   }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatFileSize(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) {
+    return "-";
+  }
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function statusFill(status) {
@@ -690,13 +1033,13 @@ async function api(path, options = {}) {
 function connectEvents() {
   const events = new EventSource("/api/events");
   events.addEventListener("connected", () => {
-    connection.textContent = "Connected";
+    setConnectionState("connected", "Connected");
   });
   events.addEventListener("state.updated", () => {
     refreshAll({ forceRun: true });
   });
   events.onerror = () => {
-    connection.textContent = "Reconnecting";
+    setConnectionState("reconnecting", "Reconnecting");
   };
 }
 

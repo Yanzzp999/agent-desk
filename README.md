@@ -57,11 +57,15 @@ AgentDesk looks for Ralph scripts in this order:
 2. `RALPH_SKILLS_ROOT`
 3. `<project>/skills`
 4. `<project>/.codex/skills`
-5. `<agent-desk>/../skills`
-6. `~/.codex/skills`
+5. `<project>/.gemini/skills`
+6. `<project>/.claude/skills`
+7. `<agent-desk>/../skills`
+8. `~/.codex/skills`
+9. `~/.gemini/skills`
+10. `~/.claude/skills`
 
-That makes it work both with repo-local skills and with user-level synced
-skills.
+That makes it work with repo-local and user-level synced skills across Codex
+CLI, Gemini CLI, and Claude Code setups.
 
 ## API
 
