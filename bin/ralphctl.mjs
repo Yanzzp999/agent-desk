@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { spawn } from "node:child_process";
+import path from "node:path";
 import {
   collectRun,
+  CONTROL_PLANE_ROOT,
   createContext,
   createPlanJob,
   formatTable,
@@ -32,15 +34,17 @@ async function main() {
     return;
   }
 
-  if (command === "serve" || command === "dev" || command === "gui") {
+  if (command === "dev" || command === "gui") {
     const subcommand = parsed._[1] || "";
     if (command === "gui" && subcommand && subcommand !== "open") {
       throw new Error(`unknown gui command: ${subcommand}`);
     }
-    const open = command === "serve"
-      ? Boolean(parsed.open)
-      : subcommand === "open" && !parsed["no-open"];
-    await serveGui(parsed, { open });
+    await launchDesktopGui(parsed);
+    return;
+  }
+
+  if (command === "serve") {
+    await serveWeb(parsed, { open: Boolean(parsed.open) });
     return;
   }
 
@@ -68,7 +72,41 @@ async function main() {
   throw new Error(`unknown command: ${command}`);
 }
 
-async function serveGui(parsed, options = {}) {
+async function launchDesktopGui(parsed) {
+  const electronPath = path.join(
+    CONTROL_PLANE_ROOT,
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "electron.cmd" : "electron",
+  );
+  const child = spawn(electronPath, buildDesktopArgs(parsed), {
+    cwd: CONTROL_PLANE_ROOT,
+    stdio: "inherit",
+  });
+  const exitCode = await new Promise((resolve) => {
+    child.on("error", (error) => {
+      console.error(`ralphctl: failed to launch AgentDesk desktop app: ${error.message}`);
+      resolve(1);
+    });
+    child.on("close", (code) => resolve(code ?? 0));
+  });
+  process.exit(exitCode);
+}
+
+function buildDesktopArgs(parsed) {
+  const args = [path.join(CONTROL_PLANE_ROOT, "src", "desktop", "main.mjs")];
+  for (const key of ["host", "port", "project", "state-dir", "ui-state-dir"]) {
+    if (parsed[key]) {
+      args.push(`--${key}`, String(parsed[key]));
+    }
+  }
+  if (parsed.devtools) {
+    args.push("--devtools");
+  }
+  return args;
+}
+
+async function serveWeb(parsed, options = {}) {
   const host = parsed.host || "127.0.0.1";
   const port = Number(parsed.port || 4317);
   const initialContext = parsed.project ? createContext({
@@ -92,8 +130,8 @@ async function serveGui(parsed, options = {}) {
   if (options.open) {
     openBrowser(url);
   }
-  console.log(`AgentDesk GUI: ${url}`);
-  console.log(initialContext ? `Project: ${initialContext.projectRoot}` : "Project: choose in the GUI");
+  console.log(`AgentDesk web server: ${url}`);
+  console.log(initialContext ? `Project: ${initialContext.projectRoot}` : "Project: choose in the web UI");
 }
 
 async function handleRuns(context, parsed) {
@@ -291,7 +329,7 @@ function printHelp() {
 
 Usage:
   ralphctl dev [--host 127.0.0.1] [--port 4317]
-  ralphctl gui [open] [--host 127.0.0.1] [--port 4317] [--project DIR] [--no-open]
+  ralphctl gui [open] [--host 127.0.0.1] [--port 4317] [--project DIR] [--devtools]
   ralphctl serve [--host 127.0.0.1] [--port 4317] [--project DIR] [--open]
   ralphctl runs list [--status STATUS] [--json]
   ralphctl runs show <runId> [--json]
@@ -306,7 +344,7 @@ Usage:
   ralphctl planner logs <planJobId> [--json]
 
 Global options:
-  --project DIR        Project root to inspect. For serve/dev, this is optional.
+  --project DIR        Project root to inspect. For gui/serve/dev, this is optional.
   --state-dir DIR      Ralph state root. Default: <project>/.ralph.
   --ui-state-dir DIR   Control-plane state root. Default: <project>/.ralph-ui.
 `);

@@ -8,17 +8,20 @@ The app stays intentionally thin:
 - `.ralph/` in the target project remains the source of truth for run state.
 - `.ralph-ui/` in the target project stores planner job metadata.
 - Existing Ralph scripts still do the real orchestration work.
-- The local server listens on `127.0.0.1:4317` by default.
+- The desktop app embeds a local control-plane server on `127.0.0.1:4317`
+  by default.
 
 ## Quick Start
+
+Requires Node.js 22.12 or newer.
 
 ```sh
 npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:4317`, then choose the Ralph project you want to
-inspect.
+AgentDesk opens as a macOS desktop window. Choose the Ralph project you want
+to inspect inside the app.
 
 You can also use the wrapper script:
 
@@ -49,9 +52,14 @@ ralphctl planner show <planJobId>
 ralphctl planner logs <planJobId>
 ```
 
-Every read command accepts `--json`. The web server can start without a
-project and lets you choose one in the browser. Use `--project DIR` for CLI
-read commands, or to preselect a project when serving.
+Every read command accepts `--json`. The desktop app can start without a
+project and lets you choose one in the app. Use `--project DIR` for CLI read
+commands, or to preselect a project when launching the desktop app or web
+server.
+
+`ralphctl serve` keeps the browser-based local web server available for
+debugging or remote inspection. `ralphctl gui` and `npm run dev` launch the
+desktop window.
 
 ## Ralph Script Resolution
 
