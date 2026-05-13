@@ -10,6 +10,9 @@ const state = {
   sessions: [],
   selectedSessionId: "",
   sessionDetail: null,
+  codeSessions: { items: [], recentItems: [], exactCount: 0, recentCount: 0, roots: [] },
+  selectedCodeSessionId: "",
+  codeSessionDetail: null,
   selectedAgentId: "",
   agentLogs: null,
   message: "",
@@ -35,6 +38,12 @@ document.querySelectorAll("[data-sidebar-view]").forEach((button) => {
 });
 
 document.body.addEventListener("click", async (event) => {
+  const folderButton = event.target.closest("[data-choose-project-folder]");
+  if (folderButton) {
+    await chooseProjectFolder();
+    return;
+  }
+
   const projectRow = event.target.closest("[data-project-root]");
   if (projectRow) {
     await selectProject(projectRow.dataset.projectRoot);
@@ -50,6 +59,12 @@ document.body.addEventListener("click", async (event) => {
   const sessionRow = event.target.closest("[data-session-id]");
   if (sessionRow) {
     await selectSession(sessionRow.dataset.sessionId);
+    return;
+  }
+
+  const codeSessionRow = event.target.closest("[data-code-session-id]");
+  if (codeSessionRow) {
+    selectCodeSession(codeSessionRow.dataset.codeSessionId);
     return;
   }
 
@@ -117,7 +132,7 @@ async function refreshAll(options = {}) {
       return;
     }
 
-    await Promise.all([loadTasks(), loadSessions()]);
+    await Promise.all([loadTasks(), loadSessions(), loadCodeSessions()]);
 
     if ((options.forceSelections || state.selectedTaskId) && state.selectedTaskId) {
       await selectTask(state.selectedTaskId, { quiet: true });
@@ -147,8 +162,31 @@ function clearLoadedProjectState() {
   state.sessions = [];
   state.selectedSessionId = "";
   state.sessionDetail = null;
+  state.codeSessions = { items: [], recentItems: [], exactCount: 0, recentCount: 0, roots: [] };
+  state.selectedCodeSessionId = "";
+  state.codeSessionDetail = null;
   state.selectedAgentId = "";
   state.agentLogs = null;
+}
+
+async function chooseProjectFolder() {
+  if (!window.agentDeskDesktop?.chooseProjectFolder) {
+    state.message = "Native folder selection is available in the AgentDesk desktop app.";
+    render();
+    return;
+  }
+
+  try {
+    const result = await window.agentDeskDesktop.chooseProjectFolder({
+      defaultPath: state.health?.projectRoot || "",
+    });
+    if (result?.projectRoot) {
+      await selectProject(result.projectRoot);
+    }
+  } catch (error) {
+    state.message = error.message;
+    render();
+  }
 }
 
 async function selectProject(projectPath) {
@@ -243,6 +281,18 @@ async function loadSessions() {
   }
 }
 
+async function loadCodeSessions() {
+  const result = await api("/api/code-sessions");
+  state.codeSessions = result;
+  if (state.selectedCodeSessionId) {
+    state.codeSessionDetail = findCodeSession(state.selectedCodeSessionId);
+  }
+  if (state.selectedCodeSessionId && !state.codeSessionDetail) {
+    state.selectedCodeSessionId = "";
+    state.codeSessionDetail = null;
+  }
+}
+
 async function selectTask(taskId, options = {}) {
   if (!taskId) {
     state.taskDetail = null;
@@ -252,6 +302,8 @@ async function selectTask(taskId, options = {}) {
   state.selectedTaskId = taskId;
   state.taskDetail = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
   if (!options.quiet) {
+    state.selectedCodeSessionId = "";
+    state.codeSessionDetail = null;
     state.view = "tasks";
   }
   render();
@@ -275,8 +327,21 @@ async function selectSession(sessionId, options = {}) {
     await selectAgent(state.selectedAgentId, { quiet: true });
   }
   if (!options.quiet) {
+    state.selectedCodeSessionId = "";
+    state.codeSessionDetail = null;
     state.view = "sessions";
   }
+  render();
+}
+
+function selectCodeSession(sessionId) {
+  const session = findCodeSession(sessionId);
+  if (!session) {
+    return;
+  }
+  state.selectedCodeSessionId = sessionId;
+  state.codeSessionDetail = session;
+  state.view = "code-session";
   render();
 }
 
@@ -331,6 +396,7 @@ function render() {
     overview: renderOverview,
     tasks: renderTasks,
     sessions: renderSessions,
+    "code-session": renderCodeSession,
     settings: renderSettings,
   };
 
@@ -355,6 +421,7 @@ function renderSidebarProjectTree(projects) {
       ${projects.slice(0, 12).map((project) => {
         const isCurrent = project.projectRoot === currentRoot;
         const childSessions = isCurrent ? state.sessions.slice(0, 12) : [];
+        const childCodeSessions = isCurrent ? projectCodeSessions().slice(0, 10) : [];
         return `
           <section class="project-group ${isCurrent ? "selected" : ""}">
             <button
@@ -369,18 +436,36 @@ function renderSidebarProjectTree(projects) {
             </button>
             ${isCurrent ? `
               <div class="project-children">
-                ${childSessions.length
-                  ? childSessions.map((session) => `
-                    <button
-                      class="session-node ${session.sessionId === state.selectedSessionId && state.view === "sessions" ? "selected" : ""}"
-                      data-session-id="${escapeAttr(session.sessionId)}"
-                      type="button"
-                    >
-                      <span class="session-node-title">${escapeHtml(session.taskTitle || session.title || session.sessionId)}</span>
-                      <span class="session-node-time">${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
-                    </button>
-                  `).join("")
-                  : `<p class="sidebar-subempty">No sessions yet</p>`}
+                <div class="project-child-group">
+                  <p class="project-child-heading">AgentDesk</p>
+                  ${childSessions.length
+                    ? childSessions.map((session) => `
+                      <button
+                        class="session-node ${session.sessionId === state.selectedSessionId && state.view === "sessions" ? "selected" : ""}"
+                        data-session-id="${escapeAttr(session.sessionId)}"
+                        type="button"
+                      >
+                        <span class="session-node-title">${escapeHtml(session.taskTitle || session.title || session.sessionId)}</span>
+                        <span class="session-node-time">${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
+                      </button>
+                    `).join("")
+                    : `<p class="sidebar-subempty">No AgentDesk sessions</p>`}
+                </div>
+                <div class="project-child-group">
+                  <p class="project-child-heading">Code</p>
+                  ${childCodeSessions.length
+                    ? childCodeSessions.map((session) => `
+                      <button
+                        class="session-node code-session-node ${session.id === state.selectedCodeSessionId && state.view === "code-session" ? "selected" : ""}"
+                        data-code-session-id="${escapeAttr(session.id)}"
+                        type="button"
+                      >
+                        <span class="session-node-title">${escapeHtml(session.title || session.conversationId || session.id)}</span>
+                        <span class="session-node-time">${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
+                      </button>
+                    `).join("")
+                    : `<p class="sidebar-subempty">No Code sessions</p>`}
+                </div>
               </div>
             ` : ""}
           </section>
@@ -400,24 +485,12 @@ function renderMessage() {
 function renderProjectPicker() {
   const items = state.projects?.items || [];
   return `
-    <section class="landing-grid">
-      <div class="surface hero-panel">
-        <div class="hero-copy">
-          <p class="eyebrow">Project workspace</p>
-          <h2>Pick a repository, then keep its tasks and sessions together like a proper Codex desk.</h2>
-          <p class="section-copy">Each project keeps its own <code>task.md</code> files, session history, and orchestration state inside <code>.agent-desk/</code>, so you can move between codebases without losing the thread.</p>
-        </div>
-        <div class="hero-points">
-          ${renderMiniPoint("Project", "One workspace per repo, with recent history on the side.")}
-          ${renderMiniPoint("Tasks", "Generate new task briefs and reopen earlier plans later.")}
-          ${renderMiniPoint("Sessions", "Browse multi-agent execution runs as a living timeline.")}
-        </div>
-      </div>
-      <div class="surface connect-panel">
+    <section class="start-layout">
+      <div class="surface connect-panel primary-panel">
         <div class="section-head">
           <div>
-            <p class="eyebrow">Connect a project</p>
-            <h2>Start with a local path</h2>
+            <p class="eyebrow">Project</p>
+            <h2>Open a folder</h2>
           </div>
         </div>
         <form id="project-form" class="stack-form">
@@ -425,34 +498,19 @@ function renderProjectPicker() {
             Project path
             <input name="projectRoot" placeholder="/absolute/path/to/project" autocomplete="off">
           </label>
-          <button class="button primary" type="submit">Select project</button>
+          <div class="button-row">
+            <button class="button primary" data-choose-project-folder type="button">Choose folder</button>
+            <button class="button" type="submit">Use typed path</button>
+          </div>
         </form>
-        <p class="field-hint">AgentDesk will inspect the directory, keep project-specific state under <code>.agent-desk</code>, and bring recent workspaces back into the sidebar automatically.</p>
       </div>
-    </section>
-    <section class="content-grid two">
       <div class="surface">
         <div class="section-head">
           <div>
-            <h2>Recent projects</h2>
-            <p class="section-copy">Reopen earlier workspaces with one click.</p>
+            <h2>Recent</h2>
           </div>
         </div>
         ${renderProjectList(items)}
-      </div>
-      <div class="surface">
-        <div class="section-head">
-          <div>
-            <h2>How the desk flows</h2>
-            <p class="section-copy">The product stays focused on project selection, task generation, session history, and subagent orchestration.</p>
-          </div>
-        </div>
-        <div class="flow-list">
-          ${renderFlowStep("1", "Choose a project root", "Keep one isolated workspace state per repository.")}
-          ${renderFlowStep("2", "Generate task.md", "Write a feature brief and let Codex produce executable subtasks.")}
-          ${renderFlowStep("3", "Launch a session", "Fan work out to subagents with explicit parallelism and fixed runtime defaults.")}
-          ${renderFlowStep("4", "Review the run", "Inspect agent logs, changed files, risks, and session documentation in one place.")}
-        </div>
       </div>
     </section>
   `;
@@ -631,34 +689,31 @@ function renderTaskDetail(task) {
 function renderSessions() {
   const selectedTask = state.tasks.find((task) => task.taskId === state.selectedTaskId) || state.tasks[0] || null;
   const canLaunchSelectedTask = selectedTask ? isTaskStartable(selectedTask) : false;
+  const codeSessions = projectCodeSessions();
 
   return `
-    <section class="workspace-layout">
+    <section class="workspace-layout compact-workspace">
       <div class="column-stack">
-        <div class="surface">
+        <div class="surface compact-surface project-summary">
           <div class="section-head">
             <div>
-              <p class="eyebrow">Project</p>
               <h2>${escapeHtml(currentProject()?.name || "Project")}</h2>
-              <p class="section-copy">Pick sessions from the left rail, then use this column to prepare the next run.</p>
+              <p class="path-copy mono">${escapeHtml(state.health?.projectRoot || "-")}</p>
             </div>
           </div>
-          <div class="info-grid">
-            ${infoTile("Project root", state.health?.projectRoot || "-")}
-            ${infoTile("Tasks", String(state.health?.counts?.tasks || 0))}
-            ${infoTile("Sessions", String(state.health?.counts?.sessions || 0))}
-            ${infoTile("Worktrees", state.health?.worktreesRoot || "-")}
+          <div class="stat-row">
+            ${compactStat("Tasks", String(state.health?.counts?.tasks || 0))}
+            ${compactStat("Sessions", String(state.health?.counts?.sessions || 0))}
+            ${compactStat("Code", String(codeSessions.length))}
           </div>
         </div>
-        <div class="surface">
+        <div class="surface compact-surface">
           <div class="section-head">
             <div>
-              <p class="eyebrow">Launch</p>
-              <h2>Start a new session</h2>
-              <p class="section-copy">Choose a task, set the parallelism cap, and let AgentDesk fan the work out.</p>
+              <h2>New session</h2>
             </div>
           </div>
-          <form id="session-form" class="stack-form">
+          <form id="session-form" class="stack-form compact-form">
             <label>
               Task
               <select name="taskId">
@@ -679,22 +734,23 @@ function renderSessions() {
           </form>
           <p class="field-hint">
             ${selectedTask
-              ? escapeHtml(`Selected task: ${selectedTask.title || selectedTask.taskId}${canLaunchSelectedTask ? "" : " (not launchable yet)."}`)
+              ? escapeHtml(`${selectedTask.title || selectedTask.taskId}${canLaunchSelectedTask ? "" : " is not ready yet."}`)
               : "Generate a task first to enable session launch."}
           </p>
-          <div class="subsection">
-            <div class="subsection-head">
-              <strong>Task queue</strong>
-              <span>${escapeHtml(String(state.tasks.length))}</span>
+        </div>
+        <div class="surface compact-surface">
+          <div class="section-head">
+            <div>
+              <h2>Code sessions</h2>
             </div>
-            ${renderTaskList(state.tasks.slice(0, 8), {
-              emptyTitle: "No tasks",
-              emptyBody: "Generate a task markdown file to populate this queue.",
-            })}
           </div>
+          ${renderCodeSessionList(codeSessions, {
+            emptyTitle: "No Code sessions",
+            emptyBody: "No matching local sessions.",
+          })}
         </div>
       </div>
-      ${state.sessionDetail ? renderSessionDetail(state.sessionDetail) : renderEmptyDetail("No session selected", "Choose a session from the left project rail to inspect subagent results, logs, and session documentation.")}
+      ${state.sessionDetail ? renderSessionDetail(state.sessionDetail) : renderEmptyDetail("No session selected", "Choose a session from the left rail.")}
     </section>
   `;
 }
@@ -707,7 +763,7 @@ function renderSessionDetail(session) {
         <div>
           <p class="eyebrow">Selected session</p>
           <h2>${escapeHtml(session.task?.title || session.title || session.sessionId)}</h2>
-          <p class="section-copy">Session <code>${escapeHtml(session.sessionId)}</code></p>
+          <p class="path-copy mono">${escapeHtml(session.sessionId)}</p>
         </div>
         ${badge(session.status)}
       </header>
@@ -725,7 +781,6 @@ function renderSessionDetail(session) {
         <div class="section-head">
           <div>
             <h3>Subagents</h3>
-            <p class="section-copy">Each subtask runs in its own git worktree and integrates back into <code>master</code> once it succeeds.</p>
           </div>
         </div>
         ${renderAgentList(session.agents || [])}
@@ -735,7 +790,6 @@ function renderSessionDetail(session) {
         <div class="section-head">
           <div>
             <h3>Session documentation</h3>
-            <p class="section-copy">The orchestrator updates this document after the run progresses or finishes.</p>
           </div>
         </div>
         <pre class="markdown-preview">${escapeHtml(session.docContent || "")}</pre>
@@ -795,6 +849,82 @@ function renderAgentDetail(agent) {
   `;
 }
 
+function renderCodeSession() {
+  const session = state.codeSessionDetail || findCodeSession(state.selectedCodeSessionId);
+  if (!session) {
+    return renderEmptyDetail("No Code session selected", "Choose a Code session from the current project rail.");
+  }
+
+  return `
+    <section class="workspace-layout compact-workspace">
+      <div class="column-stack">
+        <div class="surface compact-surface">
+          <div class="section-head">
+            <div>
+              <h2>Session info</h2>
+              <p class="path-copy mono">${escapeHtml(session.cwd || "No workspace path recorded.")}</p>
+            </div>
+            ${badge("ready")}
+          </div>
+          <div class="info-grid">
+            ${infoTile("Source", session.source || "-")}
+            ${infoTile("Model", session.model || "-")}
+            ${infoTile("Reasoning", session.effort || "-")}
+            ${infoTile("Updated", formatDate(session.updatedAt))}
+          </div>
+        </div>
+        <div class="surface compact-surface">
+          <div class="section-head">
+            <div>
+              <h2>Project</h2>
+            </div>
+          </div>
+          <div class="info-grid">
+            ${infoTile("Working directory", session.cwd || "-")}
+            ${infoTile("Conversation ID", session.conversationId || session.id)}
+            ${infoTile("Messages", String(session.messageCount || 0))}
+            ${infoTile("Tool calls", String(session.toolCallCount || 0))}
+          </div>
+        </div>
+      </div>
+      <div class="surface detail-pane">
+        <header class="detail-header">
+          <div>
+            <p class="eyebrow">Conversation preview</p>
+            <h2>${escapeHtml(session.title || "Code session")}</h2>
+            <p class="path-copy mono">${escapeHtml(session.relativePath || session.sourcePath || "")}</p>
+          </div>
+          <span class="badge active">Code</span>
+        </header>
+        <div class="info-grid session-facts">
+          ${infoTile("Started", formatDate(session.createdAt))}
+          ${infoTile("Updated", formatDate(session.updatedAt))}
+          ${infoTile("User messages", String(session.userMessageCount || 0))}
+          ${infoTile("Assistant messages", String(session.assistantMessageCount || 0))}
+        </div>
+        <section class="detail-section">
+          <div class="section-head">
+            <div>
+              <h3>Recent prompts</h3>
+            </div>
+          </div>
+          ${session.prompts?.length
+            ? `<pre class="markdown-preview">${escapeHtml(session.prompts.map((prompt) => `- ${prompt}`).join("\n"))}</pre>`
+            : emptyState("No prompt preview", "This local session did not expose readable prompt text.")}
+        </section>
+        <section class="detail-section">
+          <div class="section-head">
+            <div>
+              <h3>Session file</h3>
+            </div>
+          </div>
+          <pre class="markdown-preview">${escapeHtml(session.sourcePath || "")}</pre>
+        </section>
+      </div>
+    </section>
+  `;
+}
+
 function renderSettings() {
   const runtime = state.health?.runtime?.metadata || {};
   return `
@@ -804,7 +934,6 @@ function renderSettings() {
           <div>
             <p class="eyebrow">Project paths</p>
             <h2>Workspace roots</h2>
-            <p class="section-copy">Project-specific state stays inside <code>.agent-desk</code>, while subagent worktrees live outside the repo and stay persistent.</p>
           </div>
         </div>
         <div class="info-grid">
@@ -818,7 +947,6 @@ function renderSettings() {
         <div class="section-head">
           <div>
             <h2>Execution defaults</h2>
-            <p class="section-copy">User-facing defaults stay explicit and fixed to the current product direction.</p>
           </div>
         </div>
         <div class="pill-row settings-pills">
@@ -827,17 +955,11 @@ function renderSettings() {
           ${renderRuntimeCapability("Service tier", "enabled", "fast")}
           ${renderRuntimeCapability("Batch size", "enabled", "6")}
         </div>
-        <div class="flow-list compact">
-          ${renderFlowStep("A", "Project selection", "One active repo at a time, with recent projects kept handy.")}
-          ${renderFlowStep("B", "Markdown tasks", "Generate and store reusable task.md plans per project.")}
-          ${renderFlowStep("C", "Session history", "Inspect finished and in-flight multi-agent runs from the same desk.")}
-        </div>
       </div>
       <div class="surface">
         <div class="section-head">
           <div>
             <h2>Switch project</h2>
-            <p class="section-copy">Jump between repositories without losing each workspace's local state.</p>
           </div>
         </div>
         <form id="project-form" class="stack-form compact-form">
@@ -845,7 +967,10 @@ function renderSettings() {
             Project path
             <input name="projectRoot" value="${escapeAttr(state.health?.projectRoot || "")}" placeholder="/absolute/path/to/project" autocomplete="off">
           </label>
-          <button class="button primary" type="submit">Switch project</button>
+          <div class="button-row">
+            <button class="button primary" data-choose-project-folder type="button">Choose folder</button>
+            <button class="button" type="submit">Use typed path</button>
+          </div>
         </form>
         ${renderProjectList(state.projects?.items || [], {
           emptyTitle: "No recent projects",
@@ -855,8 +980,24 @@ function renderSettings() {
       <div class="surface">
         <div class="section-head">
           <div>
+            <h2>Code sessions</h2>
+          </div>
+        </div>
+        <div class="info-grid">
+          ${infoTile("Project matches", String(state.codeSessions?.exactCount || 0))}
+          ${infoTile("Recent local", String(state.codeSessions?.recentCount || 0))}
+          ${infoTile("Active source", codeSessionRootLabel(0))}
+          ${infoTile("Archive source", codeSessionRootLabel(1))}
+        </div>
+        ${renderCodeSessionList((state.codeSessions?.recentItems || []).slice(0, 4), {
+          emptyTitle: "No local Code sessions",
+          emptyBody: "AgentDesk did not find local Codex conversation files yet.",
+        })}
+      </div>
+      <div class="surface">
+        <div class="section-head">
+          <div>
             <h2>Runtime metadata</h2>
-            <p class="section-copy">A compact snapshot of what the local Codex runtime reported.</p>
           </div>
         </div>
         <div class="info-grid">
@@ -886,14 +1027,13 @@ function renderProjectList(projects, options = {}) {
           <div class="list-item-head">
             <div class="list-copy">
               <strong>${escapeHtml(project.name || basename(project.projectRoot))}</strong>
-              <span>${escapeHtml(project.hasDeskState ? "AgentDesk state found" : "No .agent-desk state yet")}</span>
             </div>
             ${badge(project.hasDeskState ? "ready" : "empty")}
           </div>
           <div class="meta-row">
             <span>${escapeHtml(`${project.taskCount || 0} tasks`)}</span>
             <span>${escapeHtml(`${project.sessionCount || 0} sessions`)}</span>
-            <span>${escapeHtml(formatDate(project.selectedAt))}</span>
+            <span>${escapeHtml(formatRelativeDate(project.selectedAt))}</span>
           </div>
           <p class="path-copy mono">${escapeHtml(project.projectRoot)}</p>
         </button>
@@ -958,6 +1098,36 @@ function renderSessionList(sessions, options = {}) {
             <span>${escapeHtml(`${session.parallelism || 0} parallel`)}</span>
             <span>${escapeHtml(`${session.succeededAgents || 0} ok · ${session.failedAgents || 0} failed`)}</span>
             <span>${escapeHtml(formatDate(session.updatedAt))}</span>
+          </div>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderCodeSessionList(sessions, options = {}) {
+  if (!sessions.length) {
+    return emptyState(options.emptyTitle || "No Code sessions", options.emptyBody || "Local Code conversations will appear here.");
+  }
+
+  return `
+    <div class="list-stack">
+      ${sessions.map((session) => `
+        <button
+          class="list-item code-session-item ${session.id === state.selectedCodeSessionId ? "selected" : ""}"
+          data-code-session-id="${escapeAttr(session.id)}"
+          type="button"
+        >
+          <div class="list-item-head">
+            <div class="list-copy">
+              <strong>${escapeHtml(session.title || session.conversationId || session.id)}</strong>
+            </div>
+            <span class="badge active">Code</span>
+          </div>
+          <div class="meta-row">
+            <span>${escapeHtml(session.model || "model unknown")}</span>
+            <span>${escapeHtml(`${session.messageCount || 0} messages`)}</span>
+            <span>${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
           </div>
         </button>
       `).join("")}
@@ -1035,6 +1205,15 @@ function metricTile(labelText, value, bodyText, tone = "") {
   `;
 }
 
+function compactStat(labelText, value) {
+  return `
+    <span class="compact-stat">
+      <strong>${escapeHtml(value)}</strong>
+      <span>${escapeHtml(labelText)}</span>
+    </span>
+  `;
+}
+
 function infoTile(labelText, value) {
   return `
     <div class="info-tile">
@@ -1077,7 +1256,7 @@ function topbarMeta() {
     return {
       kicker: "Projects",
       title: "Open project",
-      path: "Choose a local repository to start managing tasks and sessions.",
+      path: "Choose a local folder.",
     };
   }
 
@@ -1085,7 +1264,7 @@ function topbarMeta() {
     return {
       kicker: "Settings",
       title: "Settings",
-      path: state.health?.projectRoot || "Runtime roots and project switching.",
+      path: state.health?.projectRoot || "Runtime and paths.",
     };
   }
 
@@ -1094,6 +1273,15 @@ function topbarMeta() {
       kicker: currentProject()?.name || "Task workspace",
       title: state.taskDetail?.title || "Tasks",
       path: state.taskDetail?.taskId ? `Task ${state.taskDetail.taskId}` : (state.health?.projectRoot || "Task workspace"),
+    };
+  }
+
+  if (state.view === "code-session") {
+    const session = state.codeSessionDetail || findCodeSession(state.selectedCodeSessionId);
+    return {
+      kicker: currentProject()?.name || "Code session",
+      title: session?.title || "Code session",
+      path: session?.cwd || state.health?.projectRoot || "Local Code conversation",
     };
   }
 
@@ -1117,6 +1305,33 @@ function currentProject() {
       taskCount: state.health?.counts?.tasks || 0,
       sessionCount: state.health?.counts?.sessions || 0,
     };
+}
+
+function projectCodeSessions() {
+  return state.codeSessions?.items || [];
+}
+
+function allCodeSessions() {
+  const byId = new Map();
+  for (const session of [
+    ...(state.codeSessions?.items || []),
+    ...(state.codeSessions?.recentItems || []),
+  ]) {
+    byId.set(session.id, session);
+  }
+  return [...byId.values()];
+}
+
+function findCodeSession(sessionId) {
+  return allCodeSessions().find((session) => session.id === sessionId) || null;
+}
+
+function codeSessionRootLabel(index) {
+  const root = state.codeSessions?.roots?.[index];
+  if (!root) {
+    return "-";
+  }
+  return root.exists ? root.path : `${root.path} (missing)`;
 }
 
 function isTaskStartable(task) {

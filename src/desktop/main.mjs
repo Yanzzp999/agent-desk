@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, nativeImage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from "electron";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,7 @@ async function main() {
 
   setApplicationIcon();
   Menu.setApplicationMenu(createApplicationMenu());
+  registerIpcHandlers();
 
   const serverInfo = await startControlPlane(parsed);
   controlPlaneServer = serverInfo.server;
@@ -85,6 +86,7 @@ async function createMainWindow(parsed) {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: path.join(MODULE_DIR, "preload.cjs"),
       sandbox: true,
     },
   });
@@ -163,6 +165,30 @@ function parseArgs(argv) {
     }
   }
   return result;
+}
+
+function registerIpcHandlers() {
+  ipcMain.handle("agent-desk:choose-project-folder", async (event, options = {}) => {
+    if (controlPlaneUrl && !event.senderFrame.url.startsWith(controlPlaneUrl)) {
+      throw new Error("folder picker is unavailable for this page");
+    }
+
+    const defaultPath = typeof options.defaultPath === "string" && options.defaultPath
+      ? options.defaultPath
+      : app.getPath("home");
+    const parentWindow = BrowserWindow.fromWebContents(event.sender) || mainWindow || undefined;
+    const result = await dialog.showOpenDialog(parentWindow, {
+      title: "Open project folder",
+      defaultPath,
+      properties: ["openDirectory", "createDirectory"],
+      buttonLabel: "Open",
+    });
+
+    return {
+      canceled: result.canceled,
+      projectRoot: result.filePaths[0] || "",
+    };
+  });
 }
 
 function createApplicationMenu() {

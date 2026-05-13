@@ -16,6 +16,7 @@ import {
   listTasks,
   snapshotStateStamp,
 } from "../lib/control-plane.mjs";
+import { listCodeSessions } from "../lib/code-sessions.mjs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = path.resolve(MODULE_DIR, "../web");
@@ -119,6 +120,14 @@ async function routeRequest(projects, req, res, clients) {
       });
     }
     return sendJson(res, 200, { ...await getHealth(context), needsProject: false });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/code-sessions") {
+    const context = projects.currentContext();
+    return sendJson(res, 200, await listCodeSessions({
+      projectRoot: context?.projectRoot || "",
+      limit: url.searchParams.get("limit") || undefined,
+    }));
   }
 
   const context = requireProjectContext(projects);
