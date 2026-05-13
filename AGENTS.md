@@ -1,5 +1,10 @@
 # AgentDesk Codex Instructions
 
+## Verification Workflow
+
+- When validating UI or runtime behavior served by `npm run dev`, Codex should default to using [@电脑](plugin://computer-use@openai-bundled) to inspect the running app.
+- Do not use browser-based validation for `npm run dev` output unless the user explicitly asks for it or Computer Use is unavailable.
+
 ## Git Workflow
 
 - After a large code update, Codex should automatically create a git commit once the implementation has been verified.

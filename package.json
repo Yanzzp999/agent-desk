@@ -8,10 +8,10 @@
     "ralphctl": "./bin/ralphctl.mjs"
   },
   "scripts": {
-    "dev": "node ./bin/ralphctl.mjs dev",
+    "dev": "node ./bin/ralphctl.mjs gui",
     "serve": "node ./bin/ralphctl.mjs serve",
     "test": "node --test test/*.test.mjs",
-    "gui": "node ./bin/ralphctl.mjs gui open --no-open"
+    "gui": "node ./bin/ralphctl.mjs gui"
   },
   "engines": {
     "node": ">=18"
