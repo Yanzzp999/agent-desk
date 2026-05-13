@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 import process from "node:process";
+import { startAgentDeskMcpServer } from "../src/lib/mcp-server.mjs";
 import {
   createContext,
   createSession,
   createTask,
   formatTable,
   getAgentLogs,
+  readAgentDeskConfig,
   getSession,
   getTask,
   listSessions,
   listTasks,
+  writeDefaultAgentDeskConfig,
 } from "../src/lib/control-plane.mjs";
 
 main().catch((error) => {
@@ -26,10 +29,16 @@ async function main() {
     return;
   }
 
+  if (command === "mcp") {
+    await startAgentDeskMcpServer({ projectRoot: parsed.project });
+    return;
+  }
+
   const context = createContext({
     projectRoot: parsed.project,
     deskRoot: parsed["desk-root"],
     worktreesRoot: parsed["worktrees-root"],
+    configPath: parsed.config,
     codexCli: parsed["codex-cli"],
   });
 
@@ -43,7 +52,27 @@ async function main() {
     return;
   }
 
+  if (command === "config") {
+    await handleConfig(context, parsed);
+    return;
+  }
+
   throw new Error(`unknown command: ${command}`);
+}
+
+async function handleConfig(context, parsed) {
+  const subcommand = parsed._[1] || "show";
+  if (subcommand === "show") {
+    const result = await readAgentDeskConfig(context);
+    return output(parsed, result, () => result.exists
+      ? result.text.trimEnd()
+      : `${result.text.trimEnd()}\n\n# Not written yet. Run: ralphctl config init`);
+  }
+  if (subcommand === "init") {
+    const result = await writeDefaultAgentDeskConfig(context, { force: Boolean(parsed.force) });
+    return output(parsed, result, () => `Wrote AgentDesk config: ${result.path}`);
+  }
+  throw new Error(`unknown config command: ${subcommand}`);
 }
 
 async function handleTasks(context, parsed) {
@@ -127,6 +156,8 @@ async function handleSessions(context, parsed) {
       parallelism: parsed.parallel || parsed.parallelism || parsed.concurrency || parsed["codex-count"],
       model: parsed.model,
       reasoning: parsed.reasoning || parsed.effort,
+      executionMode: parsed["execution-mode"] || parsed.mode,
+      subagentLauncher: parsed["subagent-launcher"],
     });
     return output(parsed, result, () => `Started session: ${result.sessionId}`);
   }
@@ -203,14 +234,18 @@ Usage:
   ralphctl tasks list [--json]
   ralphctl tasks show <taskId> [--json]
   ralphctl tasks create [--title TEXT] [--brief TEXT] [--json]
+  ralphctl mcp [--project DIR]
+  ralphctl config show [--json]
+  ralphctl config init [--force] [--json]
   ralphctl sessions list [--task <taskId>] [--json]
   ralphctl sessions show <sessionId> [--json]
-  ralphctl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--json]
+  ralphctl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--subagent-launcher LAUNCHER] [--json]
   ralphctl sessions logs <sessionId> <agentId> [--json]
 
 Global options:
   --project DIR          Project root to inspect. Defaults to the current git root.
   --desk-root DIR        Override the AgentDesk state root. Default: <project>/.agent-desk.
+  --config FILE          Override the AgentDesk TOML config path. Default: <desk-root>/config.toml.
   --worktrees-root DIR   Override the persistent git worktrees root.
   --codex-cli PATH       Override the Codex CLI executable path.
 
@@ -220,5 +255,7 @@ Session start options:
   --parallel N           Maximum concurrent Codex CLI subagents. Default: 6, max: 24.
   --concurrency N        Alias for --parallel.
   --codex-count N        Alias for --parallel.
+  --execution-mode MODE  worktree or current-branch. Default: worktree.
+  --subagent-launcher L  codex-cli or codex-app for current-branch mode.
 `);
 }

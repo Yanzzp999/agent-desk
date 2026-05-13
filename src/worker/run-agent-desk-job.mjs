@@ -12,6 +12,8 @@ const context = createContext({
   projectRoot: args.project,
   deskRoot: args["desk-root"],
   worktreesRoot: args["worktrees-root"],
+  configPath: args.config,
+  codexCli: args["codex-cli"],
 });
 
 try {

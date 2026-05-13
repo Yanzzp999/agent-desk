@@ -1,10 +1,11 @@
-# AgentDesk CLI-only 编排
+# AgentDesk MCP/CLI 编排
 
 ## 目标
 
 取消 AgentDesk 的 GUI/Web 应用入口，把项目收敛成一个 CLI-first 工具，用来：
 
 - 为选中的项目创建并保存 `task.md`
+- 通过 MCP 在任意项目启动目录的 `task/` 下创建 markdown checklist task 文件
 - 基于 `task.md` 启动 Codex CLI 子代理
 - 允许用户配置子代理模型、思考深度和并发 Codex CLI 数量
 - 在确认完整任务到 session 流程通过验证后，才把任务视为完成
@@ -44,7 +45,9 @@ AgentDesk 当前已经从支持的产品入口上变成 CLI-only：
 ## 验收标准
 
 - 项目不再依赖 Electron，正常使用不需要 GUI 或 Web Server。
-- `ralphctl` 是主要支持的使用入口。
+- MCP stdio server 和 `ralphctl` 是主要支持的使用入口。
+- MCP `create_task` 默认在 `<project>/task/<title-slug>.task.md` 创建任务文件。
+- MCP 创建的每个任务条目必须使用 markdown checkbox 待办清单格式：`- [ ] ...`。
 - 用户可以通过 CLI 创建/生成任务，并查看生成的 `task.md`。
 - 用户可以通过 CLI 启动 session，并配置：
   - 模型，默认 `gpt-5.5`
@@ -113,3 +116,4 @@ AgentDesk 当前已经从支持的产品入口上变成 CLI-only：
 - 2026-05-13：在改代码前先起草任务文档。仓库当时已有本地修改：`src/lib/code-sessions.mjs`、`src/server/server.mjs`、`src/web/app.js`、`src/web/styles.css` 和 `test/code-sessions.test.mjs`；除非它们明确属于 CLI-only 迁移，否则需要保留。
 - 2026-05-13：完成 CLI-only 迁移，移除支持的 GUI/Web 产品面，增加 session 配置参数和校验，增加 fake Codex E2E 覆盖，并验证所有测试和 CLI smoke check。
 - 2026-05-13：按要求将 `README.md` 和 `task.md` 改成中文文档。
+- 2026-05-13：新增 MCP stdio server 入口，支持在其他项目的 `task/` 目录生成 `<title-slug>.task.md`，并强制任务条目为 markdown checkbox 待办清单。

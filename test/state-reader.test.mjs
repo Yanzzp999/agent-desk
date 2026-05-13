@@ -13,7 +13,9 @@ import {
   listSessions,
   listTasks,
   normalizeSessionRequest,
+  parseAgentDeskConfigToml,
   parseTaskMarkdownItems,
+  renderAgentDeskConfigToml,
   renderSessionDocument,
 } from "../src/lib/control-plane.mjs";
 
@@ -171,6 +173,8 @@ test("normalizes configurable session defaults and overrides", () => {
     model: "gpt-5.5",
     reasoning: "xhigh",
     serviceTier: "fast",
+    executionMode: "worktree",
+    subagentLauncher: "codex-cli",
     launchPrompt: "",
   });
 
@@ -178,12 +182,16 @@ test("normalizes configurable session defaults and overrides", () => {
     parallelism: "2",
     model: "gpt-5.4",
     reasoning: "high",
+    executionMode: "current-branch",
+    subagentLauncher: "codex-cli",
     launchPrompt: "Prefer small patches",
   }), {
     parallelism: 2,
     model: "gpt-5.4",
     reasoning: "high",
     serviceTier: "fast",
+    executionMode: "current-branch",
+    subagentLauncher: "codex-cli",
     launchPrompt: "Prefer small patches",
   });
 
@@ -191,6 +199,35 @@ test("normalizes configurable session defaults and overrides", () => {
   assert.throws(() => normalizeSessionRequest({ parallelism: "0" }), /positive number/);
   assert.throws(() => normalizeSessionRequest({ model: "bad model" }), /single Codex CLI model id/);
   assert.throws(() => normalizeSessionRequest({ reasoning: "extreme" }), /unsupported reasoning effort/);
+  assert.throws(() => normalizeSessionRequest({ executionMode: "current-branch" }), /requires --subagent-launcher/);
+  assert.throws(() => normalizeSessionRequest({ executionMode: "sidecar" }), /unsupported execution mode/);
+});
+
+test("parses and renders TOML session config", () => {
+  const parsed = parseAgentDeskConfigToml(`
+[session]
+model = "gpt-5.4"
+reasoning = "high"
+parallelism = 3
+execution_mode = "current-branch"
+subagent_launcher = "codex-cli"
+`);
+
+  assert.deepEqual(normalizeSessionRequest(parsed.session), {
+    parallelism: 3,
+    model: "gpt-5.4",
+    reasoning: "high",
+    serviceTier: "fast",
+    executionMode: "current-branch",
+    subagentLauncher: "codex-cli",
+    launchPrompt: "",
+  });
+
+  const rendered = renderAgentDeskConfigToml({ session: parsed.session });
+  assert.match(rendered, /\[session\]/);
+  assert.match(rendered, /model = "gpt-5\.4"/);
+  assert.match(rendered, /execution_mode = "current-branch"/);
+  assert.match(rendered, /subagent_launcher = "codex-cli"/);
 });
 
 test("builds Codex exec args with selected model, reasoning, service tier, and output schema", () => {

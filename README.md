@@ -1,7 +1,7 @@
 # AgentDesk
 
-AgentDesk 是一个以 CLI 为中心的项目编排工具，用来通过 Codex 生成 `task.md`，
-再把任务拆分给多个 Codex CLI 子代理执行。
+AgentDesk 是一个以 MCP 和 CLI 为中心的项目编排工具，用来在任意本地项目里
+生成 markdown checklist 任务文件，并通过 Codex CLI 子代理执行这些任务。
 
 它围绕三个概念工作：
 
@@ -10,7 +10,52 @@ AgentDesk 是一个以 CLI 为中心的项目编排工具，用来通过 Codex �
 - `Session`：一次执行运行，会把 `task.md` 里的子任务分发给多个 Codex CLI 子代理
 
 AgentDesk 不再提供 GUI、Electron 外壳或本地 Web 应用。当前支持的主要入口是
-`ralphctl`。
+MCP stdio server 和 `ralphctl`。
+
+## MCP 使用方式
+
+AgentDesk 提供 `agent-desk-mcp` stdio server，可以被 Codex、Claude Desktop 或其他
+MCP 客户端从任意项目目录启动。默认项目根目录是 MCP server 的启动目录，也可以
+通过 `--project` 或 `AGENT_DESK_PROJECT_ROOT` 覆盖。
+
+```json
+{
+  "mcpServers": {
+    "agent-desk": {
+      "command": "node",
+      "args": ["/absolute/path/to/agent-desk/bin/agent-desk-mcp.mjs"],
+      "cwd": "/absolute/path/to/your/project"
+    }
+  }
+}
+```
+
+也可以通过现有 CLI 启动同一个 MCP server：
+
+```sh
+./scripts/ralphctl.sh mcp --project /absolute/path/to/your/project
+```
+
+MCP tools：
+
+- `create_task`：默认在 `<project>/task/` 下创建 `<title-slug>.task.md`
+- `list_tasks`：列出 `<project>/task/` 下的 markdown task 文件
+- `read_task`：读取 `<project>/task/` 下的某个 markdown task 文件
+
+`create_task` 写出的任务始终使用 markdown 待办清单格式：
+
+```md
+# Checkout flow
+
+## Goal
+
+Implement the checkout flow end to end.
+
+## Tasks
+
+- [ ] Add payment state model
+- [ ] Wire confirmation screen
+```
 
 ## 默认配置
 
@@ -30,6 +75,9 @@ AgentDesk 不再提供 GUI、Electron 外壳或本地 Web 应用。当前支持�
 每个项目会把编排状态保存在：
 
 ```text
+<project>/task/
+  <task-slug>.task.md
+
 <project>/.agent-desk/
   tasks/
     <taskId>/
@@ -102,6 +150,7 @@ npm install
 ralphctl tasks list [--json]
 ralphctl tasks show <taskId> [--json]
 ralphctl tasks create [--title TEXT] [--brief TEXT] [--json]
+ralphctl mcp [--project DIR]
 ralphctl sessions list [--task <taskId>] [--json]
 ralphctl sessions show <sessionId> [--json]
 ralphctl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--json]

@@ -20,6 +20,11 @@ export const DEFAULT_SERVICE_TIER = "fast";
 export const DEFAULT_PARALLELISM = 6;
 export const DEFAULT_LAUNCH_BATCH_SIZE = 6;
 export const MAX_PARALLELISM = 24;
+export const DEFAULT_EXECUTION_MODE = "worktree";
+export const DEFAULT_WORKTREE_SUBAGENT_LAUNCHER = "codex-cli";
+export const EXECUTION_MODES = Object.freeze(["worktree", "current-branch"]);
+export const CURRENT_BRANCH_SUBAGENT_LAUNCHERS = Object.freeze(["codex-cli", "codex-app"]);
+export const DEFAULT_CONFIG_FILENAME = "config.toml";
 const SCHEMA_VERSION = 2;
 const TASK_STATUSES = new Set(["received", "generating", "ready", "running", "succeeded", "failed"]);
 const SESSION_STATUSES = new Set(["queued", "running", "succeeded", "failed"]);
@@ -49,9 +54,11 @@ export function createContext(options = {}) {
   const worktreesRoot = path.resolve(
     options.worktreesRoot || path.join(os.homedir(), ".agent-desk", "worktrees", projectKey),
   );
+  const configPath = path.resolve(options.configPath || options.config || path.join(deskRoot, DEFAULT_CONFIG_FILENAME));
   return {
     projectRoot,
     deskRoot,
+    configPath,
     tasksRoot: path.join(deskRoot, "tasks"),
     sessionsRoot: path.join(deskRoot, "sessions"),
     docsRoot: path.join(deskRoot, "docs"),
@@ -83,6 +90,75 @@ export async function getHealth(context) {
       sessions: sessions.items.length,
     },
   };
+}
+
+export async function readAgentDeskConfig(context) {
+  const exists = Boolean(await statSafe(context.configPath));
+  const text = exists ? await fsp.readFile(context.configPath, "utf8") : "";
+  const raw = exists ? parseAgentDeskConfigToml(text) : {};
+  const sessionInput = normalizeSessionRequestInput(raw.session || {});
+  return {
+    path: context.configPath,
+    exists,
+    raw,
+    session: normalizeSessionRequest(sessionInput),
+    text: exists ? text : renderAgentDeskConfigToml(),
+  };
+}
+
+export async function writeDefaultAgentDeskConfig(context, options = {}) {
+  const exists = Boolean(await statSafe(context.configPath));
+  if (exists && !options.force) {
+    throw new Error(`config already exists: ${context.configPath}`);
+  }
+  await fsp.mkdir(path.dirname(context.configPath), { recursive: true });
+  await fsp.writeFile(context.configPath, renderAgentDeskConfigToml(options.session || {}), "utf8");
+  return readAgentDeskConfig(context);
+}
+
+export function renderAgentDeskConfigToml(config = {}) {
+  const session = normalizeSessionRequest(normalizeSessionRequestInput(config.session || config));
+  return [
+    "# AgentDesk project configuration",
+    "",
+    "[session]",
+    `model = ${tomlString(session.model)}`,
+    `reasoning = ${tomlString(session.reasoning)}`,
+    `parallelism = ${session.parallelism}`,
+    `execution_mode = ${tomlString(session.executionMode)}`,
+    `subagent_launcher = ${tomlString(session.subagentLauncher)}`,
+    "",
+    "# current-branch mode is analysis-only. Choose subagent_launcher = \"codex-cli\"",
+    "# for automated CLI analysis, or \"codex-app\" when the main agent will start app subagents.",
+  ].join("\n");
+}
+
+export function parseAgentDeskConfigToml(text = "") {
+  const root = {};
+  let current = root;
+  const lines = String(text || "").split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = stripTomlComment(lines[index]).trim();
+    if (!line) {
+      continue;
+    }
+    const sectionMatch = line.match(/^\[([A-Za-z0-9_.-]+)\]$/);
+    if (sectionMatch) {
+      current = sectionMatch[1].split(".").reduce((object, part) => {
+        object[part] = object[part] && typeof object[part] === "object" && !Array.isArray(object[part])
+          ? object[part]
+          : {};
+        return object[part];
+      }, root);
+      continue;
+    }
+    const assignmentMatch = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
+    if (!assignmentMatch) {
+      throw new Error(`unsupported TOML syntax on line ${index + 1}`);
+    }
+    current[assignmentMatch[1]] = parseTomlValue(assignmentMatch[2].trim(), index + 1);
+  }
+  return root;
 }
 
 export async function getRuntimeCapabilities(context) {
@@ -138,11 +214,15 @@ export async function getRuntimeCapabilities(context) {
       },
       sessions: {
         worktrees: true,
+        currentBranchAnalysis: true,
         masterIntegration: true,
         batchSize: DEFAULT_LAUNCH_BATCH_SIZE,
         fixedModel: DEFAULT_SUBAGENT_MODEL,
         fixedReasoning: DEFAULT_SUBAGENT_REASONING,
         fixedServiceTier: DEFAULT_SERVICE_TIER,
+        defaultExecutionMode: DEFAULT_EXECUTION_MODE,
+        executionModes: EXECUTION_MODES,
+        currentBranchSubagentLaunchers: CURRENT_BRANCH_SUBAGENT_LAUNCHERS,
       },
     },
   };
@@ -219,6 +299,10 @@ export async function createTask(context, request = {}) {
     context.deskRoot,
     "--worktrees-root",
     context.worktreesRoot,
+    "--config",
+    context.configPath,
+    "--codex-cli",
+    context.codexCli,
     "--job",
     "generate-task",
     "--task",
@@ -331,9 +415,14 @@ export async function createSession(context, taskId, request = {}) {
     throw new Error(`task is not ready to execute: ${task.status}`);
   }
   await assertGitRepository(context.projectRoot);
-  await assertMasterBranch(context.projectRoot);
 
-  const sessionRequest = normalizeSessionRequest(request);
+  const sessionRequest = await resolveSessionRequest(context, request);
+  if (sessionRequest.executionMode === "worktree") {
+    await assertMasterBranch(context.projectRoot);
+  }
+  if (sessionRequest.executionMode === "current-branch" && sessionRequest.subagentLauncher === "codex-app") {
+    throw new Error("codex-app subagent launcher requires explicit Codex App orchestration and cannot be started by ralphctl yet; use --subagent-launcher codex-cli for automated CLI analysis");
+  }
   const sessionId = await uniqueSessionId(context, task);
   const sessionDir = sessionDirPath(context, sessionId);
   const now = new Date().toISOString();
@@ -348,6 +437,8 @@ export async function createSession(context, taskId, request = {}) {
     model: sessionRequest.model,
     reasoning: sessionRequest.reasoning,
     serviceTier: sessionRequest.serviceTier,
+    executionMode: sessionRequest.executionMode,
+    subagentLauncher: sessionRequest.subagentLauncher,
     launchPrompt: sessionRequest.launchPrompt,
     createdAt: now,
     updatedAt: now,
@@ -381,6 +472,10 @@ export async function createSession(context, taskId, request = {}) {
     context.deskRoot,
     "--worktrees-root",
     context.worktreesRoot,
+    "--config",
+    context.configPath,
+    "--codex-cli",
+    context.codexCli,
     "--job",
     "run-session",
     "--session",
@@ -418,8 +513,13 @@ export async function runSessionJob(context, sessionId) {
   const agents = parsedItems.map((item, index) => {
     const agentId = `agent-${String(index + 1).padStart(2, "0")}`;
     const agentDir = path.join(session.paths.sessionDir, "agents", agentId);
-    const worktreePath = path.join(context.worktreesRoot, sessionId, agentId);
-    const branchName = `agentdesk/${task.taskId}/${sessionId}/${agentId}`;
+    const executionMode = getSessionExecutionMode(session);
+    const worktreePath = executionMode === "worktree"
+      ? path.join(context.worktreesRoot, sessionId, agentId)
+      : context.projectRoot;
+    const branchName = executionMode === "worktree"
+      ? `agentdesk/${task.taskId}/${sessionId}/${agentId}`
+      : "current-branch";
     return {
       id: agentId,
       order: index + 1,
@@ -507,6 +607,10 @@ export async function runSessionJob(context, sessionId) {
 }
 
 async function runSingleAgent(context, task, session, sessionId, agent) {
+  if (getSessionExecutionMode(session) === "current-branch") {
+    return runSingleAnalysisAgent(context, task, session, sessionId, agent);
+  }
+
   let created = null;
   try {
     const taskMarkdown = await readTextSafe(task.paths.taskMd);
@@ -587,6 +691,87 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
   }
 }
 
+async function runSingleAnalysisAgent(context, task, session, sessionId, agent) {
+  try {
+    const taskMarkdown = await readTextSafe(task.paths.taskMd);
+    await fsp.mkdir(agent.paths.agentDir, { recursive: true });
+    await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
+    await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
+
+    const baseCommit = await gitRevParse(context.projectRoot, "HEAD");
+    const branchName = await gitCurrentBranch(context.projectRoot).catch(() => "current-branch");
+    const prompt = buildAnalysisSubagentPrompt(task, taskMarkdown, session, sessionId, {
+      ...agent,
+      branchName,
+      worktreePath: context.projectRoot,
+      baseCommit,
+    });
+    await fsp.writeFile(agent.paths.promptMd, prompt, "utf8");
+
+    await patchSessionAgent(context, sessionId, agent.id, {
+      status: "running",
+      worktreePath: context.projectRoot,
+      branchName,
+      baseCommit,
+      startedAt: new Date().toISOString(),
+      lastError: "",
+    });
+    await refreshSessionCounts(context, sessionId);
+
+    const result = await runCodexPrompt({
+      context,
+      cwd: context.projectRoot,
+      model: session.model || DEFAULT_SUBAGENT_MODEL,
+      reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
+      serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
+      sandboxMode: "read-only",
+      prompt,
+      outputFile: agent.paths.reportJson,
+      stdoutLog: agent.paths.stdoutLog,
+      stderrLog: agent.paths.stderrLog,
+      outputSchemaFile: SUBAGENT_REPORT_SCHEMA_PATH,
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(describeCommandFailure(result, `analysis subagent ${agent.id} failed`));
+    }
+
+    const report = await readJsonSafe(agent.paths.reportJson);
+    const normalizedReport = normalizeSubagentReport(report);
+    await patchSessionAgent(context, sessionId, agent.id, {
+      status: "succeeded",
+      completedAt: new Date().toISOString(),
+      exitCode: result.exitCode,
+      summary: normalizedReport.summary,
+      testsRun: normalizedReport.testsRun,
+      risks: normalizedReport.risks,
+      notes: normalizedReport.notes,
+      changedFiles: [],
+      headCommit: baseCommit,
+      mergedCommit: "",
+      lastError: "",
+    });
+    return {
+      report: normalizedReport,
+      changedFiles: [],
+      integration: {
+        masterBefore: "",
+        masterCommit: "",
+        integrated: false,
+      },
+    };
+  } catch (error) {
+    await patchSessionAgent(context, sessionId, agent.id, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      worktreePath: context.projectRoot,
+      branchName: agent.branchName || "current-branch",
+      lastError: error.message,
+    });
+    await updateSessionLastError(context, sessionId, error.message);
+    throw error;
+  }
+}
+
 export async function getAgentLogs(context, sessionId, agentId) {
   const session = await readSessionMeta(context, sessionId);
   const agent = session.agents.find((candidate) => candidate.id === agentId);
@@ -635,13 +820,39 @@ function normalizeTaskRequest(request = {}) {
 }
 
 export function normalizeSessionRequest(request = {}) {
+  const normalizedInput = normalizeSessionRequestInput(request);
+  const executionMode = normalizeExecutionMode(normalizedInput.executionMode || normalizedInput.mode);
   return {
-    parallelism: normalizeParallelism(request.parallelism),
-    model: normalizeSubagentModel(request.model),
-    reasoning: normalizeReasoningEffort(request.reasoning),
+    parallelism: normalizeParallelism(normalizedInput.parallelism),
+    model: normalizeSubagentModel(normalizedInput.model),
+    reasoning: normalizeReasoningEffort(normalizedInput.reasoning),
     serviceTier: DEFAULT_SERVICE_TIER,
-    launchPrompt: normalizeOptionalString(request.launchPrompt),
+    executionMode,
+    subagentLauncher: normalizeSubagentLauncher(normalizedInput.subagentLauncher, executionMode),
+    launchPrompt: normalizeOptionalString(normalizedInput.launchPrompt),
   };
+}
+
+async function resolveSessionRequest(context, request = {}) {
+  const config = await readAgentDeskConfig(context);
+  const configRequest = config.exists
+    ? normalizeSessionRequestInput(config.raw.session || {})
+    : {};
+  return normalizeSessionRequest({
+    ...configRequest,
+    ...normalizeSessionRequestInput(request),
+  });
+}
+
+function normalizeSessionRequestInput(input = {}) {
+  return definedObject({
+    parallelism: input.parallelism ?? input.parallel ?? input.concurrency ?? input.codex_count ?? input["codex-count"],
+    model: input.model,
+    reasoning: input.reasoning ?? input.effort,
+    executionMode: input.executionMode ?? input.execution_mode ?? input.mode,
+    subagentLauncher: input.subagentLauncher ?? input.subagent_launcher,
+    launchPrompt: input.launchPrompt ?? input.launch_prompt,
+  });
 }
 
 function normalizeParallelism(value) {
@@ -669,6 +880,47 @@ function normalizeReasoningEffort(value) {
     throw new Error(`unsupported reasoning effort: ${effort}`);
   }
   return effort;
+}
+
+function normalizeExecutionMode(value) {
+  const mode = normalizeOptionalString(value) || DEFAULT_EXECUTION_MODE;
+  if (!EXECUTION_MODES.includes(mode)) {
+    throw new Error(`unsupported execution mode: ${mode}`);
+  }
+  return mode;
+}
+
+function normalizeSubagentLauncher(value, executionMode) {
+  const launcher = normalizeOptionalString(value);
+  if (executionMode === "worktree") {
+    const selected = launcher || DEFAULT_WORKTREE_SUBAGENT_LAUNCHER;
+    if (selected !== DEFAULT_WORKTREE_SUBAGENT_LAUNCHER) {
+      throw new Error("worktree execution mode only supports codex-cli subagent launcher");
+    }
+    return selected;
+  }
+  if (!launcher) {
+    throw new Error("current-branch execution mode requires --subagent-launcher codex-cli or codex-app");
+  }
+  if (!CURRENT_BRANCH_SUBAGENT_LAUNCHERS.includes(launcher)) {
+    throw new Error(`unsupported current-branch subagent launcher: ${launcher}`);
+  }
+  return launcher;
+}
+
+function getSessionExecutionMode(session) {
+  return EXECUTION_MODES.includes(session?.executionMode)
+    ? session.executionMode
+    : DEFAULT_EXECUTION_MODE;
+}
+
+function getSessionSubagentLauncher(session) {
+  if (session?.subagentLauncher) {
+    return session.subagentLauncher;
+  }
+  return getSessionExecutionMode(session) === "worktree"
+    ? DEFAULT_WORKTREE_SUBAGENT_LAUNCHER
+    : "";
 }
 
 function normalizeFastMetadata(fast) {
@@ -721,6 +973,8 @@ function buildSubagentPrompt(task, taskMarkdown, session, sessionId, agent) {
     `Session ID: ${sessionId}`,
     `Execution model: ${session.model || DEFAULT_SUBAGENT_MODEL}`,
     `Execution reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
+    `Execution mode: ${getSessionExecutionMode(session)}`,
+    `Subagent launcher: ${getSessionSubagentLauncher(session)}`,
     `Assigned subtask: ${agent.title}`,
     `Branch: ${agent.branchName}`,
     `Worktree: ${agent.worktreePath}`,
@@ -736,6 +990,44 @@ function buildSubagentPrompt(task, taskMarkdown, session, sessionId, agent) {
     "Before you finish:",
     "- Leave the branch ready for the orchestrator to integrate.",
     "- Include concise notes about tests and remaining risks in the final response.",
+    "",
+    ...(session.launchPrompt
+      ? [
+        "Session launch context:",
+        session.launchPrompt,
+        "",
+      ]
+      : []),
+    "Full task markdown:",
+    taskMarkdown,
+  ].join("\n");
+}
+
+function buildAnalysisSubagentPrompt(task, taskMarkdown, session, sessionId, agent) {
+  return [
+    "You are one AgentDesk analysis subagent running in current-branch mode.",
+    "",
+    `Task ID: ${task.taskId}`,
+    `Session ID: ${sessionId}`,
+    `Execution model: ${session.model || DEFAULT_SUBAGENT_MODEL}`,
+    `Execution reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
+    `Execution mode: ${getSessionExecutionMode(session)}`,
+    `Subagent launcher: ${getSessionSubagentLauncher(session)}`,
+    `Assigned subtask: ${agent.title}`,
+    `Current branch: ${agent.branchName}`,
+    `Project root: ${agent.worktreePath}`,
+    "",
+    "Rules:",
+    "- Analyze only. Do not create, edit, delete, move, stage, commit, rebase, merge, or format files.",
+    "- Inspect the codebase and explain exactly how the main agent should implement this subtask on the current branch.",
+    "- Keep the plan scoped to the assigned subtask.",
+    "- Prefer concrete file paths, functions, tests, and risk notes over broad advice.",
+    "- If the subtask needs user confirmation, state the decision clearly.",
+    "",
+    "Before you finish:",
+    "- Put the implementation plan in the notes array.",
+    "- Use tests_run for analysis commands or checks you actually ran.",
+    "- Leave changed files empty by not changing files.",
     "",
     ...(session.launchPrompt
       ? [
@@ -817,6 +1109,8 @@ export function renderSessionDocument(session, task) {
     `- Model: ${session.model || DEFAULT_SUBAGENT_MODEL}`,
     `- Reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
     `- Service tier: ${session.serviceTier || DEFAULT_SERVICE_TIER}`,
+    `- Execution mode: ${getSessionExecutionMode(session)}`,
+    `- Subagent launcher: ${getSessionSubagentLauncher(session) || "-"}`,
     `- Parallelism: ${session.parallelism}`,
     `- Batch size: ${session.batchSize}`,
     `- Started: ${session.startedAt || "-"}`,
@@ -967,7 +1261,7 @@ export function buildCodexExecArgs(options = {}) {
     "-c",
     `service_tier="${options.serviceTier || DEFAULT_SERVICE_TIER}"`,
     "-s",
-    "danger-full-access",
+    options.sandboxMode || "danger-full-access",
     "-a",
     "never",
     "-C",
@@ -1204,6 +1498,14 @@ async function gitRevListCount(cwd, range) {
   return Number(result.stdout.trim() || "0");
 }
 
+async function gitCurrentBranch(cwd) {
+  const result = await spawnCapture("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd });
+  if (result.exitCode !== 0) {
+    throw new Error(describeCommandFailure(result, "git current branch lookup failed"));
+  }
+  return result.stdout.trim() || "current-branch";
+}
+
 async function gitIsAncestor(cwd, ancestor, descendant) {
   const result = await spawnCapture("git", ["merge-base", "--is-ancestor", ancestor, descendant], { cwd });
   return result.exitCode === 0;
@@ -1386,6 +1688,12 @@ function normalizeOptionalString(value) {
   return value === undefined || value === null ? "" : String(value).trim();
 }
 
+function definedObject(object) {
+  return Object.fromEntries(
+    Object.entries(object || {}).filter(([, value]) => value !== undefined && value !== null && value !== ""),
+  );
+}
+
 function normalizeBoolean(value, fieldName) {
   if (value === undefined || value === null || value === "") {
     return false;
@@ -1404,6 +1712,62 @@ function normalizeBoolean(value, fieldName) {
     return false;
   }
   throw new Error(`${fieldName} must be a boolean`);
+}
+
+function stripTomlComment(line) {
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && inDoubleQuote) {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+      continue;
+    }
+    if (character === "\"" && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+      continue;
+    }
+    if (character === "#" && !inSingleQuote && !inDoubleQuote) {
+      return line.slice(0, index);
+    }
+  }
+  return line;
+}
+
+function parseTomlValue(raw, lineNumber) {
+  if (/^".*"$/.test(raw)) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(`invalid TOML string on line ${lineNumber}`);
+    }
+  }
+  if (/^'.*'$/.test(raw)) {
+    return raw.slice(1, -1);
+  }
+  if (/^(true|false)$/i.test(raw)) {
+    return raw.toLowerCase() === "true";
+  }
+  if (/^[+-]?\d+$/.test(raw)) {
+    return Number.parseInt(raw, 10);
+  }
+  if (/^[+-]?\d+\.\d+$/.test(raw)) {
+    return Number.parseFloat(raw);
+  }
+  throw new Error(`unsupported TOML value on line ${lineNumber}`);
+}
+
+function tomlString(value) {
+  return JSON.stringify(String(value ?? ""));
 }
 
 function firstNonEmptyLine(text) {
