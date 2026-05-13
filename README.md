@@ -17,13 +17,13 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:4317` if your browser did not open automatically,
-then choose the Ralph project you want to inspect.
+Open `http://127.0.0.1:4317`, then choose the Ralph project you want to
+inspect.
 
 You can also use the wrapper script:
 
 ```sh
-./scripts/ralphctl.sh serve --open
+./scripts/ralphctl.sh gui
 ./scripts/ralphctl.sh runs list --project /absolute/path/to/your/ralph-project
 ./scripts/ralphctl.sh planner list --project /absolute/path/to/your/ralph-project
 ```
@@ -32,6 +32,8 @@ You can also use the wrapper script:
 
 ```text
 ralphctl dev
+ralphctl gui
+ralphctl gui open
 ralphctl serve
 ralphctl runs list
 ralphctl runs show <runId>
@@ -45,7 +47,6 @@ ralphctl planner start --input tasks/prd-example.md
 ralphctl planner list
 ralphctl planner show <planJobId>
 ralphctl planner logs <planJobId>
-ralphctl gui open
 ```
 
 Every read command accepts `--json`. The web server can start without a
