@@ -245,6 +245,9 @@ export async function runTaskGenerationJob(context, taskId) {
   const result = await runCodexPrompt({
     context,
     cwd: context.projectRoot,
+    model: DEFAULT_SUBAGENT_MODEL,
+    reasoning: DEFAULT_SUBAGENT_REASONING,
+    serviceTier: DEFAULT_SERVICE_TIER,
     prompt,
     outputFile: meta.paths.taskMd,
     stdoutLog: meta.paths.stdoutLog,
@@ -327,7 +330,7 @@ export async function createSession(context, taskId, request = {}) {
   await assertGitRepository(context.projectRoot);
   await assertMasterBranch(context.projectRoot);
 
-  const parallelism = normalizeParallelism(request.parallelism);
+  const sessionRequest = normalizeSessionRequest(request);
   const sessionId = await uniqueSessionId(context, task);
   const sessionDir = sessionDirPath(context, sessionId);
   const now = new Date().toISOString();
@@ -337,8 +340,12 @@ export async function createSession(context, taskId, request = {}) {
     taskId: task.taskId,
     title: task.title,
     status: "queued",
-    parallelism,
+    parallelism: sessionRequest.parallelism,
     batchSize: DEFAULT_LAUNCH_BATCH_SIZE,
+    model: sessionRequest.model,
+    reasoning: sessionRequest.reasoning,
+    serviceTier: sessionRequest.serviceTier,
+    launchPrompt: sessionRequest.launchPrompt,
     createdAt: now,
     updatedAt: now,
     startedAt: null,
@@ -461,7 +468,7 @@ export async function runSessionJob(context, sessionId) {
       if (!nextAgent) {
         break;
       }
-      const promise = runSingleAgent(context, task, sessionId, nextAgent)
+      const promise = runSingleAgent(context, task, session, sessionId, nextAgent)
         .then((result) => ({ agentId: nextAgent.id, result }))
         .catch((error) => ({ agentId: nextAgent.id, error }));
       running.set(nextAgent.id, promise);
@@ -496,7 +503,7 @@ export async function runSessionJob(context, sessionId) {
   return getSession(context, sessionId);
 }
 
-async function runSingleAgent(context, task, sessionId, agent) {
+async function runSingleAgent(context, task, session, sessionId, agent) {
   let created = null;
   try {
     const taskMarkdown = await readTextSafe(task.paths.taskMd);
@@ -505,7 +512,7 @@ async function runSingleAgent(context, task, sessionId, agent) {
     await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
 
     created = await prepareAgentWorktree(context, agent);
-    const prompt = buildSubagentPrompt(task, taskMarkdown, sessionId, {
+    const prompt = buildSubagentPrompt(task, taskMarkdown, session, sessionId, {
       ...agent,
       worktreePath: created.worktreePath,
       branchName: created.branchName,
@@ -526,6 +533,9 @@ async function runSingleAgent(context, task, sessionId, agent) {
     const result = await runCodexPrompt({
       context,
       cwd: created.worktreePath,
+      model: session.model || DEFAULT_SUBAGENT_MODEL,
+      reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
+      serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
       prompt,
       outputFile: agent.paths.reportJson,
       stdoutLog: agent.paths.stdoutLog,
@@ -621,6 +631,16 @@ function normalizeTaskRequest(request = {}) {
   return { brief, title };
 }
 
+function normalizeSessionRequest(request = {}) {
+  return {
+    parallelism: normalizeParallelism(request.parallelism),
+    model: normalizeOptionalString(request.model) || DEFAULT_SUBAGENT_MODEL,
+    reasoning: normalizeOptionalString(request.reasoning) || DEFAULT_SUBAGENT_REASONING,
+    serviceTier: DEFAULT_SERVICE_TIER,
+    launchPrompt: normalizeOptionalString(request.launchPrompt),
+  };
+}
+
 function normalizeParallelism(value) {
   const number = Number(value || DEFAULT_PARALLELISM);
   if (!Number.isFinite(number) || number <= 0) {
@@ -671,12 +691,14 @@ function buildTaskGenerationPrompt(task) {
   ].join("\n");
 }
 
-function buildSubagentPrompt(task, taskMarkdown, sessionId, agent) {
+function buildSubagentPrompt(task, taskMarkdown, session, sessionId, agent) {
   return [
     "You are one AgentDesk execution subagent working in your own git worktree.",
     "",
     `Task ID: ${task.taskId}`,
     `Session ID: ${sessionId}`,
+    `Execution model: ${session.model || DEFAULT_SUBAGENT_MODEL}`,
+    `Execution reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
     `Assigned subtask: ${agent.title}`,
     `Branch: ${agent.branchName}`,
     `Worktree: ${agent.worktreePath}`,
@@ -693,6 +715,13 @@ function buildSubagentPrompt(task, taskMarkdown, sessionId, agent) {
     "- Leave the branch ready for the orchestrator to integrate.",
     "- Include concise notes about tests and remaining risks in the final response.",
     "",
+    ...(session.launchPrompt
+      ? [
+        "Session launch context:",
+        session.launchPrompt,
+        "",
+      ]
+      : []),
     "Full task markdown:",
     taskMarkdown,
   ].join("\n");
@@ -763,11 +792,22 @@ export function renderSessionDocument(session, task) {
     "",
     `- Task: ${task?.title || session.title || session.taskId}`,
     `- Status: ${session.status}`,
+    `- Model: ${session.model || DEFAULT_SUBAGENT_MODEL}`,
+    `- Reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
+    `- Service tier: ${session.serviceTier || DEFAULT_SERVICE_TIER}`,
     `- Parallelism: ${session.parallelism}`,
     `- Batch size: ${session.batchSize}`,
     `- Started: ${session.startedAt || "-"}`,
     `- Completed: ${session.completedAt || "-"}`,
     "",
+    ...(session.launchPrompt
+      ? [
+        "## Launch Context",
+        "",
+        session.launchPrompt,
+        "",
+      ]
+      : []),
     "## Agents",
     "",
   ];
@@ -899,11 +939,11 @@ async function runCodexPrompt(options) {
   const args = [
     "exec",
     "-m",
-    DEFAULT_SUBAGENT_MODEL,
+    options.model || DEFAULT_SUBAGENT_MODEL,
     "-c",
-    `model_reasoning_effort="${DEFAULT_SUBAGENT_REASONING}"`,
+    `model_reasoning_effort="${options.reasoning || DEFAULT_SUBAGENT_REASONING}"`,
     "-c",
-    `service_tier="${DEFAULT_SERVICE_TIER}"`,
+    `service_tier="${options.serviceTier || DEFAULT_SERVICE_TIER}"`,
     "-s",
     "danger-full-access",
     "-a",

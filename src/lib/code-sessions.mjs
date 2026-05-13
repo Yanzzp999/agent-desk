@@ -143,6 +143,9 @@ async function parseCodeSessionFile(file) {
     userMessageCount: 0,
     assistantMessageCount: 0,
     toolCallCount: 0,
+    contextWindow: 0,
+    tokenUsage: emptyTokenUsage(),
+    rateLimits: emptyRateLimits(),
     prompts: [],
   };
 
@@ -192,6 +195,23 @@ function readCodeSessionEvent(session, event) {
     session.cwd = payload.cwd || session.cwd;
     session.createdAt = payload.timestamp || event.timestamp || session.createdAt;
     session.originator = payload.originator || session.originator;
+    return;
+  }
+
+  if (event.type === "event_msg" && payload.type === "task_started") {
+    session.contextWindow = clampNumber(payload.model_context_window, session.contextWindow || 0, 0, Number.MAX_SAFE_INTEGER);
+    return;
+  }
+
+  if (event.type === "event_msg" && payload.type === "token_count") {
+    const info = payload.info || {};
+    session.contextWindow = clampNumber(info.model_context_window, session.contextWindow || 0, 0, Number.MAX_SAFE_INTEGER);
+    session.tokenUsage = {
+      total: normalizeTokenCounter(info.total_token_usage),
+      last: normalizeTokenCounter(info.last_token_usage),
+      updatedAt: event.timestamp || session.updatedAt,
+    };
+    session.rateLimits = normalizeRateLimits(payload.rate_limits);
     return;
   }
 
@@ -329,6 +349,44 @@ function clampNumber(value, fallback, min, max) {
     return fallback;
   }
   return Math.min(max, Math.max(min, Math.trunc(number)));
+}
+
+function emptyTokenUsage() {
+  return {
+    total: normalizeTokenCounter(),
+    last: normalizeTokenCounter(),
+    updatedAt: "",
+  };
+}
+
+function normalizeTokenCounter(value = {}) {
+  return {
+    inputTokens: clampNumber(value.input_tokens, 0, 0, Number.MAX_SAFE_INTEGER),
+    cachedInputTokens: clampNumber(value.cached_input_tokens, 0, 0, Number.MAX_SAFE_INTEGER),
+    outputTokens: clampNumber(value.output_tokens, 0, 0, Number.MAX_SAFE_INTEGER),
+    reasoningOutputTokens: clampNumber(value.reasoning_output_tokens, 0, 0, Number.MAX_SAFE_INTEGER),
+    totalTokens: clampNumber(value.total_tokens, 0, 0, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+function emptyRateLimits() {
+  return {
+    planType: "",
+    primaryUsedPercent: 0,
+    primaryWindowMinutes: 0,
+    secondaryUsedPercent: 0,
+    secondaryWindowMinutes: 0,
+  };
+}
+
+function normalizeRateLimits(value = {}) {
+  return {
+    planType: typeof value.plan_type === "string" ? value.plan_type : "",
+    primaryUsedPercent: clampNumber(value.primary?.used_percent, 0, 0, 100),
+    primaryWindowMinutes: clampNumber(value.primary?.window_minutes, 0, 0, Number.MAX_SAFE_INTEGER),
+    secondaryUsedPercent: clampNumber(value.secondary?.used_percent, 0, 0, 100),
+    secondaryWindowMinutes: clampNumber(value.secondary?.window_minutes, 0, 0, Number.MAX_SAFE_INTEGER),
+  };
 }
 
 function excerpt(value, max) {

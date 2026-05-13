@@ -15,6 +15,12 @@ const state = {
   codeSessionDetail: null,
   selectedAgentId: "",
   agentLogs: null,
+  sessionComposer: {
+    model: "",
+    reasoning: "",
+    parallelism: 6,
+    launchPrompt: "",
+  },
   message: "",
 };
 
@@ -101,13 +107,49 @@ document.body.addEventListener("submit", async (event) => {
   if (event.target.id === "session-form") {
     event.preventDefault();
     const form = new FormData(event.target);
-    await startSession(String(form.get("taskId") || ""), Number(form.get("parallelism") || 6));
+    await startSession(String(form.get("taskId") || ""), {
+      parallelism: Number(form.get("parallelism") || 6),
+      model: String(form.get("model") || ""),
+      reasoning: String(form.get("reasoning") || ""),
+      launchPrompt: String(form.get("launchPrompt") || ""),
+    });
+  }
+});
+
+document.body.addEventListener("input", (event) => {
+  if (event.target instanceof HTMLInputElement && event.target.name === "parallelism") {
+    syncSessionComposer();
+    state.sessionComposer.parallelism = normalizeComposerParallelism(event.target.value);
+    return;
+  }
+
+  if (event.target instanceof HTMLTextAreaElement && event.target.name === "launchPrompt") {
+    syncSessionComposer();
+    state.sessionComposer.launchPrompt = event.target.value;
   }
 });
 
 document.body.addEventListener("change", (event) => {
   if (event.target instanceof HTMLSelectElement && event.target.name === "taskId") {
     state.selectedTaskId = String(event.target.value || "");
+    render();
+    return;
+  }
+
+  if (event.target instanceof HTMLSelectElement && event.target.name === "model") {
+    syncSessionComposer();
+    state.sessionComposer.model = String(event.target.value || "");
+    state.sessionComposer.reasoning = defaultReasoningForModel(
+      state.sessionComposer.model,
+      state.sessionComposer.reasoning,
+    );
+    render();
+    return;
+  }
+
+  if (event.target instanceof HTMLSelectElement && event.target.name === "reasoning") {
+    syncSessionComposer();
+    state.sessionComposer.reasoning = String(event.target.value || "");
     render();
   }
 });
@@ -173,6 +215,12 @@ function clearLoadedProjectState() {
   state.codeSessionDetail = null;
   state.selectedAgentId = "";
   state.agentLogs = null;
+  state.sessionComposer = {
+    model: "",
+    reasoning: "",
+    parallelism: 6,
+    launchPrompt: "",
+  };
 }
 
 async function chooseProjectFolder() {
@@ -260,7 +308,7 @@ async function createTask(payload) {
   }
 }
 
-async function startSession(taskId, parallelism) {
+async function startSession(taskId, request = {}) {
   if (!taskId) {
     state.message = "Choose a task before starting a session.";
     render();
@@ -270,9 +318,11 @@ async function startSession(taskId, parallelism) {
   try {
     const session = await api(`/api/tasks/${encodeURIComponent(taskId)}/sessions`, {
       method: "POST",
-      body: { parallelism },
+      body: request,
     });
     state.message = `Started session ${session.sessionId}`;
+    syncSessionComposer();
+    state.sessionComposer.launchPrompt = "";
     await loadSessions();
     await selectTask(taskId, { quiet: true });
     await selectSession(session.sessionId, { quiet: true });
@@ -735,10 +785,14 @@ function renderTaskDetail(task) {
 }
 
 function renderSessions() {
+  syncSessionComposer();
   const project = currentProject();
   const selectedTask = state.tasks.find((task) => task.taskId === state.selectedTaskId) || state.tasks[0] || null;
   const canLaunchSelectedTask = selectedTask ? isTaskStartable(selectedTask) : false;
   const codeSessions = projectCodeSessions();
+  const liveCodeSession = currentProjectCodeSession();
+  const composerModel = findRuntimeModel(state.sessionComposer.model);
+  const reasoningChoices = reasoningChoicesForModel(state.sessionComposer.model);
   const readyTasks = countStatuses(state.tasks, ["ready", "running", "succeeded", "failed"]);
   const activeSessions = countStatuses(state.sessions, ["queued", "running"]);
   const selectedTaskTitle = selectedTask?.title || selectedTask?.taskId || "No task selected";
@@ -748,58 +802,28 @@ function renderSessions() {
   const launchHint = selectedTask
     ? `${selectedTask.title || selectedTask.taskId}${canLaunchSelectedTask ? " is ready to launch." : " is not ready yet."}`
     : "Generate a task first to enable session launch.";
+  const tokenUsage = liveCodeSession?.tokenUsage?.total || null;
+  const tokenUsagePercent = contextWindowUsagePercent(liveCodeSession);
 
   return `
-    <section class="session-dashboard">
-      <div class="surface session-command">
-        <div class="session-command-copy">
-          <p class="eyebrow">Session command center</p>
-          <h2>${escapeHtml(project?.name || "Project workspace")}</h2>
-          <p class="section-copy">Launch parallel work, inspect subagent outcomes, and keep Codex execution history close to the task source of truth.</p>
-          <div class="session-command-meta">
-            <span class="meta-kv">
-              <span>Project root</span>
-              <strong class="mono">${escapeHtml(state.health?.projectRoot || "-")}</strong>
-            </span>
-            <span class="meta-kv">
-              <span>Runtime defaults</span>
-              <strong>gpt-5.5 · xhigh · fast · batch 6</strong>
-            </span>
+    <section class="codex-session-workbench">
+      <div class="surface codex-composer-shell">
+        <div class="composer-shell-header">
+          <div>
+            <p class="eyebrow">Launch composer</p>
+            <h2>${escapeHtml(project?.name || "Project workspace")}</h2>
+            <p class="section-copy">Start from one reusable task, add run-specific context, then launch with the Codex model and reasoning profile you want.</p>
+          </div>
+          <div class="composer-status-row">
+            ${composerChip("Tasks", String(state.health?.counts?.tasks || 0))}
+            ${composerChip("Ready", String(readyTasks))}
+            ${composerChip("Runs", String(state.health?.counts?.sessions || 0))}
+            ${composerChip("Active", String(activeSessions), activeSessions ? "active" : "")}
           </div>
         </div>
-        <div class="metric-grid session-command-metrics">
-          ${metricTile("Tasks", String(state.health?.counts?.tasks || 0), selectedTask ? `Selected: ${selectedTaskTitle}` : "No generated task yet.", "accent")}
-          ${metricTile("Ready to launch", String(readyTasks), readyTasks ? "Planning docs that can start a session immediately." : "Nothing launch-ready yet.", "positive")}
-          ${metricTile("Sessions", String(state.health?.counts?.sessions || 0), state.sessions[0] ? state.sessions[0].taskTitle || state.sessions[0].sessionId : "No execution history yet.", "active")}
-          ${metricTile("Live runs", String(activeSessions), activeSessions ? "Queued or running sessions need attention here." : "No session is currently running.", "warning")}
-        </div>
-      </div>
-      <section class="workspace-layout compact-workspace session-workspace">
-        <div class="column-stack session-left-rail">
-          <div class="surface compact-surface project-summary project-summary-hero">
-            <div class="section-head">
-              <div>
-                <p class="eyebrow">Current workspace</p>
-                <h2>${escapeHtml(project?.name || "Project")}</h2>
-                <p class="path-copy mono">${escapeHtml(state.health?.projectRoot || "-")}</p>
-              </div>
-            </div>
-            <div class="pill-row">
-              ${renderRuntimeCapability("Model", "enabled", "gpt-5.5")}
-              ${renderRuntimeCapability("Reasoning", "enabled", "xhigh")}
-              ${renderRuntimeCapability("Tier", "enabled", "fast")}
-              ${renderRuntimeCapability("Batch", "enabled", "6")}
-            </div>
-          </div>
-          <div class="surface compact-surface launch-panel">
-            <div class="section-head">
-              <div>
-                <p class="eyebrow">Launch lane</p>
-                <h2>Start a new session</h2>
-                <p class="section-copy">Pick a reusable task and choose how many subagents you want active in parallel.</p>
-              </div>
-            </div>
-            <div class="task-focus ${canLaunchSelectedTask ? "launchable" : "waiting"}">
+        <div class="composer-shell-grid">
+          <form id="session-form" class="codex-composer">
+            <div class="task-focus composer-task-focus ${canLaunchSelectedTask ? "launchable" : "waiting"}">
               <div class="task-focus-head">
                 <span>Selected task</span>
                 ${selectedTask ? badge(selectedTask.status) : `<span class="badge">No Task</span>`}
@@ -807,7 +831,15 @@ function renderSessions() {
               <strong>${escapeHtml(selectedTaskTitle)}</strong>
               <p>${escapeHtml(selectedTaskSummary)}</p>
             </div>
-            <form id="session-form" class="stack-form compact-form">
+            <label class="composer-textarea-label">
+              Launch context
+              <textarea
+                class="composer-input"
+                name="launchPrompt"
+                placeholder="Add integration notes, constraints, acceptance nuances, or repo-specific guidance for this run."
+              >${escapeHtml(state.sessionComposer.launchPrompt || "")}</textarea>
+            </label>
+            <div class="composer-control-grid">
               <label>
                 Task
                 <select name="taskId">
@@ -821,14 +853,107 @@ function renderSessions() {
                 </select>
               </label>
               <label>
-                Parallel agents
-                <input name="parallelism" type="number" min="1" max="24" value="6">
+                Model
+                <select name="model">
+                  ${runtimeModelChoices().map((model) => `
+                    <option value="${escapeAttr(model.value)}"${model.value === state.sessionComposer.model ? " selected" : ""}>
+                      ${escapeHtml(model.label || model.value)}
+                    </option>
+                  `).join("")}
+                </select>
               </label>
-              <button class="button primary" type="submit"${canLaunchSelectedTask ? "" : " disabled"}>Launch session</button>
-            </form>
-            <p class="field-hint">${escapeHtml(launchHint)}</p>
+              <label>
+                Thinking depth
+                <select name="reasoning">
+                  ${reasoningChoices.map((entry) => `
+                    <option value="${escapeAttr(entry.value || entry.effort || "")}"${(entry.value || entry.effort) === state.sessionComposer.reasoning ? " selected" : ""}>
+                      ${escapeHtml(label(entry.label || entry.value || entry.effort || ""))}
+                    </option>
+                  `).join("")}
+                </select>
+              </label>
+              <label>
+                Parallel agents
+                <input name="parallelism" type="number" min="1" max="24" value="${escapeAttr(String(state.sessionComposer.parallelism || 6))}">
+              </label>
+            </div>
+            <div class="composer-footer">
+              <div class="composer-footer-copy">
+                <p class="field-hint">${escapeHtml(launchHint)}</p>
+                <div class="pill-row">
+                  ${renderRuntimeCapability("Model", "enabled", composerModel?.label || state.sessionComposer.model || "gpt-5.5")}
+                  ${renderRuntimeCapability("Reasoning", "enabled", state.sessionComposer.reasoning || "xhigh")}
+                  ${renderRuntimeCapability("Tier", "enabled", "fast")}
+                  ${renderRuntimeCapability("Batch", "enabled", "6")}
+                </div>
+              </div>
+              <button class="button primary composer-submit" type="submit"${canLaunchSelectedTask ? "" : " disabled"}>Launch session</button>
+            </div>
+          </form>
+          <div class="composer-sidepanels">
+            <div class="surface composer-sidecard">
+              <div class="section-head">
+                <div>
+                  <h3>Context stack</h3>
+                  <p class="section-copy">The launch will combine your project root, selected task markdown, and any extra composer notes.</p>
+                </div>
+              </div>
+              <div class="context-stack">
+                ${contextResource("Project root", state.health?.projectRoot || "-", { mono: true })}
+                ${contextResource("task.md", selectedTask?.paths?.taskMd || "-", { mono: true })}
+                ${contextResource("Task brief", selectedTaskSummary)}
+                ${liveCodeSession
+                  ? contextResource("Latest Codex prompt", liveCodeSession.prompts?.[0] || liveCodeSession.title || "No prompt preview")
+                  : contextResource("Latest Codex prompt", "No local Codex session matched this project root yet.")}
+              </div>
+            </div>
+            <div class="surface composer-sidecard token-usage-card">
+              <div class="section-head">
+                <div>
+                  <h3>Current session usage</h3>
+                  <p class="section-copy">Live token telemetry comes from the latest local Codex conversation in this project.</p>
+                </div>
+              </div>
+              ${liveCodeSession
+                ? `
+                  <div class="token-hero">
+                    <strong>${escapeHtml(formatTokenCount(tokenUsage?.totalTokens || 0))}</strong>
+                    <span>Total tokens</span>
+                  </div>
+                  <div class="token-meter">
+                    <div class="token-meter-fill" style="width: ${escapeAttr(String(tokenUsagePercent))}%"></div>
+                  </div>
+                  <div class="token-meta-row">
+                    <span>${escapeHtml(`${tokenUsagePercent}% of ${formatTokenCount(liveCodeSession.contextWindow || 0)} context`)}</span>
+                    <span>${escapeHtml(formatRelativeDate(liveCodeSession.tokenUsage?.updatedAt || liveCodeSession.updatedAt))}</span>
+                  </div>
+                  <div class="token-grid">
+                    ${tokenStat("Input", tokenUsage?.inputTokens || 0)}
+                    ${tokenStat("Cached", tokenUsage?.cachedInputTokens || 0)}
+                    ${tokenStat("Output", tokenUsage?.outputTokens || 0)}
+                    ${tokenStat("Reasoning", tokenUsage?.reasoningOutputTokens || 0)}
+                  </div>
+                `
+                : emptyState("No live telemetry", "Start or reopen a local Codex session in this project to show context window and token usage here.")}
+            </div>
           </div>
-          <div class="surface compact-surface">
+        </div>
+      </div>
+      <div class="session-workbench-grid">
+        <div class="column-stack">
+          <div class="surface">
+            <div class="section-head">
+              <div>
+                <h2>Recent sessions</h2>
+                <p class="section-copy">Reopen recent execution runs without relying only on the sidebar.</p>
+              </div>
+            </div>
+            ${renderSessionList(state.sessions, {
+              emptyTitle: "No sessions",
+              emptyBody: "Launch your first session from the composer above.",
+            })}
+          </div>
+          <div class="surface">
             <div class="section-head">
               <div>
                 <h2>Code sessions</h2>
@@ -845,8 +970,8 @@ function renderSessions() {
             })}
           </div>
         </div>
-        ${state.sessionDetail ? renderSessionDetail(state.sessionDetail) : renderEmptyDetail("No session selected", "Choose a session from the left rail.")}
-      </section>
+        ${state.sessionDetail ? renderSessionDetail(state.sessionDetail) : renderEmptyDetail("No session selected", "Choose a session from the sidebar or recent sessions list.")}
+      </div>
     </section>
   `;
 }
@@ -885,11 +1010,26 @@ function renderSessionDetail(session) {
         ${summaryStat("Attention", String(failedAgents), failedAgents ? "Failed agents need review" : (inFlightAgents ? `${inFlightAgents} still in flight` : "No failures recorded"), failedAgents ? "danger" : "")}
       </div>
       <div class="detail-card-grid">
+        ${detailCard("Model", session.model || "gpt-5.5")}
+        ${detailCard("Reasoning", session.reasoning || "xhigh")}
         ${detailCard("Started", formatDate(session.startedAt))}
         ${detailCard("Completed", formatDate(session.completedAt))}
         ${detailCard("Task", session.task?.taskId || session.taskId)}
         ${detailCard("Session doc", session.paths?.docMd || "-", { mono: true, wide: true })}
       </div>
+      ${session.launchPrompt
+        ? `
+          <section class="detail-section">
+            <div class="section-head">
+              <div>
+                <h3>Launch context</h3>
+                <p class="section-copy">Extra run-specific guidance that was attached when this session was started.</p>
+              </div>
+            </div>
+            <div class="context-note">${escapeHtml(session.launchPrompt)}</div>
+          </section>
+        `
+        : ""}
       <section class="detail-section">
         <div class="section-head">
           <div>
@@ -983,6 +1123,9 @@ function renderCodeSession() {
   if (!session) {
     return renderEmptyDetail("No Code session selected", "Choose a Code session from the current project rail.");
   }
+  const totalTokens = session.tokenUsage?.total || {};
+  const lastTokens = session.tokenUsage?.last || {};
+  const usagePercent = contextWindowUsagePercent(session);
 
   return `
     <section class="workspace-layout compact-workspace">
@@ -998,7 +1141,9 @@ function renderCodeSession() {
             ${infoTile("Source", session.source || "-")}
             ${infoTile("Model", session.model || "-")}
             ${infoTile("Reasoning", session.effort || "-")}
+            ${infoTile("Context window", formatTokenCount(session.contextWindow || 0))}
             ${infoTile("Updated", formatDate(session.updatedAt))}
+            ${infoTile("Total tokens", formatTokenCount(totalTokens.totalTokens || 0))}
           </div>
         </div>
         <div class="surface compact-surface">
@@ -1012,6 +1157,8 @@ function renderCodeSession() {
             ${infoTile("Conversation ID", session.conversationId || session.id)}
             ${infoTile("Messages", String(session.messageCount || 0))}
             ${infoTile("Tool calls", String(session.toolCallCount || 0))}
+            ${infoTile("Last turn tokens", formatTokenCount(lastTokens.totalTokens || 0))}
+            ${infoTile("Context used", `${usagePercent}%`)}
           </div>
         </div>
       </div>
@@ -1254,6 +1401,7 @@ function renderCodeSessionList(sessions, options = {}) {
           </div>
           <div class="meta-row">
             <span>${escapeHtml(session.model || "model unknown")}</span>
+            <span>${escapeHtml(`${formatTokenCount(session.tokenUsage?.total?.totalTokens || 0)} tokens`)}</span>
             <span>${escapeHtml(`${session.messageCount || 0} messages`)}</span>
             <span>${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
           </div>
@@ -1368,6 +1516,33 @@ function detailCard(labelText, value, options = {}) {
   `;
 }
 
+function composerChip(labelText, value, tone = "") {
+  return `
+    <span class="composer-chip ${escapeAttr(tone)}">
+      <strong>${escapeHtml(value || "-")}</strong>
+      <span>${escapeHtml(labelText)}</span>
+    </span>
+  `;
+}
+
+function tokenStat(labelText, value) {
+  return `
+    <div class="token-stat">
+      <span>${escapeHtml(labelText)}</span>
+      <strong>${escapeHtml(formatTokenCount(value || 0))}</strong>
+    </div>
+  `;
+}
+
+function contextResource(labelText, value, options = {}) {
+  return `
+    <div class="context-resource ${options.mono ? "mono" : ""}">
+      <span>${escapeHtml(labelText)}</span>
+      <strong>${escapeHtml(value || "-")}</strong>
+    </div>
+  `;
+}
+
 function infoTile(labelText, value) {
   return `
     <div class="info-tile">
@@ -1403,6 +1578,95 @@ function label(value) {
   return String(value || "")
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function runtimeMetadata() {
+  return state.health?.runtime?.metadata || {};
+}
+
+function runtimeModelChoices() {
+  const choices = runtimeMetadata().modelChoices || [];
+  if (choices.length > 0) {
+    return choices;
+  }
+  return [{
+    value: "gpt-5.5",
+    label: "GPT-5.5",
+    defaultReasoning: "xhigh",
+    reasoningEfforts: [{ value: "xhigh", label: "xhigh" }],
+  }];
+}
+
+function findRuntimeModel(modelValue) {
+  return runtimeModelChoices().find((model) => model.value === modelValue) || runtimeModelChoices()[0] || null;
+}
+
+function reasoningChoicesForModel(modelValue) {
+  const runtime = runtimeMetadata();
+  const model = findRuntimeModel(modelValue);
+  const modelChoices = Array.isArray(model?.reasoningEfforts) && model.reasoningEfforts.length
+    ? model.reasoningEfforts
+    : [];
+  if (modelChoices.length > 0) {
+    return modelChoices;
+  }
+  return runtime.reasoningOptions || runtime.reasoningEfforts || [{ value: "xhigh", label: "xhigh" }];
+}
+
+function defaultReasoningForModel(modelValue, currentValue = "") {
+  const choices = reasoningChoicesForModel(modelValue);
+  const currentSupported = choices.some((entry) => (entry.value || entry.effort) === currentValue);
+  if (currentSupported) {
+    return currentValue;
+  }
+  const model = findRuntimeModel(modelValue);
+  return model?.defaultReasoning
+    || choices[0]?.value
+    || choices[0]?.effort
+    || "xhigh";
+}
+
+function syncSessionComposer() {
+  const defaults = runtimeMetadata().defaults || {};
+  const nextModel = state.sessionComposer.model || defaults.model || runtimeModelChoices()[0]?.value || "gpt-5.5";
+  state.sessionComposer.model = findRuntimeModel(nextModel)?.value || "gpt-5.5";
+  state.sessionComposer.reasoning = defaultReasoningForModel(
+    state.sessionComposer.model,
+    state.sessionComposer.reasoning || defaults.reasoning || "",
+  );
+  state.sessionComposer.parallelism = normalizeComposerParallelism(
+    state.sessionComposer.parallelism || defaults.parallelism || 6,
+  );
+  state.sessionComposer.launchPrompt = String(state.sessionComposer.launchPrompt || "");
+}
+
+function normalizeComposerParallelism(value) {
+  const number = Number(value || 6);
+  if (!Number.isFinite(number)) {
+    return 6;
+  }
+  return Math.max(1, Math.min(24, Math.floor(number)));
+}
+
+function currentProjectCodeSession() {
+  return projectCodeSessions()[0] || null;
+}
+
+function contextWindowUsagePercent(session) {
+  const total = Number(session?.tokenUsage?.total?.totalTokens || 0);
+  const windowSize = Number(session?.contextWindow || 0);
+  if (!windowSize || !Number.isFinite(windowSize) || windowSize <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round((total / windowSize) * 100)));
+}
+
+function formatTokenCount(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) {
+    return "-";
+  }
+  return new Intl.NumberFormat().format(number);
 }
 
 function topbarMeta() {

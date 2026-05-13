@@ -36,6 +36,9 @@ test("listCodeSessions matches Codex sessions to a project root", async () => {
   assert.equal(result.exactCount, 1);
   assert.equal(result.items[0].conversationId, "session-a");
   assert.equal(result.items[0].title, "Build sidebar session view");
+  assert.equal(result.items[0].contextWindow, 258400);
+  assert.equal(result.items[0].tokenUsage.total.totalTokens, 222968);
+  assert.equal(result.items[0].tokenUsage.last.totalTokens, 38387);
   assert.equal(result.recentItems.length, 2);
   assert.equal(result.roots[0].exists, true);
 });
@@ -97,11 +100,54 @@ async function writeSession(filePath, session) {
     },
     {
       timestamp: session.timestamp,
+      type: "event_msg",
+      payload: {
+        type: "task_started",
+        model_context_window: 258400,
+      },
+    },
+    {
+      timestamp: session.timestamp,
       type: "turn_context",
       payload: {
         cwd: session.cwd,
         model: "gpt-5.5",
         effort: "xhigh",
+      },
+    },
+    {
+      timestamp: session.timestamp,
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 220000,
+            cached_input_tokens: 180000,
+            output_tokens: 2600,
+            reasoning_output_tokens: 368,
+            total_tokens: 222968,
+          },
+          last_token_usage: {
+            input_tokens: 38200,
+            cached_input_tokens: 36000,
+            output_tokens: 150,
+            reasoning_output_tokens: 37,
+            total_tokens: 38387,
+          },
+          model_context_window: 258400,
+        },
+        rate_limits: {
+          plan_type: "plus",
+          primary: {
+            used_percent: 7,
+            window_minutes: 300,
+          },
+          secondary: {
+            used_percent: 16,
+            window_minutes: 10080,
+          },
+        },
       },
     },
     {
