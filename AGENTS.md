@@ -14,8 +14,9 @@
 - Only commit files related to the completed change, and avoid bundling unrelated local edits into the same commit.
 - If the user explicitly says not to commit, follow the user's instruction instead.
 
-## Compatibility Direction
+## Product Direction
 
-- Keep AgentDesk aligned with Codex CLI-style terminal workflows. User-facing docs and flags should describe planner model, reasoning, and fast-mode choices in Codex CLI terms.
-- Prefer the local GUI and `ralphctl` terminal commands as the primary interface. Skill-root script discovery exists for legacy Ralph compatibility and should not become the center of new workflows.
-- When documenting fast mode, be explicit about whether AgentDesk itself owns the flag or whether the currently installed planner script provides the shortcut.
+- Keep AgentDesk centered on project selection, `task.md` generation, session history, and Codex subagent orchestration.
+- Do not reintroduce `prd.json`, Gemini CLI, or Claude Code compatibility features.
+- Session execution defaults should remain explicit in user-facing docs: `gpt-5.5`, `xhigh`, `fast`, batched launches of 6, and integration into `master`.
+- Prefer the local GUI and `ralphctl` terminal commands as the primary interface.
