@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ralph Control Plane</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="mark">R</div>
+          <div>
+            <strong>Ralph</strong>
+            <span>Control Plane</span>
+          </div>
+        </div>
+        <nav class="nav" aria-label="Primary">
+          <button data-view="overview" class="active">Overview</button>
+          <button data-view="runs">Runs</button>
+          <button data-view="planner">Planner</button>
+          <button data-view="artifacts">Artifacts</button>
+          <button data-view="settings">Settings</button>
+        </nav>
+      </aside>
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="project-root">Loading project</p>
+            <h1 id="page-title">Overview</h1>
+          </div>
+          <div class="top-actions">
+            <span class="connection" id="connection-state">Connecting</span>
+            <button class="button" id="refresh-button" type="button">Refresh</button>
+          </div>
+        </header>
+        <section id="app" class="content" aria-live="polite"></section>
+      </main>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
