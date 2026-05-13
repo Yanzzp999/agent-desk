@@ -493,10 +493,6 @@ pre,
   color: var(--text);
 }
 
-.code-session-node {
-  background: transparent;
-}
-
 .sidebar-footer {
   margin-top: auto;
   padding-top: 4px;
@@ -1718,11 +1714,6 @@ textarea {
   box-shadow: 0 0 0 1px rgba(240, 122, 40, 0.08), 0 12px 28px rgba(0, 0, 0, 0.2);
 }
 
-.code-session-item {
-  border-color: rgba(138, 180, 248, 0.18);
-  background: rgba(138, 180, 248, 0.06);
-}
-
 .list-item-head {
   display: flex;
   justify-content: space-between;
@@ -1751,8 +1742,7 @@ textarea {
   margin-bottom: 0;
 }
 
-.project-item .path-copy,
-.code-session-item .path-copy {
+.project-item .path-copy {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

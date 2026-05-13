@@ -30,8 +30,8 @@ const I18N = Object.freeze({
     "action.startSession": "Start session",
     "action.generateTask": "Generate task.md",
     "action.addContext": "Add context",
-    "action.reviewLatestRun": "Review the latest AgentDesk run",
-    "action.openMatchingCodex": "Open the matching Codex conversation",
+    "action.reviewLatestRun": "Review latest run",
+    "action.openMatchingCodex": "Open latest local session",
     "action.moveUp": "Move up",
     "action.moveDown": "Move down",
     "message.nativeFolder": "Native folder selection is available in the AgentDesk desktop app.",
@@ -42,20 +42,20 @@ const I18N = Object.freeze({
     "message.startedSession": "Started session {id}",
     "empty.sidebarProjects": "Open a project once and its sessions will stay here.",
     "empty.noDeskState": "No AgentDesk state yet",
-    "empty.noDeskSessions": "No AgentDesk sessions",
-    "empty.noCodeSessions": "No Code sessions",
+    "empty.noDeskSessions": "No sessions",
+    "empty.noCodeSessions": "No sessions",
     "empty.noMatchingCode": "No matching local sessions.",
     "empty.noSessions": "No sessions",
     "empty.noTasks": "No tasks",
     "empty.noTaskSelected": "No task selected",
     "empty.noSessionSelected": "No session selected",
-    "empty.noCodeSessionSelected": "No Code session selected",
+    "empty.noCodeSessionSelected": "No session selected",
     "empty.noTelemetry": "No live telemetry",
     "empty.noAgents": "No agents yet",
     "empty.noChangedFiles": "No changed files",
     "empty.noPromptPreview": "No prompt preview",
     "empty.noRecentProjects": "No recent projects",
-    "empty.noCodeSessionBody": "Local Code conversations will appear here.",
+    "empty.noCodeSessionBody": "Local sessions will appear here.",
     "empty.noTaskBrief": "No brief available.",
     "empty.noPromptPreviewBody": "This local session did not expose readable prompt text.",
     "empty.noWorkspacePath": "No workspace path recorded.",
@@ -73,7 +73,7 @@ const I18N = Object.freeze({
     "section.launchSession": "Launch session",
     "section.contextStack": "Context stack",
     "section.currentUsage": "Current session usage",
-    "section.codeSessions": "Code sessions",
+    "section.codeSessions": "Local sessions",
     "section.selectedSession": "Selected session",
     "section.subagents": "Subagents",
     "section.sessionDocumentation": "Session documentation",
@@ -91,7 +91,7 @@ const I18N = Object.freeze({
     "section.launchable": "Launchable",
     "section.activeRuns": "Active runs",
     "copy.workspaceOverview": "This workspace keeps task planning, session execution, and subagent follow-through close together so you can move from idea to integration without leaving the desk.",
-    "copy.recentSessions": "Jump back into the latest execution runs.",
+    "copy.recentSessions": "Jump back into the latest sessions.",
     "copy.taskQueue": "Tasks stay reusable so you can relaunch from the same planning doc later.",
     "copy.workspaceMap": "Important runtime paths and fixed execution defaults.",
     "copy.generateTask": "Describe the feature once. AgentDesk keeps the result markdown-first and ready for subagent fan-out.",
@@ -108,12 +108,12 @@ const I18N = Object.freeze({
     "copy.selectedTaskDefault": "Task markdown is ready for launch and subagent orchestration.",
     "copy.launchPlaceholder": "Ask AgentDesk to launch this task with any repo-specific notes, constraints, or acceptance details.",
     "copy.contextStack": "The launch combines the project root, selected task markdown, and extra context.",
-    "copy.noCodexPrompt": "No local Codex session matched this project root yet.",
-    "copy.usage": "Live token telemetry from the latest local Codex conversation.",
-    "copy.noTelemetry": "Start or reopen a local Codex session in this project to show context window and token usage here.",
-    "copy.reopenRecent": "Reopen recent execution runs without relying only on the sidebar.",
+    "copy.noCodexPrompt": "No local session matched this project root yet.",
+    "copy.usage": "Live token telemetry from the latest local session.",
+    "copy.noTelemetry": "Start or reopen a local session in this project to show context window and token usage here.",
+    "copy.reopenRecent": "Reopen recent sessions without relying only on the sidebar.",
     "copy.launchFirstSession": "Launch your first session from the composer above.",
-    "copy.codeSessions": "Local Codex conversations associated with this project root.",
+    "copy.codeSessions": "Local sessions associated with this project root.",
     "copy.noSessionSelected": "Choose a session from the sidebar or recent sessions list.",
     "copy.sessionUpdate": "{task} · {time} update",
     "copy.noRecentUpdate": "No recent update",
@@ -130,10 +130,10 @@ const I18N = Object.freeze({
     "copy.subagents": "Review the latest execution wave, then drill into a single subagent for branches, logs, and verification notes.",
     "copy.sessionDocumentation": "The generated session markdown remains the source of truth after orchestration finishes.",
     "copy.noChangedFiles": "The subagent has not produced repository changes yet.",
-    "copy.codeSessionEmpty": "Choose a Code session from the current project rail.",
+    "copy.codeSessionEmpty": "Choose a session from the current project rail.",
     "copy.preferences": "Choose your language and color theme. Preferences are saved on this machine.",
     "copy.selectedWorkspaces": "Selected workspaces will appear here.",
-    "copy.noLocalCodeSessions": "AgentDesk did not find local Codex conversation files yet.",
+    "copy.noLocalCodeSessions": "AgentDesk did not find local session files yet.",
     "copy.tasksStartNow": "Tasks that can start a session right now.",
     "copy.queuedRunning": "Queued or running sessions need attention here.",
     "copy.nothingRunning": "Nothing currently running.",
@@ -202,6 +202,7 @@ const I18N = Object.freeze({
     "label.output": "Output",
     "label.total": "Total",
     "label.tracked": "Tracked",
+    "label.latestPrompt": "Latest session prompt",
     "label.code": "Code",
     "label.tests": "Tests",
     "label.risks": "Risks",
@@ -246,8 +247,8 @@ const I18N = Object.freeze({
     "topbar.settingsPath": "Runtime and paths.",
     "topbar.taskWorkspace": "Task workspace",
     "topbar.tasks": "Tasks",
-    "topbar.codeSession": "Code session",
-    "topbar.localCode": "Local Code conversation",
+    "topbar.codeSession": "Session",
+    "topbar.localCode": "Local session",
     "topbar.projectSessions": "Project sessions",
     "topbar.sessionWorkbench": "Session workbench",
   },
@@ -274,8 +275,8 @@ const I18N = Object.freeze({
     "action.startSession": "开始会话",
     "action.generateTask": "生成 task.md",
     "action.addContext": "添加上下文",
-    "action.reviewLatestRun": "查看最近的 AgentDesk 运行",
-    "action.openMatchingCodex": "打开匹配的 Codex 会话",
+    "action.reviewLatestRun": "查看最近运行",
+    "action.openMatchingCodex": "打开最近本地会话",
     "action.moveUp": "上移",
     "action.moveDown": "下移",
     "message.nativeFolder": "原生文件夹选择仅在 AgentDesk 桌面应用中可用。",
@@ -286,20 +287,20 @@ const I18N = Object.freeze({
     "message.startedSession": "已启动会话 {id}",
     "empty.sidebarProjects": "打开一次项目后，它的会话会留在这里。",
     "empty.noDeskState": "还没有 AgentDesk 状态",
-    "empty.noDeskSessions": "暂无 AgentDesk 会话",
-    "empty.noCodeSessions": "暂无 Code 会话",
+    "empty.noDeskSessions": "暂无会话",
+    "empty.noCodeSessions": "暂无会话",
     "empty.noMatchingCode": "没有匹配的本地会话。",
     "empty.noSessions": "暂无会话",
     "empty.noTasks": "暂无任务",
     "empty.noTaskSelected": "未选择任务",
     "empty.noSessionSelected": "未选择会话",
-    "empty.noCodeSessionSelected": "未选择 Code 会话",
+    "empty.noCodeSessionSelected": "未选择会话",
     "empty.noTelemetry": "暂无实时用量",
     "empty.noAgents": "暂无子代理",
     "empty.noChangedFiles": "暂无变更文件",
     "empty.noPromptPreview": "暂无提示词预览",
     "empty.noRecentProjects": "暂无最近项目",
-    "empty.noCodeSessionBody": "本地 Code 会话会显示在这里。",
+    "empty.noCodeSessionBody": "本地会话会显示在这里。",
     "empty.noTaskBrief": "暂无简介。",
     "empty.noPromptPreviewBody": "这个本地会话没有可读取的提示词文本。",
     "empty.noWorkspacePath": "未记录工作区路径。",
@@ -317,7 +318,7 @@ const I18N = Object.freeze({
     "section.launchSession": "启动会话",
     "section.contextStack": "上下文栈",
     "section.currentUsage": "当前会话用量",
-    "section.codeSessions": "Code 会话",
+    "section.codeSessions": "本地会话",
     "section.selectedSession": "已选会话",
     "section.subagents": "子代理",
     "section.sessionDocumentation": "会话文档",
@@ -335,7 +336,7 @@ const I18N = Object.freeze({
     "section.launchable": "可启动",
     "section.activeRuns": "活跃运行",
     "copy.workspaceOverview": "这个工作区把任务规划、会话执行和子代理跟进放在一起，让你不用离开工作台就能从想法推进到集成。",
-    "copy.recentSessions": "快速回到最近的执行运行。",
+    "copy.recentSessions": "快速回到最近会话。",
     "copy.taskQueue": "任务会保持可复用，之后可以从同一份规划文档重新启动。",
     "copy.workspaceMap": "重要运行路径和固定执行默认值。",
     "copy.generateTask": "只描述一次功能。AgentDesk 会保留 Markdown 优先的结果，并准备好子代理分发。",
@@ -352,12 +353,12 @@ const I18N = Object.freeze({
     "copy.selectedTaskDefault": "任务 Markdown 已准备好启动和编排子代理。",
     "copy.launchPlaceholder": "告诉 AgentDesk 启动此任务，并补充仓库相关说明、约束或验收细节。",
     "copy.contextStack": "启动会组合项目根目录、已选任务 Markdown 和额外上下文。",
-    "copy.noCodexPrompt": "没有匹配此项目根目录的本地 Codex 会话。",
-    "copy.usage": "来自最近本地 Codex 对话的实时 token 遥测。",
-    "copy.noTelemetry": "在此项目中启动或重新打开本地 Codex 会话后，会在这里显示上下文窗口和 token 用量。",
-    "copy.reopenRecent": "不用只依赖侧边栏，也可以重新打开最近的执行运行。",
+    "copy.noCodexPrompt": "没有匹配此项目根目录的本地会话。",
+    "copy.usage": "来自最近本地会话的实时 token 遥测。",
+    "copy.noTelemetry": "在此项目中启动或重新打开本地会话后，会在这里显示上下文窗口和 token 用量。",
+    "copy.reopenRecent": "不用只依赖侧边栏，也可以重新打开最近会话。",
     "copy.launchFirstSession": "从上方编排器启动第一个会话。",
-    "copy.codeSessions": "与此项目根目录关联的本地 Codex 对话。",
+    "copy.codeSessions": "与此项目根目录关联的本地会话。",
     "copy.noSessionSelected": "从侧边栏或最近会话列表中选择一个会话。",
     "copy.sessionUpdate": "{task} · {time} 更新",
     "copy.noRecentUpdate": "暂无最近更新",
@@ -374,10 +375,10 @@ const I18N = Object.freeze({
     "copy.subagents": "查看最近的执行轮次，再进入单个子代理查看分支、日志和验证说明。",
     "copy.sessionDocumentation": "编排完成后，生成的会话 Markdown 仍是事实来源。",
     "copy.noChangedFiles": "这个子代理还没有产生仓库变更。",
-    "copy.codeSessionEmpty": "从当前项目栏中选择一个 Code 会话。",
+    "copy.codeSessionEmpty": "从当前项目栏中选择一个会话。",
     "copy.preferences": "选择语言和颜色主题。偏好会保存在本机。",
     "copy.selectedWorkspaces": "选过的工作区会显示在这里。",
-    "copy.noLocalCodeSessions": "AgentDesk 还没有找到本地 Codex 对话文件。",
+    "copy.noLocalCodeSessions": "AgentDesk 还没有找到本地会话文件。",
     "copy.tasksStartNow": "现在可以启动会话的任务。",
     "copy.queuedRunning": "排队或运行中的会话需要在这里关注。",
     "copy.nothingRunning": "当前没有运行中的内容。",
@@ -446,6 +447,7 @@ const I18N = Object.freeze({
     "label.output": "输出",
     "label.total": "总计",
     "label.tracked": "已跟踪",
+    "label.latestPrompt": "最近会话提示词",
     "label.code": "Code",
     "label.tests": "测试",
     "label.risks": "风险",
@@ -490,8 +492,8 @@ const I18N = Object.freeze({
     "topbar.settingsPath": "运行时与路径。",
     "topbar.taskWorkspace": "任务工作区",
     "topbar.tasks": "任务",
-    "topbar.codeSession": "Code 会话",
-    "topbar.localCode": "本地 Code 对话",
+    "topbar.codeSession": "会话",
+    "topbar.localCode": "本地会话",
     "topbar.projectSessions": "项目会话",
     "topbar.sessionWorkbench": "会话工作台",
   },
@@ -768,10 +770,17 @@ async function refreshAll(options = {}) {
       await selectTask(state.tasks[0].taskId, { quiet: true });
     }
 
-    if ((options.forceSelections || state.selectedSessionId) && state.selectedSessionId) {
+    if ((options.forceSelections || state.view === "code-session") && state.selectedCodeSessionId) {
+      selectCodeSession(state.selectedCodeSessionId, { quiet: true });
+    } else if ((options.forceSelections || state.selectedSessionId) && state.selectedSessionId) {
       await selectSession(state.selectedSessionId, { quiet: true });
-    } else if (state.sessions[0]?.sessionId) {
-      await selectSession(state.sessions[0].sessionId, { quiet: true });
+    } else {
+      const latestSession = projectSessions()[0] || null;
+      if (latestSession?.action === "agentdesk") {
+        await selectSession(latestSession.id, { quiet: true });
+      } else if (latestSession?.action === "local") {
+        selectCodeSession(latestSession.id, { quiet: true });
+      }
     }
 
     setConnectionState("connected");
@@ -987,15 +996,20 @@ async function selectSession(sessionId, options = {}) {
   render();
 }
 
-function selectCodeSession(sessionId) {
+function selectCodeSession(sessionId, options = {}) {
   const session = findCodeSession(sessionId);
   if (!session) {
     return;
   }
   state.selectedCodeSessionId = sessionId;
   state.codeSessionDetail = session;
+  state.selectedSessionId = "";
+  state.sessionDetail = null;
+  state.selectedAgentId = "";
   state.view = "code-session";
-  render();
+  if (!options.quiet) {
+    render();
+  }
 }
 
 async function selectAgent(agentId, options = {}) {
@@ -1080,8 +1094,7 @@ function renderSidebarProjectTree(projects) {
       ${projects.slice(0, 12).map((project) => {
         const isCurrent = project.projectRoot === currentRoot;
         const projectIndex = projects.findIndex((candidate) => candidate.projectRoot === project.projectRoot);
-        const childSessions = isCurrent ? state.sessions.slice(0, 12) : [];
-        const childCodeSessions = isCurrent ? projectCodeSessions().slice(0, 10) : [];
+        const childSessions = isCurrent ? projectSessions().slice(0, 12) : [];
         return `
           <section class="project-group ${isCurrent ? "selected" : ""}">
             <div class="project-trigger-row">
@@ -1120,44 +1133,29 @@ function renderSidebarProjectTree(projects) {
             </div>
             ${isCurrent ? `
               <div class="project-children">
-                <div class="project-child-group">
-                  <p class="project-child-heading">AgentDesk</p>
-                  ${childSessions.length
-                    ? childSessions.map((session) => `
-                      <button
-                        class="session-node ${session.sessionId === state.selectedSessionId && state.view === "sessions" ? "selected" : ""}"
-                        data-session-id="${escapeAttr(session.sessionId)}"
-                        type="button"
-                        title="${escapeAttr(session.taskTitle || session.title || session.sessionId)}"
-                      >
-                        <span class="session-node-title">${escapeHtml(session.taskTitle || session.title || session.sessionId)}</span>
-                        <span class="session-node-time">${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
-                      </button>
-                    `).join("")
-                    : `<p class="sidebar-subempty">${escapeHtml(t("empty.noDeskSessions"))}</p>`}
-                </div>
-                <div class="project-child-group">
-                  <p class="project-child-heading">${escapeHtml(t("label.code"))}</p>
-                  ${childCodeSessions.length
-                    ? childCodeSessions.map((session) => `
-                      <button
-                        class="session-node code-session-node ${session.id === state.selectedCodeSessionId && state.view === "code-session" ? "selected" : ""}"
-                        data-code-session-id="${escapeAttr(session.id)}"
-                        type="button"
-                        title="${escapeAttr(session.title || session.conversationId || session.id)}"
-                      >
-                        <span class="session-node-title">${escapeHtml(session.title || session.conversationId || session.id)}</span>
-                        <span class="session-node-time">${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
-                      </button>
-                    `).join("")
-                    : `<p class="sidebar-subempty">${escapeHtml(t("empty.noCodeSessions"))}</p>`}
-                </div>
+                ${childSessions.length
+                  ? childSessions.map(renderSidebarSessionNode).join("")
+                  : `<p class="sidebar-subempty">${escapeHtml(t("empty.noSessions"))}</p>`}
               </div>
             ` : ""}
           </section>
         `;
       }).join("")}
     </div>
+  `;
+}
+
+function renderSidebarSessionNode(session) {
+  return `
+    <button
+      class="session-node ${session.selected ? "selected" : ""}"
+      ${sessionActionAttribute(session)}
+      type="button"
+      title="${escapeAttr(session.title)}"
+    >
+      <span class="session-node-title">${escapeHtml(session.title)}</span>
+      <span class="session-node-time">${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
+    </button>
   `;
 }
 
@@ -1205,7 +1203,8 @@ function renderProjectPicker() {
 function renderOverview() {
   const readyTasks = countStatuses(state.tasks, ["ready", "running", "succeeded", "failed"]);
   const activeSessions = countStatuses(state.sessions, ["queued", "running"]);
-  const latestSession = state.sessions[0] || null;
+  const recentSessions = projectSessions();
+  const latestSession = recentSessions[0] || null;
   const latestTask = state.tasks[0] || null;
 
   return `
@@ -1218,7 +1217,7 @@ function renderOverview() {
       <div class="metric-grid">
         ${metricTile(t("topbar.tasks"), String(state.health?.counts?.tasks || 0), latestTask ? latestTask.title : t("empty.noTasks"), "accent")}
         ${metricTile(t("section.launchable"), String(readyTasks), t("copy.tasksStartNow"), "positive")}
-        ${metricTile(t("nav.sessions"), String(state.health?.counts?.sessions || 0), latestSession ? latestSession.taskTitle || latestSession.sessionId : t("empty.noSessions"), "active")}
+        ${metricTile(t("nav.sessions"), String(recentSessions.length), latestSession ? latestSession.title : t("empty.noSessions"), "active")}
         ${metricTile(t("section.activeRuns"), String(activeSessions), activeSessions ? t("copy.queuedRunning") : t("copy.nothingRunning"), "warning")}
       </div>
     </section>
@@ -1230,7 +1229,7 @@ function renderOverview() {
             <p class="section-copy">${escapeHtml(t("copy.recentSessions"))}</p>
           </div>
         </div>
-        ${renderSessionList(state.sessions.slice(0, 8), { emptyTitle: t("empty.noSessions"), emptyBody: t("copy.startBuildingHistory") })}
+        ${renderUnifiedSessionList(recentSessions.slice(0, 8), { emptyTitle: t("empty.noSessions"), emptyBody: t("copy.startBuildingHistory") })}
       </div>
       <div class="surface">
         <div class="section-head">
@@ -1377,7 +1376,7 @@ function renderSessions() {
   const project = currentProject();
   const selectedTask = state.tasks.find((task) => task.taskId === state.selectedTaskId) || state.tasks[0] || null;
   const canLaunchSelectedTask = selectedTask ? isTaskStartable(selectedTask) : false;
-  const codeSessions = projectCodeSessions();
+  const sessions = projectSessions();
   const liveCodeSession = currentProjectCodeSession();
   const composerModel = findRuntimeModel(state.sessionComposer.model);
   const reasoningChoices = reasoningChoicesForModel(state.sessionComposer.model);
@@ -1485,8 +1484,8 @@ function renderSessions() {
             ${contextResource("task.md", selectedTask?.paths?.taskMd || "-", { mono: true })}
             ${contextResource(t("label.featureBrief"), selectedTaskSummary)}
             ${liveCodeSession
-              ? contextResource("Latest Codex prompt", liveCodeSession.prompts?.[0] || liveCodeSession.title || t("empty.noPromptPreview"))
-              : contextResource("Latest Codex prompt", t("copy.noCodexPrompt"))}
+              ? contextResource(t("label.latestPrompt"), liveCodeSession.prompts?.[0] || liveCodeSession.title || t("empty.noPromptPreview"))
+              : contextResource(t("label.latestPrompt"), t("copy.noCodexPrompt"))}
           </div>
         </div>
         <div class="composer-sidecard token-usage-card">
@@ -1527,26 +1526,14 @@ function renderSessions() {
                 <h2>${escapeHtml(t("section.recentSessions"))}</h2>
                 <p class="section-copy">${escapeHtml(t("copy.reopenRecent"))}</p>
               </div>
-            </div>
-            ${renderSessionList(state.sessions, {
-              emptyTitle: t("empty.noSessions"),
-              emptyBody: t("copy.launchFirstSession"),
-            })}
-          </div>
-          <div class="surface">
-            <div class="section-head">
-              <div>
-                <h2>${escapeHtml(t("section.codeSessions"))}</h2>
-                <p class="section-copy">${escapeHtml(t("copy.codeSessions"))}</p>
-              </div>
               <span class="pill active">
-                <strong>${escapeHtml(String(codeSessions.length))}</strong>
+                <strong>${escapeHtml(String(sessions.length))}</strong>
                 <span>${escapeHtml(t("label.tracked"))}</span>
               </span>
             </div>
-            ${renderCodeSessionList(codeSessions, {
-              emptyTitle: t("empty.noCodeSessions"),
-              emptyBody: t("empty.noMatchingCode"),
+            ${renderUnifiedSessionList(sessions, {
+              emptyTitle: t("empty.noSessions"),
+              emptyBody: t("copy.launchFirstSession"),
             })}
           </div>
         </div>
@@ -1720,7 +1707,6 @@ function renderCodeSession() {
             </div>
           </div>
           <div class="info-grid">
-            ${infoTile(t("label.source"), session.source || "-")}
             ${infoTile(t("label.model"), session.model || "-")}
             ${infoTile(t("label.reasoning"), session.effort || "-")}
             ${infoTile(t("label.contextWindow"), formatTokenCount(session.contextWindow || 0))}
@@ -1751,7 +1737,6 @@ function renderCodeSession() {
             <h2>${escapeHtml(session.title || t("topbar.codeSession"))}</h2>
             <p class="path-copy mono">${escapeHtml(session.relativePath || session.sourcePath || "")}</p>
           </div>
-          <span class="badge active">${escapeHtml(t("label.code"))}</span>
         </header>
         <div class="info-grid session-facts">
           ${infoTile(t("label.started"), formatDate(session.createdAt))}
@@ -1981,6 +1966,35 @@ function renderSessionList(sessions, options = {}) {
   `;
 }
 
+function renderUnifiedSessionList(sessions, options = {}) {
+  if (!sessions.length) {
+    return emptyState(options.emptyTitle || t("empty.noSessions"), options.emptyBody || t("copy.startBuildingHistory"));
+  }
+
+  return `
+    <div class="list-stack">
+      ${sessions.map((session) => `
+        <button
+          class="list-item session-item ${session.selected ? "selected" : ""}"
+          ${sessionActionAttribute(session)}
+          type="button"
+        >
+          <div class="list-item-head">
+            <div class="list-copy">
+              <strong>${escapeHtml(session.title)}</strong>
+              <span>${escapeHtml(session.subtitle)}</span>
+            </div>
+            ${session.badgeHtml || ""}
+          </div>
+          <div class="meta-row">
+            ${session.meta.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+          </div>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderCodeSessionList(sessions, options = {}) {
   if (!sessions.length) {
     return emptyState(options.emptyTitle || t("empty.noCodeSessions"), options.emptyBody || t("empty.noCodeSessionBody"));
@@ -1990,7 +2004,7 @@ function renderCodeSessionList(sessions, options = {}) {
     <div class="list-stack">
       ${sessions.map((session) => `
         <button
-          class="list-item code-session-item ${session.id === state.selectedCodeSessionId ? "selected" : ""}"
+          class="list-item session-item ${session.id === state.selectedCodeSessionId ? "selected" : ""}"
           data-code-session-id="${escapeAttr(session.id)}"
           type="button"
         >
@@ -1998,7 +2012,6 @@ function renderCodeSessionList(sessions, options = {}) {
             <div class="list-copy">
               <strong>${escapeHtml(session.title || session.conversationId || session.id)}</strong>
             </div>
-            <span class="badge active">${escapeHtml(t("label.code"))}</span>
           </div>
           <div class="meta-row">
             <span>${escapeHtml(session.model || "model unknown")}</span>
@@ -2407,6 +2420,65 @@ function currentProject() {
 
 function projectCodeSessions() {
   return state.codeSessions?.items || [];
+}
+
+function projectSessions() {
+  return [
+    ...state.sessions.map(normalizeAgentDeskSession),
+    ...projectCodeSessions().map(normalizeLocalSession),
+  ].sort(compareSessionsByRecency);
+}
+
+function normalizeAgentDeskSession(session) {
+  const title = session.taskTitle || session.title || session.sessionId;
+  return {
+    action: "agentdesk",
+    id: session.sessionId,
+    title,
+    subtitle: session.sessionId,
+    updatedAt: session.updatedAt || session.completedAt || session.startedAt,
+    selected: session.sessionId === state.selectedSessionId && state.view === "sessions",
+    badgeHtml: badge(session.status),
+    meta: [
+      t("meta.parallel", { count: session.parallelism || 0 }),
+      t("meta.agentResults", { ok: session.succeededAgents || 0, failed: session.failedAgents || 0 }),
+      formatDate(session.updatedAt),
+    ],
+  };
+}
+
+function normalizeLocalSession(session) {
+  const title = session.title || session.conversationId || session.id;
+  return {
+    action: "local",
+    id: session.id,
+    title,
+    subtitle: session.conversationId || session.relativePath || session.sourcePath || session.id,
+    updatedAt: session.updatedAt || session.createdAt,
+    selected: session.id === state.selectedCodeSessionId && state.view === "code-session",
+    badgeHtml: "",
+    meta: [
+      session.model || "model unknown",
+      t("meta.tokens", { count: formatTokenCount(session.tokenUsage?.total?.totalTokens || 0) }),
+      t("meta.messages", { count: session.messageCount || 0 }),
+      formatRelativeDate(session.updatedAt),
+    ],
+  };
+}
+
+function compareSessionsByRecency(left, right) {
+  return timestampValue(right.updatedAt) - timestampValue(left.updatedAt);
+}
+
+function timestampValue(value) {
+  const time = Date.parse(value || "");
+  return Number.isFinite(time) ? time : 0;
+}
+
+function sessionActionAttribute(session) {
+  return session.action === "local"
+    ? `data-code-session-id="${escapeAttr(session.id)}"`
+    : `data-session-id="${escapeAttr(session.id)}"`;
 }
 
 function allCodeSessions() {
