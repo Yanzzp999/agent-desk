@@ -73,6 +73,9 @@ document.body.addEventListener("change", async (event) => {
   if (event.target.id === "planner-mode") {
     render();
   }
+  if (event.target.closest("#planner-form") && event.target.name === "model") {
+    render();
+  }
 });
 
 document.body.addEventListener("submit", async (event) => {
@@ -90,6 +93,7 @@ document.body.addEventListener("submit", async (event) => {
     ralphDir: String(form.get("ralphDir") || ""),
     model: String(form.get("model") || ""),
     reasoning: String(form.get("reasoning") || ""),
+    fast: Boolean(form.get("fast")),
   };
   const job = await api("/api/plans", { method: "POST", body: payload });
   state.message = `Started planner job ${job.planJobId}`;
@@ -635,6 +639,26 @@ function renderTaskDrawer(task) {
 
 function renderPlanner() {
   const mode = document.querySelector("#planner-mode")?.value || "brief_to_json";
+  const runtime = plannerRuntimeMetadata();
+  const modelOptions = runtimeChoiceOptions(runtime, ["modelChoices", "models", "availableModels", "modelOptions", "model"]);
+  const currentModel = plannerFieldValue("model", runtimeDefaultValue(runtime, ["model", "defaultModel", "currentModel"]));
+  const selectedModel = modelOptions.find((option) => option.value === currentModel) || null;
+  const reasoningOptions = selectedModel?.reasoningEfforts?.length
+    ? selectedModel.reasoningEfforts
+    : runtimeChoiceOptions(runtime, ["reasoningChoices", "reasoningEfforts", "reasoningOptions", "reasoning"]);
+  const currentReasoning = plannerFieldValue("reasoning", runtimeDefaultValue(runtime, [
+    "reasoning",
+    "defaultReasoning",
+    "reasoningEffort",
+    "defaultReasoningEffort",
+    "modelReasoningEffort",
+  ]));
+  const fastAvailable = selectedModel ? modelFastSupported(selectedModel, runtime) : hasRuntimeFastMode(runtime);
+  const fastChecked = plannerCheckboxValue("fast", runtimeFastDefault(runtime));
+  const featureBrief = plannerFieldValue("featureBrief");
+  const inputPath = plannerFieldValue("inputPath");
+  const outputDir = plannerFieldValue("outputDir");
+  const ralphDir = plannerFieldValue("ralphDir");
   return `
     <section class="hero hero-compact">
       <div class="hero-copy">
@@ -659,16 +683,17 @@ function renderPlanner() {
             </select>
           </label>
           ${mode === "prd_to_json"
-            ? `<label>PRD path<input name="inputPath" placeholder="tasks/prd-example.md"></label>`
-            : `<label>Feature brief<textarea name="featureBrief" placeholder="Build..."></textarea></label>`}
+            ? `<label>PRD path<input name="inputPath" placeholder="tasks/prd-example.md" value="${escapeAttr(inputPath)}"></label>`
+            : `<label>Feature brief<textarea name="featureBrief" placeholder="Build...">${escapeHtml(featureBrief)}</textarea></label>`}
           <div class="grid two">
-            <label>Output dir<input name="outputDir" placeholder="tasks"></label>
-            <label>Ralph dir<input name="ralphDir" placeholder="."></label>
+            <label>Output dir<input name="outputDir" placeholder="tasks" value="${escapeAttr(outputDir)}"></label>
+            <label>Ralph dir<input name="ralphDir" placeholder="." value="${escapeAttr(ralphDir)}"></label>
           </div>
           <div class="grid two">
-            <label>Model<input name="model" placeholder="default"></label>
-            <label>Reasoning<input name="reasoning" placeholder="default"></label>
+            ${renderPlannerChoice("Model", "model", modelOptions, currentModel)}
+            ${renderPlannerChoice("Reasoning", "reasoning", reasoningOptions, currentReasoning)}
           </div>
+          ${fastAvailable ? renderPlannerFastMode(fastChecked) : ""}
           <div><button class="button primary" type="submit">Start</button></div>
         </form>
       </section>
@@ -688,6 +713,225 @@ function renderPlanner() {
       </section>
     `}
   `;
+}
+
+function renderPlannerChoice(labelText, name, options, value) {
+  if (!options.length) {
+    return `<label>${escapeHtml(labelText)}<input name="${escapeAttr(name)}" placeholder="default" value="${escapeAttr(value)}"></label>`;
+  }
+  const selected = options.some((option) => option.value === value) ? value : "";
+  return `
+    <label class="planner-select-row">${escapeHtml(labelText)}
+      <select name="${escapeAttr(name)}">
+        <option value="" ${selected ? "" : "selected"}>Default</option>
+        ${options.map((option) => `
+          <option value="${escapeAttr(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>
+        `).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function renderPlannerFastMode(checked) {
+  return `
+    <label class="fast-mode-row">
+      <span><strong>Fast mode</strong></span>
+      <span class="toggle-control">
+        <input type="checkbox" name="fast" value="true" ${checked ? "checked" : ""}>
+        <span></span>
+      </span>
+    </label>
+  `;
+}
+
+function plannerRuntimeMetadata() {
+  const health = state.health || {};
+  const candidates = [
+    health.codexRuntime,
+    health.runtime?.metadata,
+    health.runtimeMetadata,
+    health.metadata?.runtime,
+    health.runtime,
+  ];
+  return candidates.find((candidate) => candidate && typeof candidate === "object" && !Array.isArray(candidate)) || {};
+}
+
+function plannerFieldValue(name, fallback = "") {
+  return document.querySelector(`#planner-form [name="${name}"]`)?.value || fallback || "";
+}
+
+function plannerCheckboxValue(name, fallback = false) {
+  const field = document.querySelector(`#planner-form [name="${name}"]`);
+  return field ? field.checked : fallback;
+}
+
+function runtimeChoiceOptions(metadata, keys) {
+  for (const source of runtimeChoiceSources(metadata)) {
+    for (const key of keys) {
+      const options = normalizeRuntimeChoices(source?.[key]);
+      if (options.length) {
+        return options;
+      }
+    }
+  }
+  return [];
+}
+
+function runtimeDefaultValue(metadata, keys) {
+  const sources = [
+    metadata,
+    metadata?.defaults,
+    metadata?.default,
+    metadata?.planner,
+    metadata?.planner?.defaults,
+    metadata?.planner?.default,
+  ].filter(isPlainObject);
+  for (const source of sources) {
+    for (const key of keys) {
+      const value = runtimeScalarValue(source?.[key])
+        || runtimeScalarValue(source?.[key]?.default)
+        || runtimeScalarValue(source?.[key]?.current)
+        || runtimeScalarValue(source?.[key]?.selected);
+      if (value) {
+        return value;
+      }
+    }
+  }
+  return "";
+}
+
+function hasRuntimeFastMode(metadata) {
+  const supported = toRuntimeBoolean(
+    metadata?.fast?.supported
+      ?? metadata?.supportsFast
+      ?? metadata?.fastModeSupported
+      ?? metadata?.hasFastMode,
+  );
+  if (supported !== null) {
+    return supported;
+  }
+  const fast = toRuntimeBoolean(metadata?.fast ?? metadata?.fastMode);
+  if (fast !== null) {
+    return fast;
+  }
+  const supportedModels = metadata?.fast?.supportedModels;
+  return Array.isArray(supportedModels) && supportedModels.length > 0;
+}
+
+function runtimeFastDefault(metadata) {
+  return toRuntimeBoolean(metadata?.defaultFast ?? metadata?.fastDefault ?? metadata?.fastEnabled) || false;
+}
+
+function runtimeChoiceSources(metadata) {
+  return [
+    metadata,
+    metadata?.planner,
+    metadata?.choices,
+    metadata?.options,
+    metadata?.planner?.choices,
+    metadata?.planner?.options,
+  ].filter(isPlainObject);
+}
+
+function normalizeRuntimeChoices(value) {
+  let choices = null;
+  if (Array.isArray(value)) {
+    choices = value;
+  } else if (isPlainObject(value)) {
+    if (Array.isArray(value.choices)) {
+      choices = value.choices;
+    } else if (Array.isArray(value.options)) {
+      choices = value.options;
+    } else if (Array.isArray(value.values)) {
+      choices = value.values;
+    } else if (isRuntimeChoice(value)) {
+      choices = [value];
+    }
+  }
+  if (!choices) {
+    return [];
+  }
+
+  const seen = new Set();
+  return choices
+    .map(normalizeRuntimeChoice)
+    .filter((choice) => {
+      if (!choice || seen.has(choice.value)) {
+        return false;
+      }
+      seen.add(choice.value);
+      return true;
+    });
+}
+
+function normalizeRuntimeChoice(choice) {
+  if (choice === null || choice === undefined) {
+    return null;
+  }
+  if (["string", "number", "boolean"].includes(typeof choice)) {
+    return { value: String(choice), label: String(choice) };
+  }
+  if (typeof choice !== "object") {
+    return null;
+  }
+  const value = choice.value ?? choice.slug ?? choice.id ?? choice.key ?? choice.name;
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  return {
+    value: String(value),
+    label: String(choice.label ?? choice.displayName ?? choice.display_name ?? choice.title ?? value),
+    reasoningEfforts: normalizeRuntimeChoices(choice.reasoningEfforts || choice.reasoning_efforts || choice.reasoning),
+    fastSupported: toRuntimeBoolean(choice.fast ?? choice.supportsFast ?? choice.supports_fast),
+  };
+}
+
+function isRuntimeChoice(value) {
+  return ["value", "slug", "id", "key", "name"].some((field) => field in value);
+}
+
+function modelFastSupported(model, metadata) {
+  if (model?.fastSupported !== null && model?.fastSupported !== undefined) {
+    return model.fastSupported;
+  }
+  const supportedModels = metadata?.fast?.supportedModels;
+  if (Array.isArray(supportedModels)) {
+    return supportedModels.map(String).includes(model?.value);
+  }
+  return hasRuntimeFastMode(metadata);
+}
+
+function runtimeScalarValue(value) {
+  if (["string", "number", "boolean"].includes(typeof value)) {
+    return String(value);
+  }
+  return "";
+}
+
+function toRuntimeBoolean(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on", "enabled"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "off", "disabled"].includes(normalized)) {
+      return false;
+    }
+  }
+  if (value && typeof value === "object") {
+    return toRuntimeBoolean(value.value ?? value.default ?? value.current ?? value.enabled ?? value.supported);
+  }
+  return null;
+}
+
+function isPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
 }
 
 function renderPlanDetail(plan) {
@@ -781,6 +1025,11 @@ function renderArtifacts() {
 
 function renderSettings() {
   const health = state.health || {};
+  const runtime = health.codexRuntime || health.runtime || {};
+  const planner = health.capabilities?.planner || {};
+  const modelCount = Array.isArray(runtime.modelChoices || runtime.models)
+    ? (runtime.modelChoices || runtime.models).length
+    : 0;
   return `
     <section class="hero hero-compact">
       <div class="hero-copy">
@@ -793,6 +1042,11 @@ function renderSettings() {
           <span>Health</span>
           <strong>${escapeHtml(health.ok ? "Ready" : "Unknown")}</strong>
           <p>${escapeHtml(health.projectRoot ? "Project root loaded." : "No project root reported yet.")}</p>
+        </div>
+        <div>
+          <span>Codex CLI</span>
+          <strong>${escapeHtml(runtime.available ? "Detected" : "Fallback catalog")}</strong>
+          <p>${escapeHtml(modelCount ? `${modelCount} model choices loaded.` : "Model choices are not loaded yet.")}</p>
         </div>
       </div>
     </section>
@@ -809,6 +1063,15 @@ function renderSettings() {
         ${infoTile("UI state root", health.uiStateRoot || "-")}
         ${infoTile("ralph-run", health.ralphRunCli || "-")}
         ${infoTile("ralph", health.ralphPlanCli || "-")}
+        ${infoTile("Codex CLI", runtime.codexBin || "-")}
+        ${infoTile("Codex version", runtime.codexVersion || "-")}
+      </div>
+      <div class="runtime-capabilities">
+        ${renderRuntimeCapability("Model catalog", runtime.available ? "enabled" : "missing", runtime.source || "-")}
+        ${renderRuntimeCapability("Fast mode", runtime.supportsFast ? "enabled" : "missing", runtime.supportsFast ? "Available" : "Unavailable")}
+        ${renderRuntimeCapability("Planner --model", planner.cli?.flags?.model ? "enabled" : "missing", planner.cli?.flags?.model ? "Detected" : "Not detected")}
+        ${renderRuntimeCapability("Planner --reasoning", planner.cli?.flags?.reasoning ? "enabled" : "missing", planner.cli?.flags?.reasoning ? "Detected" : "Not detected")}
+        ${renderRuntimeCapability("Planner --fast", planner.cli?.flags?.fast ? "enabled" : "missing", planner.cli?.flags?.fast ? "Detected" : "Not detected")}
       </div>
     </section>
   `;
@@ -907,6 +1170,15 @@ function renderPill(labelText, value, tone = "") {
     <span class="pill ${tone}">
       <strong>${escapeHtml(value)}</strong>
       <span>${escapeHtml(labelText)}</span>
+    </span>
+  `;
+}
+
+function renderRuntimeCapability(labelText, stateText, value) {
+  return `
+    <span class="runtime-capability" data-state="${escapeAttr(stateText)}">
+      <strong>${escapeHtml(labelText)}</strong>
+      <span>${escapeHtml(value)}</span>
     </span>
   `;
 }

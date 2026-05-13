@@ -206,6 +206,7 @@ async function handlePlanner(context, parsed) {
       ralphDir: parsed["ralph-dir"],
       model: parsed.model,
       reasoning: parsed.reasoning,
+      ...(parsed.fast ? { fast: true } : {}),
     });
     return output(parsed, result, () => `Started planner job: ${result.planJobId}`);
   }
@@ -285,7 +286,7 @@ Usage:
   ralphctl tasks logs <runId> <taskId> [--lines N] [--json]
   ralphctl tasks retry <runId> <taskId> [--force] [--json]
   ralphctl tasks stop <runId> <taskId> [--json]
-  ralphctl planner start [--brief TEXT | --input PRD.md] [--output-dir DIR] [--ralph-dir DIR] [--json]
+  ralphctl planner start [--brief TEXT | --input PRD.md] [--output-dir DIR] [--ralph-dir DIR] [--model MODEL] [--reasoning DEPTH] [--fast] [--json]
   ralphctl planner list [--json]
   ralphctl planner show <planJobId> [--logs] [--json]
   ralphctl planner logs <planJobId> [--json]
@@ -295,5 +296,10 @@ Global options:
   --project DIR        Project root to inspect. Default: current git root.
   --state-dir DIR      Ralph state root. Default: <project>/.ralph.
   --ui-state-dir DIR   Control-plane state root. Default: <project>/.ralph-ui.
+
+Planner start options:
+  --model MODEL        Codex-compatible model override for the planner job.
+  --reasoning DEPTH    Codex-compatible reasoning depth override for the planner job.
+  --fast               Request fast planner mode when supported by the planner backend.
 `);
 }
