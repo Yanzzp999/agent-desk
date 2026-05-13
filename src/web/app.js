@@ -735,100 +735,180 @@ function renderTaskDetail(task) {
 }
 
 function renderSessions() {
+  const project = currentProject();
   const selectedTask = state.tasks.find((task) => task.taskId === state.selectedTaskId) || state.tasks[0] || null;
   const canLaunchSelectedTask = selectedTask ? isTaskStartable(selectedTask) : false;
   const codeSessions = projectCodeSessions();
+  const readyTasks = countStatuses(state.tasks, ["ready", "running", "succeeded", "failed"]);
+  const activeSessions = countStatuses(state.sessions, ["queued", "running"]);
+  const selectedTaskTitle = selectedTask?.title || selectedTask?.taskId || "No task selected";
+  const selectedTaskSummary = selectedTask
+    ? excerpt(selectedTask.brief || "Task markdown is ready for launch and subagent orchestration.", 150)
+    : "Generate a task.md first, then launch a session from a reusable planning document.";
+  const launchHint = selectedTask
+    ? `${selectedTask.title || selectedTask.taskId}${canLaunchSelectedTask ? " is ready to launch." : " is not ready yet."}`
+    : "Generate a task first to enable session launch.";
 
   return `
-    <section class="workspace-layout compact-workspace">
-      <div class="column-stack">
-        <div class="surface compact-surface project-summary">
-          <div class="section-head">
-            <div>
-              <h2>${escapeHtml(currentProject()?.name || "Project")}</h2>
-              <p class="path-copy mono">${escapeHtml(state.health?.projectRoot || "-")}</p>
-            </div>
-          </div>
-          <div class="stat-row">
-            ${compactStat("Tasks", String(state.health?.counts?.tasks || 0))}
-            ${compactStat("Sessions", String(state.health?.counts?.sessions || 0))}
-            ${compactStat("Code", String(codeSessions.length))}
+    <section class="session-dashboard">
+      <div class="surface session-command">
+        <div class="session-command-copy">
+          <p class="eyebrow">Session command center</p>
+          <h2>${escapeHtml(project?.name || "Project workspace")}</h2>
+          <p class="section-copy">Launch parallel work, inspect subagent outcomes, and keep Codex execution history close to the task source of truth.</p>
+          <div class="session-command-meta">
+            <span class="meta-kv">
+              <span>Project root</span>
+              <strong class="mono">${escapeHtml(state.health?.projectRoot || "-")}</strong>
+            </span>
+            <span class="meta-kv">
+              <span>Runtime defaults</span>
+              <strong>gpt-5.5 · xhigh · fast · batch 6</strong>
+            </span>
           </div>
         </div>
-        <div class="surface compact-surface">
-          <div class="section-head">
-            <div>
-              <h2>New session</h2>
-            </div>
-          </div>
-          <form id="session-form" class="stack-form compact-form">
-            <label>
-              Task
-              <select name="taskId">
-                ${state.tasks.length
-                  ? state.tasks.map((task) => `
-                    <option value="${escapeAttr(task.taskId)}"${task.taskId === selectedTask?.taskId ? " selected" : ""}>
-                      ${escapeHtml(`${task.title || task.taskId} · ${label(task.status)}`)}
-                    </option>
-                  `).join("")
-                  : `<option value="">No tasks available</option>`}
-              </select>
-            </label>
-            <label>
-              Parallel agents
-              <input name="parallelism" type="number" min="1" max="24" value="6">
-            </label>
-            <button class="button primary" type="submit"${canLaunchSelectedTask ? "" : " disabled"}>Launch session</button>
-          </form>
-          <p class="field-hint">
-            ${selectedTask
-              ? escapeHtml(`${selectedTask.title || selectedTask.taskId}${canLaunchSelectedTask ? "" : " is not ready yet."}`)
-              : "Generate a task first to enable session launch."}
-          </p>
-        </div>
-        <div class="surface compact-surface">
-          <div class="section-head">
-            <div>
-              <h2>Code sessions</h2>
-            </div>
-          </div>
-          ${renderCodeSessionList(codeSessions, {
-            emptyTitle: "No Code sessions",
-            emptyBody: "No matching local sessions.",
-          })}
+        <div class="metric-grid session-command-metrics">
+          ${metricTile("Tasks", String(state.health?.counts?.tasks || 0), selectedTask ? `Selected: ${selectedTaskTitle}` : "No generated task yet.", "accent")}
+          ${metricTile("Ready to launch", String(readyTasks), readyTasks ? "Planning docs that can start a session immediately." : "Nothing launch-ready yet.", "positive")}
+          ${metricTile("Sessions", String(state.health?.counts?.sessions || 0), state.sessions[0] ? state.sessions[0].taskTitle || state.sessions[0].sessionId : "No execution history yet.", "active")}
+          ${metricTile("Live runs", String(activeSessions), activeSessions ? "Queued or running sessions need attention here." : "No session is currently running.", "warning")}
         </div>
       </div>
-      ${state.sessionDetail ? renderSessionDetail(state.sessionDetail) : renderEmptyDetail("No session selected", "Choose a session from the left rail.")}
+      <section class="workspace-layout compact-workspace session-workspace">
+        <div class="column-stack session-left-rail">
+          <div class="surface compact-surface project-summary project-summary-hero">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Current workspace</p>
+                <h2>${escapeHtml(project?.name || "Project")}</h2>
+                <p class="path-copy mono">${escapeHtml(state.health?.projectRoot || "-")}</p>
+              </div>
+            </div>
+            <div class="pill-row">
+              ${renderRuntimeCapability("Model", "enabled", "gpt-5.5")}
+              ${renderRuntimeCapability("Reasoning", "enabled", "xhigh")}
+              ${renderRuntimeCapability("Tier", "enabled", "fast")}
+              ${renderRuntimeCapability("Batch", "enabled", "6")}
+            </div>
+          </div>
+          <div class="surface compact-surface launch-panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Launch lane</p>
+                <h2>Start a new session</h2>
+                <p class="section-copy">Pick a reusable task and choose how many subagents you want active in parallel.</p>
+              </div>
+            </div>
+            <div class="task-focus ${canLaunchSelectedTask ? "launchable" : "waiting"}">
+              <div class="task-focus-head">
+                <span>Selected task</span>
+                ${selectedTask ? badge(selectedTask.status) : `<span class="badge">No Task</span>`}
+              </div>
+              <strong>${escapeHtml(selectedTaskTitle)}</strong>
+              <p>${escapeHtml(selectedTaskSummary)}</p>
+            </div>
+            <form id="session-form" class="stack-form compact-form">
+              <label>
+                Task
+                <select name="taskId">
+                  ${state.tasks.length
+                    ? state.tasks.map((task) => `
+                      <option value="${escapeAttr(task.taskId)}"${task.taskId === selectedTask?.taskId ? " selected" : ""}>
+                        ${escapeHtml(`${task.title || task.taskId} · ${label(task.status)}`)}
+                      </option>
+                    `).join("")
+                    : `<option value="">No tasks available</option>`}
+                </select>
+              </label>
+              <label>
+                Parallel agents
+                <input name="parallelism" type="number" min="1" max="24" value="6">
+              </label>
+              <button class="button primary" type="submit"${canLaunchSelectedTask ? "" : " disabled"}>Launch session</button>
+            </form>
+            <p class="field-hint">${escapeHtml(launchHint)}</p>
+          </div>
+          <div class="surface compact-surface">
+            <div class="section-head">
+              <div>
+                <h2>Code sessions</h2>
+                <p class="section-copy">Local Codex conversations associated with this project root.</p>
+              </div>
+              <span class="pill active">
+                <strong>${escapeHtml(String(codeSessions.length))}</strong>
+                <span>Tracked</span>
+              </span>
+            </div>
+            ${renderCodeSessionList(codeSessions, {
+              emptyTitle: "No Code sessions",
+              emptyBody: "No matching local sessions.",
+            })}
+          </div>
+        </div>
+        ${state.sessionDetail ? renderSessionDetail(state.sessionDetail) : renderEmptyDetail("No session selected", "Choose a session from the left rail.")}
+      </section>
     </section>
   `;
 }
 
 function renderSessionDetail(session) {
   const selectedAgent = session.agents.find((agent) => agent.id === state.selectedAgentId) || null;
+  const totalAgents = session.agents?.length || 0;
+  const succeededAgents = session.succeededAgents || 0;
+  const failedAgents = session.failedAgents || 0;
+  const finishedAgents = succeededAgents + failedAgents;
+  const inFlightAgents = Math.max(0, totalAgents - finishedAgents);
+  const progressLabel = totalAgents ? `${Math.round((finishedAgents / totalAgents) * 100)}%` : "0%";
+  const activityTimestamp = session.completedAt || session.updatedAt || session.startedAt;
+
   return `
-    <div class="surface detail-pane">
-      <header class="detail-header">
-        <div>
-          <p class="eyebrow">Selected session</p>
+    <div class="surface detail-pane session-detail-pane">
+      <header class="detail-header session-detail-header">
+        <div class="session-heading">
+          <div class="eyebrow-row">
+            <p class="eyebrow">Selected session</p>
+            <span class="session-key mono">${escapeHtml(session.sessionId)}</span>
+          </div>
           <h2>${escapeHtml(session.task?.title || session.title || session.sessionId)}</h2>
-          <p class="path-copy mono">${escapeHtml(session.sessionId)}</p>
+          <p class="section-copy">${escapeHtml(session.task?.taskId || session.taskId || "Task")} · ${escapeHtml(activityTimestamp ? `${formatRelativeDate(activityTimestamp)} update` : "No recent update")}</p>
         </div>
-        ${badge(session.status)}
+        <div class="session-status-panel">
+          ${badge(session.status)}
+          <strong>${escapeHtml(progressLabel)}</strong>
+          <span>${escapeHtml(totalAgents ? `${finishedAgents}/${totalAgents} agents finished` : "Waiting for subagents")}</span>
+        </div>
       </header>
-      <div class="info-grid session-facts">
-        ${infoTile("Parallelism", String(session.parallelism || 0))}
-        ${infoTile("Batch size", String(session.batchSize || 0))}
-        ${infoTile("Succeeded", String(session.succeededAgents || 0))}
-        ${infoTile("Failed", String(session.failedAgents || 0))}
-        ${infoTile("Started", formatDate(session.startedAt))}
-        ${infoTile("Completed", formatDate(session.completedAt))}
-        ${infoTile("Session doc", session.paths?.docMd || "-")}
-        ${infoTile("Task", session.task?.taskId || session.taskId)}
+      <div class="session-scoreboard">
+        ${summaryStat("Parallelism", String(session.parallelism || 0), "Configured agent cap")}
+        ${summaryStat("Batch size", String(session.batchSize || 0), "Fresh launches per wave")}
+        ${summaryStat("Succeeded", String(succeededAgents), totalAgents ? `${Math.round((succeededAgents / totalAgents) * 100)}% of all agents` : "No completed agents yet", "positive")}
+        ${summaryStat("Attention", String(failedAgents), failedAgents ? "Failed agents need review" : (inFlightAgents ? `${inFlightAgents} still in flight` : "No failures recorded"), failedAgents ? "danger" : "")}
+      </div>
+      <div class="detail-card-grid">
+        ${detailCard("Started", formatDate(session.startedAt))}
+        ${detailCard("Completed", formatDate(session.completedAt))}
+        ${detailCard("Task", session.task?.taskId || session.taskId)}
+        ${detailCard("Session doc", session.paths?.docMd || "-", { mono: true, wide: true })}
       </div>
       <section class="detail-section">
         <div class="section-head">
           <div>
             <h3>Subagents</h3>
+            <p class="section-copy">Review the latest execution wave, then drill into a single subagent for branches, logs, and verification notes.</p>
+          </div>
+          <div class="pill-row compact">
+            <span class="pill ${succeededAgents ? "positive" : ""}">
+              <strong>${escapeHtml(String(succeededAgents))}</strong>
+              <span>Succeeded</span>
+            </span>
+            <span class="pill ${failedAgents ? "warning" : ""}">
+              <strong>${escapeHtml(String(failedAgents))}</strong>
+              <span>Failed</span>
+            </span>
+            <span class="pill ${inFlightAgents ? "active" : ""}">
+              <strong>${escapeHtml(String(inFlightAgents))}</strong>
+              <span>Running</span>
+            </span>
           </div>
         </div>
         ${renderAgentList(session.agents || [])}
@@ -838,6 +918,7 @@ function renderSessionDetail(session) {
         <div class="section-head">
           <div>
             <h3>Session documentation</h3>
+            <p class="section-copy">The generated session markdown remains the source of truth after orchestration finishes.</p>
           </div>
         </div>
         <pre class="markdown-preview">${escapeHtml(session.docContent || "")}</pre>
@@ -856,11 +937,11 @@ function renderAgentDetail(agent) {
         </div>
         ${badge(agent.status)}
       </div>
-      <div class="info-grid">
-        ${infoTile("Branch", agent.branchName || "-")}
-        ${infoTile("Worktree", agent.worktreePath || "-")}
-        ${infoTile("Base commit", agent.baseCommit || "-")}
-        ${infoTile("Integrated master", agent.mergedCommit || "-")}
+      <div class="detail-card-grid">
+        ${detailCard("Branch", agent.branchName || "-", { mono: true })}
+        ${detailCard("Worktree", agent.worktreePath || "-", { mono: true, wide: true })}
+        ${detailCard("Base commit", agent.baseCommit || "-", { mono: true })}
+        ${detailCard("Integrated master", agent.mergedCommit || "-", { mono: true })}
       </div>
       <div class="detail-split">
         <div class="content-block">
@@ -912,7 +993,6 @@ function renderCodeSession() {
               <h2>Session info</h2>
               <p class="path-copy mono">${escapeHtml(session.cwd || "No workspace path recorded.")}</p>
             </div>
-            ${badge("ready")}
           </div>
           <div class="info-grid">
             ${infoTile("Source", session.source || "-")}
@@ -1203,9 +1283,11 @@ function renderAgentList(agents) {
             </div>
             ${badge(agent.status)}
           </div>
+          <p class="list-description">${escapeHtml(excerpt(agent.summary || "No summary yet.", 150))}</p>
           <div class="meta-row">
             <span class="mono">${escapeHtml(agent.branchName || "-")}</span>
             <span>${escapeHtml(formatDate(agent.updatedAt || agent.completedAt || agent.startedAt))}</span>
+            <span>${escapeHtml(`${agent.changedFiles?.length || 0} changed files`)}</span>
           </div>
         </button>
       `).join("")}
@@ -1259,6 +1341,30 @@ function compactStat(labelText, value) {
       <strong>${escapeHtml(value)}</strong>
       <span>${escapeHtml(labelText)}</span>
     </span>
+  `;
+}
+
+function summaryStat(labelText, value, detailText, tone = "") {
+  return `
+    <div class="summary-stat ${escapeAttr(tone)}">
+      <span>${escapeHtml(labelText)}</span>
+      <strong>${escapeHtml(value || "-")}</strong>
+      <small>${escapeHtml(detailText || "")}</small>
+    </div>
+  `;
+}
+
+function detailCard(labelText, value, options = {}) {
+  const classes = [
+    "detail-card",
+    options.wide ? "wide" : "",
+  ].filter(Boolean).join(" ");
+
+  return `
+    <div class="${classes}">
+      <span>${escapeHtml(labelText)}</span>
+      <strong class="${options.mono ? "mono" : ""}">${escapeHtml(value || "-")}</strong>
+    </div>
   `;
 }
 
@@ -1335,8 +1441,10 @@ function topbarMeta() {
 
   return {
     kicker: currentProject()?.name || "Project sessions",
-    title: state.sessionDetail?.task?.title || state.sessionDetail?.title || "Sessions",
-    path: state.sessionDetail?.sessionId ? `Session ${state.sessionDetail.sessionId}` : state.health?.projectRoot,
+    title: "Session workbench",
+    path: state.sessionDetail?.sessionId
+      ? `${state.sessionDetail.task?.title || state.sessionDetail.taskId || state.sessionDetail.sessionId} · ${state.sessionDetail.sessionId}`
+      : state.health?.projectRoot,
   };
 }
 
