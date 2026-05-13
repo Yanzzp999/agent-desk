@@ -1,5 +1,7 @@
 # AgentDesk
 
+<img src="src/web/assets/agentdesk-icon.png" alt="AgentDesk logo" width="96">
+
 Standalone Ralph control plane for inspecting planner jobs and `ralph-run`
 execution state from a separate repository, with Codex CLI-compatible terminal
 and browser workflows.

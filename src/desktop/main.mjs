@@ -1,8 +1,12 @@
-import { app, BrowserWindow, Menu, shell } from "electron";
+import { app, BrowserWindow, Menu, nativeImage, shell } from "electron";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { createContext } from "../lib/control-plane.mjs";
 import { createControlPlaneServer } from "../server/server.mjs";
+
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const APP_ICON_PATH = path.resolve(MODULE_DIR, "../web/assets/agentdesk-icon.png");
 
 let mainWindow = null;
 let controlPlaneServer = null;
@@ -19,6 +23,7 @@ async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   await app.whenReady();
 
+  setApplicationIcon();
   Menu.setApplicationMenu(createApplicationMenu());
 
   const serverInfo = await startControlPlane(parsed);
@@ -74,6 +79,7 @@ async function createMainWindow(parsed) {
     minWidth: 980,
     minHeight: 680,
     title: "AgentDesk",
+    icon: APP_ICON_PATH,
     backgroundColor: "#f3f5f1",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
@@ -107,6 +113,13 @@ async function createMainWindow(parsed) {
 
   if (parsed.devtools) {
     mainWindow.webContents.openDevTools({ mode: "detach" });
+  }
+}
+
+function setApplicationIcon() {
+  const icon = nativeImage.createFromPath(APP_ICON_PATH);
+  if (!icon.isEmpty() && process.platform === "darwin") {
+    app.dock.setIcon(icon);
   }
 }
 
