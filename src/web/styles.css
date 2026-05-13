@@ -163,7 +163,7 @@ pre,
 
 .shell {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
   min-height: 100vh;
   background: var(--bg);
 }
@@ -171,8 +171,8 @@ pre,
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 54px 12px 18px;
+  gap: 10px;
+  padding: 48px 8px 12px;
   border-right: 1px solid var(--sidebar-border);
   background: linear-gradient(90deg, var(--sidebar) 0%, #252a27 100%);
   color: var(--text);
@@ -181,15 +181,15 @@ pre,
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 10px 6px;
+  gap: 9px;
+  padding: 0 10px 4px;
 }
 
 .mark {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.08);
@@ -205,34 +205,38 @@ pre,
 
 .brand strong {
   display: block;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .nav-subtitle {
   display: block;
   color: rgba(241, 241, 239, 0.48);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.35;
 }
 
 .sidebar-tools {
   display: grid;
-  gap: 10px;
+  gap: 4px;
 }
 
 .sidebar-action,
 .sidebar-view-button {
   display: grid;
-  gap: 3px;
+  gap: 2px;
   width: 100%;
-  min-height: 42px;
-  padding: 10px 12px;
+  min-height: 34px;
+  padding: 7px 10px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
   color: rgba(241, 241, 239, 0.78);
   text-align: left;
   cursor: pointer;
+}
+
+.sidebar-action {
+  align-items: center;
 }
 
 .sidebar-action:hover,
@@ -250,7 +254,7 @@ pre,
 
 .sidebar-view-button span,
 .sidebar-action {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -266,7 +270,7 @@ pre,
 .sidebar-section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 5px;
   min-height: 0;
 }
 
@@ -280,6 +284,7 @@ pre,
   justify-content: space-between;
   align-items: baseline;
   gap: 8px;
+  padding: 0 8px;
 }
 
 .sidebar-section-head span {
@@ -297,46 +302,84 @@ pre,
 
 .sidebar-projects {
   display: grid;
-  gap: 8px;
+  gap: 2px;
   align-content: start;
   align-items: start;
   min-height: 0;
   overflow: auto;
-  padding-right: 4px;
+  padding-right: 2px;
 }
 
 .project-tree {
   display: grid;
-  gap: 10px;
+  gap: 2px;
   align-content: start;
   align-self: start;
 }
 
 .project-group {
   display: grid;
-  gap: 6px;
+  gap: 1px;
   align-content: start;
 }
 
 .project-trigger-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 24px;
-  gap: 6px;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  gap: 2px;
+  align-items: center;
 }
 
 .project-trigger,
 .session-node {
   display: grid;
-  gap: 4px;
+  gap: 6px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 6px 8px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
   color: rgba(241, 241, 239, 0.74);
   text-align: left;
   cursor: pointer;
+}
+
+.project-trigger {
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  min-height: 30px;
+}
+
+.project-icon {
+  position: relative;
+  display: block;
+  width: 16px;
+  height: 14px;
+  opacity: 0.72;
+}
+
+.project-icon::before,
+.project-icon::after {
+  content: "";
+  position: absolute;
+  border: 1.4px solid currentColor;
+}
+
+.project-icon::before {
+  left: 1px;
+  top: 5px;
+  width: 14px;
+  height: 8px;
+  border-radius: 3px;
+}
+
+.project-icon::after {
+  left: 2px;
+  top: 2px;
+  width: 7px;
+  height: 4px;
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
 }
 
 .project-trigger:hover,
@@ -355,41 +398,56 @@ pre,
 
 .project-trigger-copy {
   display: grid;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
 
 .project-trigger-copy strong,
 .session-node-title {
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-trigger-copy small,
 .session-node-time {
   color: rgba(241, 241, 239, 0.42);
   font-size: 11px;
+  white-space: nowrap;
+}
+
+.project-trigger-copy small {
+  display: none;
 }
 
 .project-order-controls {
   display: grid;
-  grid-template-rows: repeat(2, minmax(0, 1fr));
-  gap: 4px;
+  align-content: center;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.project-trigger-row:hover .project-order-controls,
+.project-trigger-row:focus-within .project-order-controls {
+  opacity: 1;
 }
 
 .project-order-button {
   display: grid;
   place-items: center;
-  min-width: 24px;
-  min-height: 24px;
+  min-width: 18px;
+  min-height: 18px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  background: transparent;
   color: rgba(241, 241, 239, 0.58);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
 }
 
@@ -400,18 +458,19 @@ pre,
 
 .project-children {
   display: grid;
-  gap: 9px;
-  padding-left: 12px;
+  gap: 2px;
+  margin-left: 15px;
+  padding-left: 10px;
   border-left: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .project-child-group {
   display: grid;
-  gap: 4px;
+  gap: 1px;
 }
 
 .project-child-heading {
-  margin: 2px 0 1px;
+  margin: 6px 0 2px;
   color: rgba(241, 241, 239, 0.32);
   font-size: 10px;
   font-weight: 800;
@@ -422,9 +481,9 @@ pre,
 .session-node {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  min-height: 38px;
-  padding: 8px 10px;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 8px;
   background: transparent;
 }
 
@@ -435,12 +494,12 @@ pre,
 }
 
 .code-session-node {
-  background: rgba(138, 180, 248, 0.05);
+  background: transparent;
 }
 
 .sidebar-footer {
   margin-top: auto;
-  padding-top: 6px;
+  padding-top: 4px;
 }
 
 .sidebar-project-item span {

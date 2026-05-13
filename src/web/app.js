@@ -1089,7 +1089,9 @@ function renderSidebarProjectTree(projects) {
                 class="project-trigger ${isCurrent ? "selected" : ""}"
                 data-project-root="${escapeAttr(project.projectRoot)}"
                 type="button"
+                title="${escapeAttr(project.projectRoot)}"
               >
+                <span class="project-icon" aria-hidden="true"></span>
                 <div class="project-trigger-copy">
                   <strong>${escapeHtml(project.name || basename(project.projectRoot))}</strong>
                   <small>${escapeHtml(project.hasDeskState
@@ -1126,6 +1128,7 @@ function renderSidebarProjectTree(projects) {
                         class="session-node ${session.sessionId === state.selectedSessionId && state.view === "sessions" ? "selected" : ""}"
                         data-session-id="${escapeAttr(session.sessionId)}"
                         type="button"
+                        title="${escapeAttr(session.taskTitle || session.title || session.sessionId)}"
                       >
                         <span class="session-node-title">${escapeHtml(session.taskTitle || session.title || session.sessionId)}</span>
                         <span class="session-node-time">${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
@@ -1141,6 +1144,7 @@ function renderSidebarProjectTree(projects) {
                         class="session-node code-session-node ${session.id === state.selectedCodeSessionId && state.view === "code-session" ? "selected" : ""}"
                         data-code-session-id="${escapeAttr(session.id)}"
                         type="button"
+                        title="${escapeAttr(session.title || session.conversationId || session.id)}"
                       >
                         <span class="session-node-title">${escapeHtml(session.title || session.conversationId || session.id)}</span>
                         <span class="session-node-time">${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
