@@ -135,6 +135,8 @@ const I18N = Object.freeze({
     "copy.noChangedFiles": "The subagent has not produced repository changes yet.",
     "copy.codeSessionEmpty": "Choose a session from the current project rail.",
     "copy.continueSession": "Continue this session with the same local history.",
+    "copy.contextAutoCompact": "Codex automatically compacts background context",
+    "copy.contextWindowTokens": "Used {used} tokens of {total}",
     "copy.preferences": "Choose your language and color theme. Preferences are saved on this machine.",
     "copy.selectedWorkspaces": "Selected workspaces will appear here.",
     "copy.noLocalCodeSessions": "AgentDesk did not find local session files yet.",
@@ -181,8 +183,11 @@ const I18N = Object.freeze({
     "label.testsAndRisks": "Tests and risks",
     "label.source": "Source",
     "label.contextWindow": "Context window",
+    "label.backgroundContextWindow": "Background context window:",
+    "label.used": "used",
     "label.updated": "Updated",
     "label.totalTokens": "Total tokens",
+    "label.currentContextTokens": "Current context tokens",
     "label.workingDirectory": "Working directory",
     "label.conversationId": "Conversation ID",
     "label.messages": "Messages",
@@ -387,6 +392,8 @@ const I18N = Object.freeze({
     "copy.noChangedFiles": "这个子代理还没有产生仓库变更。",
     "copy.codeSessionEmpty": "从当前项目栏中选择一个会话。",
     "copy.continueSession": "沿用同一条本地会话历史继续对话。",
+    "copy.contextAutoCompact": "Codex 自动压缩其背景信息",
+    "copy.contextWindowTokens": "已用 {used} 标记，共 {total}",
     "copy.preferences": "选择语言和颜色主题。偏好会保存在本机。",
     "copy.selectedWorkspaces": "选过的工作区会显示在这里。",
     "copy.noLocalCodeSessions": "AgentDesk 还没有找到本地会话文件。",
@@ -433,8 +440,11 @@ const I18N = Object.freeze({
     "label.testsAndRisks": "测试与风险",
     "label.source": "来源",
     "label.contextWindow": "上下文窗口",
+    "label.backgroundContextWindow": "背景信息窗口：",
+    "label.used": "已用",
     "label.updated": "更新时间",
     "label.totalTokens": "总 token",
+    "label.currentContextTokens": "当前上下文 token",
     "label.workingDirectory": "工作目录",
     "label.conversationId": "对话 ID",
     "label.messages": "消息",
@@ -1461,7 +1471,7 @@ function renderSessions() {
   const selectedTaskSummary = selectedTask
     ? excerpt(selectedTask.brief || t("copy.selectedTaskDefault"), 150)
     : t("copy.selectedTaskFallback");
-  const tokenUsage = liveCodeSession?.tokenUsage?.total || null;
+  const tokenUsage = liveCodeSession?.tokenUsage?.last || liveCodeSession?.tokenUsage?.total || null;
   const tokenUsagePercent = contextWindowUsagePercent(liveCodeSession);
 
   return `
@@ -1576,7 +1586,7 @@ function renderSessions() {
             ? `
               <div class="token-hero">
                 <strong>${escapeHtml(formatTokenCount(tokenUsage?.totalTokens || 0))}</strong>
-                <span>${escapeHtml(t("label.totalTokens"))}</span>
+                <span>${escapeHtml(t("label.currentContextTokens"))}</span>
               </div>
               <div class="token-meter">
                 <div class="token-meter-fill" style="width: ${escapeAttr(String(tokenUsagePercent))}%"></div>
@@ -1769,27 +1779,14 @@ function renderCodeSession() {
   if (!session) {
     return renderEmptyDetail(t("empty.noCodeSessionSelected"), t("copy.codeSessionEmpty"));
   }
-  const totalTokens = session.tokenUsage?.total || {};
   const lastTokens = session.tokenUsage?.last || {};
   const usagePercent = contextWindowUsagePercent(session);
 
   return `
     <section class="workspace-layout compact-workspace">
       <div class="column-stack">
-        <div class="surface compact-surface">
-          <div class="section-head">
-            <div>
-              <h2>${escapeHtml(t("section.sessionInfo"))}</h2>
-              <p class="path-copy mono">${escapeHtml(session.cwd || t("empty.noWorkspacePath"))}</p>
-            </div>
-          </div>
-          <div class="info-grid">
-            ${infoTile(t("label.model"), session.model || "-")}
-            ${infoTile(t("label.reasoning"), session.effort || "-")}
-            ${infoTile(t("label.contextWindow"), formatTokenCount(session.contextWindow || 0))}
-            ${infoTile(t("label.updated"), formatDate(session.updatedAt))}
-            ${infoTile(t("label.totalTokens"), formatTokenCount(totalTokens.totalTokens || 0))}
-          </div>
+        <div class="codex-context-surface">
+          ${renderCodeSessionContextCard(session)}
         </div>
         <div class="surface compact-surface">
           <div class="section-head">
@@ -1840,6 +1837,42 @@ function renderCodeSession() {
         </section>
       </div>
     </section>
+  `;
+}
+
+function renderCodeSessionContextCard(session) {
+  const contextTokens = currentContextTokens(session);
+  const contextWindow = Number(session?.contextWindow || 0);
+  const usagePercent = contextWindowUsagePercent(session);
+  const modelLabel = compactModelLabel(session?.model || "gpt-5.5");
+  const reasoningLabel = reasoningCompactLabel(session?.effort || "");
+
+  return `
+    <div class="codex-context-card" aria-label="${escapeAttr(t("section.sessionInfo"))}">
+      <div class="codex-context-copy">
+        <span>${escapeHtml(t("label.backgroundContextWindow"))}</span>
+        <strong>${escapeHtml(`${usagePercent}% ${t("label.used")}`)}</strong>
+        <p>${escapeHtml(t("copy.contextWindowTokens", {
+          used: formatCompactTokenCount(contextTokens),
+          total: formatCompactTokenCount(contextWindow),
+        }))}</p>
+        <em>${escapeHtml(t("copy.contextAutoCompact"))}</em>
+      </div>
+      <div class="codex-context-meter" aria-hidden="true">
+        <span style="width: ${escapeAttr(String(usagePercent))}%"></span>
+      </div>
+      <div class="codex-context-controls">
+        <span class="context-activity-ring" aria-hidden="true"></span>
+        <span class="context-model-chip"><span aria-hidden="true">⚡</span>${escapeHtml(modelLabel)} ${escapeHtml(reasoningLabel)}</span>
+        <span class="context-updated-chip">${escapeHtml(formatRelativeDate(session?.tokenUsage?.updatedAt || session?.updatedAt))}</span>
+      </div>
+    </div>
+    <div class="codex-context-mini-grid">
+      ${miniContextStat(t("label.lastTurnTokens"), formatTokenCount(session?.tokenUsage?.last?.totalTokens || 0))}
+      ${miniContextStat(t("label.totalTokens"), formatTokenCount(session?.tokenUsage?.total?.totalTokens || 0))}
+      ${miniContextStat(t("label.messages"), String(session?.messageCount || 0))}
+      ${miniContextStat(t("label.updated"), formatDate(session?.updatedAt))}
+    </div>
   `;
 }
 
@@ -2302,6 +2335,15 @@ function infoTile(labelText, value) {
   `;
 }
 
+function miniContextStat(labelText, value) {
+  return `
+    <div class="mini-context-stat">
+      <span>${escapeHtml(labelText)}</span>
+      <strong class="mono">${escapeHtml(value || "-")}</strong>
+    </div>
+  `;
+}
+
 function renderEmptyDetail(titleText, bodyText) {
   return `
     <div class="surface detail-pane empty-pane">
@@ -2462,12 +2504,21 @@ function currentProjectCodeSession() {
 }
 
 function contextWindowUsagePercent(session) {
-  const total = Number(session?.tokenUsage?.total?.totalTokens || 0);
+  const total = currentContextTokens(session);
   const windowSize = Number(session?.contextWindow || 0);
   if (!windowSize || !Number.isFinite(windowSize) || windowSize <= 0) {
     return 0;
   }
   return Math.max(0, Math.min(100, Math.round((total / windowSize) * 100)));
+}
+
+function currentContextTokens(session) {
+  const last = Number(session?.tokenUsage?.last?.totalTokens || 0);
+  if (Number.isFinite(last) && last > 0) {
+    return last;
+  }
+  const total = Number(session?.tokenUsage?.total?.totalTokens || 0);
+  return Number.isFinite(total) ? total : 0;
 }
 
 function formatTokenCount(value) {
@@ -2476,6 +2527,30 @@ function formatTokenCount(value) {
     return "-";
   }
   return new Intl.NumberFormat(intlLocale()).format(number);
+}
+
+function formatCompactTokenCount(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) {
+    return "-";
+  }
+  if (Math.abs(number) >= 1_000_000) {
+    return `${trimTrailingZero(number / 1_000_000, number >= 10_000_000 ? 0 : 1)}m`;
+  }
+  if (Math.abs(number) >= 1_000) {
+    return `${Math.round(number / 1_000)}k`;
+  }
+  return new Intl.NumberFormat(intlLocale()).format(Math.round(number));
+}
+
+function trimTrailingZero(value, fractionDigits) {
+  return value.toFixed(fractionDigits).replace(/\.0$/, "");
+}
+
+function compactModelLabel(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/gpt[- ]?(\d+(?:\.\d+)?)/i);
+  return match ? match[1] : text;
 }
 
 function topbarMeta() {

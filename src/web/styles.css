@@ -1769,6 +1769,138 @@ textarea {
   padding-top: 2px;
 }
 
+.codex-context-surface {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+  background: #2a2a2a;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
+}
+
+.codex-context-card {
+  display: grid;
+  gap: 14px;
+}
+
+.codex-context-copy {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  text-align: center;
+}
+
+.codex-context-copy span {
+  color: rgba(241, 241, 239, 0.52);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.codex-context-copy strong {
+  color: rgba(241, 241, 239, 0.6);
+  font-size: 23px;
+  font-weight: 560;
+  line-height: 1.12;
+}
+
+.codex-context-copy p {
+  margin: 0;
+  color: #f7f7f4;
+  font-size: 20px;
+  font-weight: 520;
+  line-height: 1.25;
+}
+
+.codex-context-copy em {
+  max-width: 15ch;
+  color: #ffffff;
+  font-size: 18px;
+  font-style: normal;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.codex-context-meter {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.codex-context-meter span {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  border-radius: inherit;
+  background: rgba(241, 241, 239, 0.72);
+}
+
+.codex-context-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-width: 0;
+  color: rgba(241, 241, 239, 0.62);
+}
+
+.context-activity-ring {
+  width: 20px;
+  height: 20px;
+  border: 4px solid rgba(241, 241, 239, 0.24);
+  border-top-color: rgba(241, 241, 239, 0.72);
+  border-radius: 50%;
+}
+
+.context-model-chip,
+.context-updated-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.context-model-chip {
+  color: rgba(241, 241, 239, 0.78);
+}
+
+.context-updated-chip {
+  color: rgba(241, 241, 239, 0.48);
+  font-size: 12px;
+}
+
+.codex-context-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mini-context-stat {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mini-context-stat span {
+  color: rgba(241, 241, 239, 0.46);
+  font-size: 11px;
+}
+
+.mini-context-stat strong {
+  color: rgba(241, 241, 239, 0.84);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .conversation-thread {
   display: grid;
   gap: 14px;
@@ -2239,6 +2371,44 @@ pre {
 :root[data-theme="light"] .codex-send-button {
   background: #1d1e1b;
   color: #f8f7f3;
+}
+
+:root[data-theme="light"] .codex-context-surface {
+  border-color: rgba(33, 34, 31, 0.12);
+  background: #ece9e2;
+  box-shadow: 0 24px 60px rgba(45, 39, 27, 0.14);
+}
+
+:root[data-theme="light"] .codex-context-copy span,
+:root[data-theme="light"] .codex-context-copy strong,
+:root[data-theme="light"] .context-updated-chip {
+  color: rgba(24, 25, 22, 0.54);
+}
+
+:root[data-theme="light"] .codex-context-copy p,
+:root[data-theme="light"] .codex-context-copy em,
+:root[data-theme="light"] .context-model-chip,
+:root[data-theme="light"] .mini-context-stat strong {
+  color: rgba(24, 25, 22, 0.88);
+}
+
+:root[data-theme="light"] .codex-context-meter,
+:root[data-theme="light"] .mini-context-stat {
+  border-color: rgba(33, 34, 31, 0.1);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+:root[data-theme="light"] .codex-context-meter span {
+  background: rgba(24, 25, 22, 0.62);
+}
+
+:root[data-theme="light"] .context-activity-ring {
+  border-color: rgba(24, 25, 22, 0.18);
+  border-top-color: rgba(24, 25, 22, 0.64);
+}
+
+:root[data-theme="light"] .mini-context-stat span {
+  color: rgba(24, 25, 22, 0.48);
 }
 
 :root[data-theme="light"] .context-pill strong {
