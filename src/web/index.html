@@ -18,20 +18,22 @@
             <span class="nav-subtitle">Project Orchestrator</span>
           </div>
         </div>
-        <section id="sidebar-summary" class="sidebar-summary" aria-label="Current workspace"></section>
-        <nav class="nav" aria-label="Primary">
-          <button data-view="sessions" class="active" type="button"><span>Sessions</span><small>Project and run history</small></button>
-          <button data-view="tasks" type="button"><span>Tasks</span><small>Generate and launch</small></button>
-          <button data-view="overview" type="button"><span>Overview</span><small>Workspace health</small></button>
-          <button data-view="settings" type="button"><span>Settings</span><small>Runtime and paths</small></button>
-        </nav>
-        <section class="sidebar-section" aria-label="Recent projects">
+        <div class="sidebar-tools">
+          <button class="sidebar-action" id="open-project-button" type="button">Open project</button>
+        </div>
+        <section class="sidebar-section sidebar-projects-section" aria-label="Projects">
           <div class="sidebar-section-head">
             <span>Projects</span>
-            <small>Recent workspaces</small>
+            <small>Projects and sessions</small>
           </div>
           <div id="sidebar-projects" class="sidebar-projects"></div>
         </section>
+        <div class="sidebar-footer">
+          <button class="sidebar-view-button" data-sidebar-view="settings" type="button">
+            <span>Settings</span>
+            <small>Runtime and paths</small>
+          </button>
+        </div>
       </aside>
       <main class="main">
         <header class="topbar">

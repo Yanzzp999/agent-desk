@@ -20,15 +20,17 @@ const title = document.querySelector("#page-title");
 const pageKicker = document.querySelector("#page-kicker");
 const projectRoot = document.querySelector("#project-root");
 const connection = document.querySelector("#connection-state");
-const sidebarSummary = document.querySelector("#sidebar-summary");
 const sidebarProjects = document.querySelector("#sidebar-projects");
 
 document.querySelector("#refresh-button").addEventListener("click", () => refreshAll({ forceSelections: true }));
-document.querySelectorAll(".nav button").forEach((button) => {
+document.querySelector("#open-project-button").addEventListener("click", () => {
+  state.view = "picker";
+  render();
+});
+document.querySelectorAll("[data-sidebar-view]").forEach((button) => {
   button.addEventListener("click", async () => {
-    state.view = button.dataset.view;
+    state.view = button.dataset.sidebarView;
     render();
-    await refreshAll();
   });
 });
 
@@ -153,6 +155,12 @@ async function selectProject(projectPath) {
   const trimmed = String(projectPath || "").trim();
   if (!trimmed) {
     state.message = "Project path is required.";
+    render();
+    return;
+  }
+
+  if (trimmed === state.health?.projectRoot) {
+    state.view = "sessions";
     render();
     return;
   }
@@ -306,19 +314,15 @@ function setConnectionState(nextState, labelText) {
 }
 
 function render() {
-  const meta = viewMeta(state.view);
+  const meta = topbarMeta();
   title.textContent = meta.title;
-  pageKicker.textContent = state.health?.projectRoot ? meta.kicker : "Choose a workspace";
-  projectRoot.textContent = state.health?.projectRoot || "Choose a project root to unlock tasks and sessions.";
-  projectRoot.title = state.health?.projectRoot || "";
-
-  document.querySelectorAll(".nav button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === state.view);
-  });
+  pageKicker.textContent = meta.kicker;
+  projectRoot.textContent = meta.path;
+  projectRoot.title = meta.path;
 
   renderSidebar();
 
-  if (!state.health?.projectRoot) {
+  if (state.view === "picker" || (!state.health?.projectRoot && state.view !== "settings")) {
     app.innerHTML = [renderMessage(), renderProjectPicker()].filter(Boolean).join("");
     return;
   }
@@ -334,56 +338,56 @@ function render() {
 }
 
 function renderSidebar() {
-  sidebarSummary.innerHTML = renderSidebarSummary();
-  sidebarProjects.innerHTML = renderSidebarProjectList(state.projects?.items || []);
+  sidebarProjects.innerHTML = renderSidebarProjectTree(state.projects?.items || []);
+  document.querySelectorAll("[data-sidebar-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.sidebarView === state.view);
+  });
 }
 
-function renderSidebarSummary() {
-  const project = currentProject();
-  if (!project) {
-    return `
-      <div class="sidebar-card ghost">
-        <span class="sidebar-label">Workspace</span>
-        <strong>No project selected</strong>
-        <p>Pick a repository to turn AgentDesk into a living session desk.</p>
-      </div>
-    `;
+function renderSidebarProjectTree(projects) {
+  if (!projects.length) {
+    return `<p class="sidebar-empty">Open a project once and its sessions will stay here.</p>`;
   }
 
+  const currentRoot = state.health?.projectRoot || "";
   return `
-    <div class="sidebar-card">
-      <span class="sidebar-label">Current workspace</span>
-      <strong>${escapeHtml(project.name || project.projectRoot)}</strong>
-      <p class="sidebar-path mono">${escapeHtml(project.projectRoot)}</p>
-      <div class="sidebar-stats">
-        <div>
-          <span>Tasks</span>
-          <strong>${escapeHtml(String(state.health?.counts?.tasks || project.taskCount || 0))}</strong>
-        </div>
-        <div>
-          <span>Sessions</span>
-          <strong>${escapeHtml(String(state.health?.counts?.sessions || project.sessionCount || 0))}</strong>
-        </div>
-      </div>
+    <div class="project-tree">
+      ${projects.slice(0, 12).map((project) => {
+        const isCurrent = project.projectRoot === currentRoot;
+        const childSessions = isCurrent ? state.sessions.slice(0, 12) : [];
+        return `
+          <section class="project-group ${isCurrent ? "selected" : ""}">
+            <button
+              class="project-trigger ${isCurrent ? "selected" : ""}"
+              data-project-root="${escapeAttr(project.projectRoot)}"
+              type="button"
+            >
+              <div class="project-trigger-copy">
+                <strong>${escapeHtml(project.name || basename(project.projectRoot))}</strong>
+                <small>${escapeHtml(project.hasDeskState ? `${project.taskCount || 0} tasks · ${project.sessionCount || 0} sessions` : "No AgentDesk state yet")}</small>
+              </div>
+            </button>
+            ${isCurrent ? `
+              <div class="project-children">
+                ${childSessions.length
+                  ? childSessions.map((session) => `
+                    <button
+                      class="session-node ${session.sessionId === state.selectedSessionId && state.view === "sessions" ? "selected" : ""}"
+                      data-session-id="${escapeAttr(session.sessionId)}"
+                      type="button"
+                    >
+                      <span class="session-node-title">${escapeHtml(session.taskTitle || session.title || session.sessionId)}</span>
+                      <span class="session-node-time">${escapeHtml(formatRelativeDate(session.updatedAt))}</span>
+                    </button>
+                  `).join("")
+                  : `<p class="sidebar-subempty">No sessions yet</p>`}
+              </div>
+            ` : ""}
+          </section>
+        `;
+      }).join("")}
     </div>
   `;
-}
-
-function renderSidebarProjectList(projects) {
-  if (!projects.length) {
-    return `<p class="sidebar-empty">Recent projects will stay here once you open one.</p>`;
-  }
-
-  return projects.slice(0, 6).map((project) => `
-    <button
-      class="sidebar-project-item ${project.projectRoot === state.health?.projectRoot ? "selected" : ""}"
-      data-project-root="${escapeAttr(project.projectRoot)}"
-      type="button"
-    >
-      <span>${escapeHtml(project.name || basename(project.projectRoot))}</span>
-      <small>${escapeHtml(project.hasDeskState ? `${project.taskCount || 0} tasks · ${project.sessionCount || 0} sessions` : "No AgentDesk state yet")}</small>
-    </button>
-  `).join("");
 }
 
 function renderMessage() {
@@ -629,14 +633,14 @@ function renderSessions() {
   const canLaunchSelectedTask = selectedTask ? isTaskStartable(selectedTask) : false;
 
   return `
-    <section class="session-studio">
+    <section class="workspace-layout">
       <div class="column-stack">
         <div class="surface">
           <div class="section-head">
             <div>
-              <p class="eyebrow">Project workspace</p>
+              <p class="eyebrow">Project</p>
               <h2>${escapeHtml(currentProject()?.name || "Project")}</h2>
-              <p class="section-copy">Keep project switching, task selection, and session launch controls in the same lane.</p>
+              <p class="section-copy">Pick sessions from the left rail, then use this column to prepare the next run.</p>
             </div>
           </div>
           <div class="info-grid">
@@ -644,23 +648,6 @@ function renderSessions() {
             ${infoTile("Tasks", String(state.health?.counts?.tasks || 0))}
             ${infoTile("Sessions", String(state.health?.counts?.sessions || 0))}
             ${infoTile("Worktrees", state.health?.worktreesRoot || "-")}
-          </div>
-          <form id="project-form" class="stack-form compact-form">
-            <label>
-              Switch project path
-              <input name="projectRoot" value="${escapeAttr(state.health?.projectRoot || "")}" placeholder="/absolute/path/to/project" autocomplete="off">
-            </label>
-            <button class="button" type="submit">Switch project</button>
-          </form>
-          <div class="subsection">
-            <div class="subsection-head">
-              <strong>Recent projects</strong>
-              <span>${escapeHtml(String((state.projects?.items || []).length))}</span>
-            </div>
-            ${renderProjectList(state.projects?.items || [], {
-              emptyTitle: "No recent projects",
-              emptyBody: "Once you select a workspace it will stay here.",
-            })}
           </div>
         </div>
         <div class="surface">
@@ -707,25 +694,7 @@ function renderSessions() {
           </div>
         </div>
       </div>
-      <div class="surface sessions-rail">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Timeline</p>
-            <h2>Sessions</h2>
-            <p class="section-copy">Browse execution runs the way you would browse conversations: newest first, details on the right.</p>
-          </div>
-          <div class="pill-row compact">
-            <span class="pill"><span>Total</span><strong>${escapeHtml(String(state.sessions.length))}</strong></span>
-            <span class="pill positive"><span>Succeeded</span><strong>${escapeHtml(String(countStatuses(state.sessions, ["succeeded"])))}</strong></span>
-            <span class="pill warning"><span>Active</span><strong>${escapeHtml(String(countStatuses(state.sessions, ["queued", "running"])))}</strong></span>
-          </div>
-        </div>
-        ${renderSessionList(state.sessions, {
-          emptyTitle: "No sessions",
-          emptyBody: "Launch a session from the task queue to start building run history.",
-        })}
-      </div>
-      ${state.sessionDetail ? renderSessionDetail(state.sessionDetail) : renderEmptyDetail("No session selected", "Choose a session to inspect subagent results, logs, and session documentation.")}
+      ${state.sessionDetail ? renderSessionDetail(state.sessionDetail) : renderEmptyDetail("No session selected", "Choose a session from the left project rail to inspect subagent results, logs, and session documentation.")}
     </section>
   `;
 }
@@ -1103,14 +1072,36 @@ function label(value) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function viewMeta(view) {
-  const titles = {
-    overview: { title: "Overview", kicker: "Workspace health" },
-    tasks: { title: "Tasks", kicker: "Generate and reuse planning docs" },
-    sessions: { title: "Sessions", kicker: "Project + run history" },
-    settings: { title: "Settings", kicker: "Runtime defaults and roots" },
+function topbarMeta() {
+  if (state.view === "picker" || !state.health?.projectRoot) {
+    return {
+      kicker: "Projects",
+      title: "Open project",
+      path: "Choose a local repository to start managing tasks and sessions.",
+    };
+  }
+
+  if (state.view === "settings") {
+    return {
+      kicker: "Settings",
+      title: "Settings",
+      path: state.health?.projectRoot || "Runtime roots and project switching.",
+    };
+  }
+
+  if (state.view === "tasks") {
+    return {
+      kicker: currentProject()?.name || "Task workspace",
+      title: state.taskDetail?.title || "Tasks",
+      path: state.taskDetail?.taskId ? `Task ${state.taskDetail.taskId}` : (state.health?.projectRoot || "Task workspace"),
+    };
+  }
+
+  return {
+    kicker: currentProject()?.name || "Project sessions",
+    title: state.sessionDetail?.task?.title || state.sessionDetail?.title || "Sessions",
+    path: state.sessionDetail?.sessionId ? `Session ${state.sessionDetail.sessionId}` : state.health?.projectRoot,
   };
-  return titles[view] || titles.overview;
 }
 
 function currentProject() {
@@ -1161,6 +1152,29 @@ function formatDate(value) {
     return String(value);
   }
   return date.toLocaleString();
+}
+
+function formatRelativeDate(value) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  const diffMs = date.getTime() - Date.now();
+  const absMs = Math.abs(diffMs);
+  const ranges = [
+    { limit: 60_000, unit: "second", size: 1000 },
+    { limit: 3_600_000, unit: "minute", size: 60_000 },
+    { limit: 86_400_000, unit: "hour", size: 3_600_000 },
+    { limit: 604_800_000, unit: "day", size: 86_400_000 },
+    { limit: 2_592_000_000, unit: "week", size: 604_800_000 },
+    { limit: 31_536_000_000, unit: "month", size: 2_592_000_000 },
+  ];
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const match = ranges.find((range) => absMs < range.limit) || { unit: "year", size: 31_536_000_000 };
+  return formatter.format(Math.round(diffMs / match.size), match.unit);
 }
 
 async function api(pathname, options = {}) {
