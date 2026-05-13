@@ -793,56 +793,32 @@ function renderSessions() {
   const liveCodeSession = currentProjectCodeSession();
   const composerModel = findRuntimeModel(state.sessionComposer.model);
   const reasoningChoices = reasoningChoicesForModel(state.sessionComposer.model);
-  const readyTasks = countStatuses(state.tasks, ["ready", "running", "succeeded", "failed"]);
-  const activeSessions = countStatuses(state.sessions, ["queued", "running"]);
   const selectedTaskTitle = selectedTask?.title || selectedTask?.taskId || "No task selected";
   const selectedTaskSummary = selectedTask
     ? excerpt(selectedTask.brief || "Task markdown is ready for launch and subagent orchestration.", 150)
     : "Generate a task.md first, then launch a session from a reusable planning document.";
-  const launchHint = selectedTask
-    ? `${selectedTask.title || selectedTask.taskId}${canLaunchSelectedTask ? " is ready to launch." : " is not ready yet."}`
-    : "Generate a task first to enable session launch.";
   const tokenUsage = liveCodeSession?.tokenUsage?.total || null;
   const tokenUsagePercent = contextWindowUsagePercent(liveCodeSession);
 
   return `
     <section class="codex-session-workbench">
-      <div class="surface codex-composer-shell">
-        <div class="composer-shell-header">
-          <div>
-            <p class="eyebrow">Launch composer</p>
-            <h2>${escapeHtml(project?.name || "Project workspace")}</h2>
-            <p class="section-copy">Start from one reusable task, add run-specific context, then launch with the Codex model and reasoning profile you want.</p>
-          </div>
-          <div class="composer-status-row">
-            ${composerChip("Tasks", String(state.health?.counts?.tasks || 0))}
-            ${composerChip("Ready", String(readyTasks))}
-            ${composerChip("Runs", String(state.health?.counts?.sessions || 0))}
-            ${composerChip("Active", String(activeSessions), activeSessions ? "active" : "")}
-          </div>
+      <div class="codex-prompt-stage">
+        <div class="prompt-title-block">
+          <p class="eyebrow">AgentDesk</p>
+          <h2>What should ${escapeHtml(project?.name || "this project")} run next?</h2>
         </div>
-        <div class="composer-shell-grid">
-          <form id="session-form" class="codex-composer">
-            <div class="task-focus composer-task-focus ${canLaunchSelectedTask ? "launchable" : "waiting"}">
-              <div class="task-focus-head">
-                <span>Selected task</span>
-                ${selectedTask ? badge(selectedTask.status) : `<span class="badge">No Task</span>`}
-              </div>
+        <form id="session-form" class="codex-prompt-composer">
+          <div class="prompt-task-strip ${canLaunchSelectedTask ? "launchable" : "waiting"}">
+            <div class="prompt-task-copy">
+              <span>Selected task</span>
               <strong>${escapeHtml(selectedTaskTitle)}</strong>
               <p>${escapeHtml(selectedTaskSummary)}</p>
             </div>
-            <label class="composer-textarea-label">
-              Launch context
-              <textarea
-                class="composer-input"
-                name="launchPrompt"
-                placeholder="Add integration notes, constraints, acceptance nuances, or repo-specific guidance for this run."
-              >${escapeHtml(state.sessionComposer.launchPrompt || "")}</textarea>
-            </label>
-            <div class="composer-control-grid">
-              <label>
-                Task
-                <select name="taskId">
+            <div class="prompt-task-actions">
+              ${selectedTask ? badge(selectedTask.status) : `<span class="badge">No Task</span>`}
+              <label class="task-menu">
+                <span>Task</span>
+                <select name="taskId" aria-label="Task">
                   ${state.tasks.length
                     ? state.tasks.map((task) => `
                       <option value="${escapeAttr(task.taskId)}"${task.taskId === selectedTask?.taskId ? " selected" : ""}>
@@ -852,9 +828,22 @@ function renderSessions() {
                     : `<option value="">No tasks available</option>`}
                 </select>
               </label>
-              <label>
-                Model
-                <select name="model">
+            </div>
+          </div>
+          <label class="prompt-input-label">
+            <span>Launch context</span>
+            <textarea
+              class="composer-input"
+              name="launchPrompt"
+              placeholder="Ask AgentDesk to launch this task with any repo-specific notes, constraints, or acceptance details."
+            >${escapeHtml(state.sessionComposer.launchPrompt || "")}</textarea>
+          </label>
+          <div class="prompt-toolbar">
+            <button class="prompt-tool-button" type="button" title="Add context" aria-label="Add context">+</button>
+            <div class="prompt-picker-cluster">
+              <label class="codex-picker">
+                <span>Model</span>
+                <select name="model" aria-label="Model">
                   ${runtimeModelChoices().map((model) => `
                     <option value="${escapeAttr(model.value)}"${model.value === state.sessionComposer.model ? " selected" : ""}>
                       ${escapeHtml(model.label || model.value)}
@@ -862,81 +851,84 @@ function renderSessions() {
                   `).join("")}
                 </select>
               </label>
-              <label>
-                Thinking depth
-                <select name="reasoning">
-                  ${reasoningChoices.map((entry) => `
-                    <option value="${escapeAttr(entry.value || entry.effort || "")}"${(entry.value || entry.effort) === state.sessionComposer.reasoning ? " selected" : ""}>
-                      ${escapeHtml(label(entry.label || entry.value || entry.effort || ""))}
+              <label class="codex-picker reasoning-picker">
+                <span>Thinking</span>
+                <select name="reasoning" aria-label="Thinking depth">
+                  ${reasoningChoices.map((entry) => {
+                    const value = entry.value || entry.effort || "";
+                    return `
+                    <option value="${escapeAttr(value)}"${value === state.sessionComposer.reasoning ? " selected" : ""}>
+                      ${escapeHtml(reasoningDisplayLabel(entry.label || value))}
                     </option>
-                  `).join("")}
+                  `;
+                  }).join("")}
                 </select>
               </label>
-              <label>
-                Parallel agents
-                <input name="parallelism" type="number" min="1" max="24" value="${escapeAttr(String(state.sessionComposer.parallelism || 6))}">
+              <label class="codex-picker compact-number-picker">
+                <span>Agents</span>
+                <input name="parallelism" aria-label="Parallel agents" type="number" min="1" max="24" value="${escapeAttr(String(state.sessionComposer.parallelism || 6))}">
               </label>
+              <span class="codex-static-pill">fast</span>
             </div>
-            <div class="composer-footer">
-              <div class="composer-footer-copy">
-                <p class="field-hint">${escapeHtml(launchHint)}</p>
-                <div class="pill-row">
-                  ${renderRuntimeCapability("Model", "enabled", composerModel?.label || state.sessionComposer.model || "gpt-5.5")}
-                  ${renderRuntimeCapability("Reasoning", "enabled", state.sessionComposer.reasoning || "xhigh")}
-                  ${renderRuntimeCapability("Tier", "enabled", "fast")}
-                  ${renderRuntimeCapability("Batch", "enabled", "6")}
-                </div>
-              </div>
-              <button class="button primary composer-submit" type="submit"${canLaunchSelectedTask ? "" : " disabled"}>Launch session</button>
-            </div>
-          </form>
-          <div class="composer-sidepanels">
-            <div class="surface composer-sidecard">
-              <div class="section-head">
-                <div>
-                  <h3>Context stack</h3>
-                  <p class="section-copy">The launch will combine your project root, selected task markdown, and any extra composer notes.</p>
-                </div>
-              </div>
-              <div class="context-stack">
-                ${contextResource("Project root", state.health?.projectRoot || "-", { mono: true })}
-                ${contextResource("task.md", selectedTask?.paths?.taskMd || "-", { mono: true })}
-                ${contextResource("Task brief", selectedTaskSummary)}
-                ${liveCodeSession
-                  ? contextResource("Latest Codex prompt", liveCodeSession.prompts?.[0] || liveCodeSession.title || "No prompt preview")
-                  : contextResource("Latest Codex prompt", "No local Codex session matched this project root yet.")}
-              </div>
-            </div>
-            <div class="surface composer-sidecard token-usage-card">
-              <div class="section-head">
-                <div>
-                  <h3>Current session usage</h3>
-                  <p class="section-copy">Live token telemetry comes from the latest local Codex conversation in this project.</p>
-                </div>
-              </div>
-              ${liveCodeSession
-                ? `
-                  <div class="token-hero">
-                    <strong>${escapeHtml(formatTokenCount(tokenUsage?.totalTokens || 0))}</strong>
-                    <span>Total tokens</span>
-                  </div>
-                  <div class="token-meter">
-                    <div class="token-meter-fill" style="width: ${escapeAttr(String(tokenUsagePercent))}%"></div>
-                  </div>
-                  <div class="token-meta-row">
-                    <span>${escapeHtml(`${tokenUsagePercent}% of ${formatTokenCount(liveCodeSession.contextWindow || 0)} context`)}</span>
-                    <span>${escapeHtml(formatRelativeDate(liveCodeSession.tokenUsage?.updatedAt || liveCodeSession.updatedAt))}</span>
-                  </div>
-                  <div class="token-grid">
-                    ${tokenStat("Input", tokenUsage?.inputTokens || 0)}
-                    ${tokenStat("Cached", tokenUsage?.cachedInputTokens || 0)}
-                    ${tokenStat("Output", tokenUsage?.outputTokens || 0)}
-                    ${tokenStat("Reasoning", tokenUsage?.reasoningOutputTokens || 0)}
-                  </div>
-                `
-                : emptyState("No live telemetry", "Start or reopen a local Codex session in this project to show context window and token usage here.")}
+            <button class="codex-send-button" type="submit" title="Launch session" aria-label="Launch session"${canLaunchSelectedTask ? "" : " disabled"}>↑</button>
+          </div>
+        </form>
+        <div class="prompt-context-bar">
+          ${contextPill(project?.name || "Project", basename(state.health?.projectRoot || "workspace"))}
+          ${contextPill("Mode", "local")}
+          ${contextPill("Branch", "master")}
+          ${contextPill("Model", `${composerModel?.label || state.sessionComposer.model || "GPT-5.5"} · ${reasoningCompactLabel(state.sessionComposer.reasoning || "xhigh")}`)}
+        </div>
+        <div class="prompt-suggestions">
+          <button type="button" data-session-id="${escapeAttr(state.selectedSessionId || "")}"${state.selectedSessionId ? "" : " disabled"}>Review the latest AgentDesk run</button>
+          <button type="button" data-code-session-id="${escapeAttr(liveCodeSession?.id || "")}"${liveCodeSession?.id ? "" : " disabled"}>Open the matching Codex conversation</button>
+        </div>
+      </div>
+      <div class="composer-shell-grid">
+        <div class="composer-sidecard">
+          <div class="section-head">
+            <div>
+              <h3>Context stack</h3>
+              <p class="section-copy">The launch combines the project root, selected task markdown, and extra context.</p>
             </div>
           </div>
+          <div class="context-stack">
+            ${contextResource("Project root", state.health?.projectRoot || "-", { mono: true })}
+            ${contextResource("task.md", selectedTask?.paths?.taskMd || "-", { mono: true })}
+            ${contextResource("Task brief", selectedTaskSummary)}
+            ${liveCodeSession
+              ? contextResource("Latest Codex prompt", liveCodeSession.prompts?.[0] || liveCodeSession.title || "No prompt preview")
+              : contextResource("Latest Codex prompt", "No local Codex session matched this project root yet.")}
+          </div>
+        </div>
+        <div class="composer-sidecard token-usage-card">
+          <div class="section-head">
+            <div>
+              <h3>Current session usage</h3>
+              <p class="section-copy">Live token telemetry from the latest local Codex conversation.</p>
+            </div>
+          </div>
+          ${liveCodeSession
+            ? `
+              <div class="token-hero">
+                <strong>${escapeHtml(formatTokenCount(tokenUsage?.totalTokens || 0))}</strong>
+                <span>Total tokens</span>
+              </div>
+              <div class="token-meter">
+                <div class="token-meter-fill" style="width: ${escapeAttr(String(tokenUsagePercent))}%"></div>
+              </div>
+              <div class="token-meta-row">
+                <span>${escapeHtml(`${tokenUsagePercent}% of ${formatTokenCount(liveCodeSession.contextWindow || 0)} context`)}</span>
+                <span>${escapeHtml(formatRelativeDate(liveCodeSession.tokenUsage?.updatedAt || liveCodeSession.updatedAt))}</span>
+              </div>
+              <div class="token-grid">
+                ${tokenStat("Input", tokenUsage?.inputTokens || 0)}
+                ${tokenStat("Cached", tokenUsage?.cachedInputTokens || 0)}
+                ${tokenStat("Output", tokenUsage?.outputTokens || 0)}
+                ${tokenStat("Reasoning", tokenUsage?.reasoningOutputTokens || 0)}
+              </div>
+            `
+            : emptyState("No live telemetry", "Start or reopen a local Codex session in this project to show context window and token usage here.")}
         </div>
       </div>
       <div class="session-workbench-grid">
@@ -1452,6 +1444,15 @@ function renderRuntimeCapability(labelText, stateText, description) {
   `;
 }
 
+function contextPill(labelText, value) {
+  return `
+    <span class="context-pill">
+      <strong>${escapeHtml(labelText)}</strong>
+      <span>${escapeHtml(value || "-")}</span>
+    </span>
+  `;
+}
+
 function renderMiniPoint(titleText, bodyText) {
   return `
     <div class="mini-point">
@@ -1516,15 +1517,6 @@ function detailCard(labelText, value, options = {}) {
   `;
 }
 
-function composerChip(labelText, value, tone = "") {
-  return `
-    <span class="composer-chip ${escapeAttr(tone)}">
-      <strong>${escapeHtml(value || "-")}</strong>
-      <span>${escapeHtml(labelText)}</span>
-    </span>
-  `;
-}
-
 function tokenStat(labelText, value) {
   return `
     <div class="token-stat">
@@ -1578,6 +1570,28 @@ function label(value) {
   return String(value || "")
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function reasoningDisplayLabel(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (!normalized || normalized === "default") {
+    return "Auto";
+  }
+  if (normalized === "xhigh" || normalized === "extra high") {
+    return "Extra High";
+  }
+  return label(value);
+}
+
+function reasoningCompactLabel(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (!normalized || normalized === "default") {
+    return "auto";
+  }
+  if (normalized === "xhigh" || normalized === "extra high") {
+    return "Extra High";
+  }
+  return label(value);
 }
 
 function runtimeMetadata() {

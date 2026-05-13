@@ -81,7 +81,7 @@ async function createMainWindow(parsed) {
     minHeight: 680,
     title: "AgentDesk",
     icon: APP_ICON_PATH,
-    backgroundColor: "#f3f5f1",
+    backgroundColor: "#141414",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
       contextIsolation: true,
