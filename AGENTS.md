@@ -3,6 +3,8 @@
 ## Verification Workflow
 
 - When validating UI or runtime behavior served by `npm run dev`, Codex should default to using [@电脑](plugin://computer-use@openai-bundled) to inspect the running app.
+- Before running `npm run dev`, Codex should check whether the dev server is already running and reuse it when available.
+- Only run `npm run dev` when the dev server is not running or cannot be reached.
 - Do not use browser-based validation for `npm run dev` output unless the user explicitly asks for it or Computer Use is unavailable.
 
 ## Git Workflow
