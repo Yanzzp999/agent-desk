@@ -44,6 +44,12 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const projectOrderButton = event.target.closest("[data-project-order]");
+  if (projectOrderButton) {
+    await moveProject(projectOrderButton.dataset.projectRoot, projectOrderButton.dataset.projectOrder);
+    return;
+  }
+
   const projectRow = event.target.closest("[data-project-root]");
   if (projectRow) {
     await selectProject(projectRow.dataset.projectRoot);
@@ -219,6 +225,23 @@ async function selectProject(projectPath) {
   }
 }
 
+async function moveProject(projectPath, direction) {
+  if (!projectPath || !direction) {
+    return;
+  }
+
+  try {
+    state.projects = await api("/api/projects/reorder", {
+      method: "POST",
+      body: { projectRoot: projectPath, direction },
+    });
+    render();
+  } catch (error) {
+    state.message = error.message;
+    render();
+  }
+}
+
 async function createTask(payload) {
   try {
     const task = await api("/api/tasks", {
@@ -368,6 +391,10 @@ function connectEvents() {
     setConnectionState("reconnecting", "Project changed");
     refreshAll({ forceSelections: true });
   });
+  events.addEventListener("projects.reordered", () => {
+    setConnectionState("reconnecting", "Projects reordered");
+    refreshAll();
+  });
   events.onerror = () => {
     setConnectionState("offline", "Offline");
   };
@@ -420,20 +447,41 @@ function renderSidebarProjectTree(projects) {
     <div class="project-tree">
       ${projects.slice(0, 12).map((project) => {
         const isCurrent = project.projectRoot === currentRoot;
+        const projectIndex = projects.findIndex((candidate) => candidate.projectRoot === project.projectRoot);
         const childSessions = isCurrent ? state.sessions.slice(0, 12) : [];
         const childCodeSessions = isCurrent ? projectCodeSessions().slice(0, 10) : [];
         return `
           <section class="project-group ${isCurrent ? "selected" : ""}">
-            <button
-              class="project-trigger ${isCurrent ? "selected" : ""}"
-              data-project-root="${escapeAttr(project.projectRoot)}"
-              type="button"
-            >
-              <div class="project-trigger-copy">
-                <strong>${escapeHtml(project.name || basename(project.projectRoot))}</strong>
-                <small>${escapeHtml(project.hasDeskState ? `${project.taskCount || 0} tasks · ${project.sessionCount || 0} sessions` : "No AgentDesk state yet")}</small>
+            <div class="project-trigger-row">
+              <button
+                class="project-trigger ${isCurrent ? "selected" : ""}"
+                data-project-root="${escapeAttr(project.projectRoot)}"
+                type="button"
+              >
+                <div class="project-trigger-copy">
+                  <strong>${escapeHtml(project.name || basename(project.projectRoot))}</strong>
+                  <small>${escapeHtml(project.hasDeskState ? `${project.taskCount || 0} tasks · ${project.sessionCount || 0} sessions` : "No AgentDesk state yet")}</small>
+                </div>
+              </button>
+              <div class="project-order-controls" aria-label="Move project">
+                <button
+                  class="project-order-button"
+                  data-project-order="up"
+                  data-project-root="${escapeAttr(project.projectRoot)}"
+                  type="button"
+                  title="Move up"
+                  ${projectIndex <= 0 ? "disabled" : ""}
+                >↑</button>
+                <button
+                  class="project-order-button"
+                  data-project-order="down"
+                  data-project-root="${escapeAttr(project.projectRoot)}"
+                  type="button"
+                  title="Move down"
+                  ${projectIndex >= projects.length - 1 ? "disabled" : ""}
+                >↓</button>
               </div>
-            </button>
+            </div>
             ${isCurrent ? `
               <div class="project-children">
                 <div class="project-child-group">

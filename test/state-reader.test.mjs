@@ -223,6 +223,39 @@ test("server starts without a project and selects one at runtime", async () => {
   }
 });
 
+test("server persists project order changes", async () => {
+  const projectA = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-project-a-"));
+  const projectB = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-project-b-"));
+  const stateFile = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-order-state-")), "projects.json");
+  const server = createControlPlaneServer(null, { stateFile });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    await requestJson(`${baseUrl}/api/projects/select`, {
+      method: "POST",
+      body: { projectRoot: projectA },
+    });
+    const selectedB = await requestJson(`${baseUrl}/api/projects/select`, {
+      method: "POST",
+      body: { projectRoot: projectB },
+    });
+    assert.deepEqual(selectedB.items.map((project) => project.projectRoot), [projectB, projectA]);
+
+    const reordered = await requestJson(`${baseUrl}/api/projects/reorder`, {
+      method: "POST",
+      body: { projectRoot: projectA, direction: "up" },
+    });
+    assert.deepEqual(reordered.items.map((project) => project.projectRoot), [projectA, projectB]);
+
+    const saved = JSON.parse(await fs.readFile(stateFile, "utf8"));
+    assert.deepEqual(saved.projects.map((project) => project.projectRoot), [projectA, projectB]);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
     method: options.method || "GET",

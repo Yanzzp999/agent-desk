@@ -108,6 +108,15 @@ async function routeRequest(projects, req, res, clients) {
     return sendJson(res, 200, result);
   }
 
+  if (req.method === "POST" && url.pathname === "/api/projects/reorder") {
+    const result = await projects.reorder(await readJsonBody(req));
+    notifyClients(clients, "projects.reordered", {
+      type: "projects.reordered",
+      updatedAt: new Date().toISOString(),
+    });
+    return sendJson(res, 200, result);
+  }
+
   if (req.method === "GET" && url.pathname === "/api/health") {
     const context = projects.currentContext();
     if (!context) {
@@ -282,6 +291,31 @@ function createProjectRegistry(initialContext, options = {}) {
       await saveRecent();
       return this.list();
     },
+    async reorder(payload = {}) {
+      const requested = String(payload.projectRoot || "").trim();
+      const direction = String(payload.direction || "").trim();
+      if (!requested) {
+        throw new Error("projectRoot is required");
+      }
+      if (direction !== "up" && direction !== "down") {
+        throw new Error("direction must be up or down");
+      }
+      await loadRecent();
+      const resolved = path.resolve(requested);
+      const index = recent.findIndex((candidate) => path.resolve(candidate.projectRoot) === resolved);
+      if (index === -1) {
+        throw new Error(`project not found: ${resolved}`);
+      }
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= recent.length) {
+        return this.list();
+      }
+      const nextRecent = [...recent];
+      [nextRecent[index], nextRecent[targetIndex]] = [nextRecent[targetIndex], nextRecent[index]];
+      recent = nextRecent;
+      await saveRecent();
+      return this.list();
+    },
   };
 }
 
@@ -386,7 +420,7 @@ function setCommonHeaders(res) {
 }
 
 function statusFromError(error) {
-  if (/select a project|projectRoot is required|project root is not a directory/i.test(error.message || "")) {
+  if (/select a project|projectRoot is required|project root is not a directory|direction must be/i.test(error.message || "")) {
     return 400;
   }
   if (/not found/i.test(error.message || "")) {
