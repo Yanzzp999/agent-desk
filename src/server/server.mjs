@@ -10,6 +10,7 @@ import {
   getPlanJob,
   getPlanLogs,
   getRunDetail,
+  getRuntimeCapabilities,
   getTaskDetail,
   getTaskLogs,
   getTaskResult,
@@ -97,6 +98,10 @@ async function routeRequest(context, req, res, clients) {
 
   if (req.method === "GET" && url.pathname === "/api/health") {
     return sendJson(res, 200, await getHealth(context));
+  }
+
+  if (req.method === "GET" && (url.pathname === "/api/runtime" || url.pathname === "/api/capabilities")) {
+    return sendJson(res, 200, await getRuntimeCapabilities(context));
   }
 
   if (req.method === "GET" && url.pathname === "/api/runs") {
