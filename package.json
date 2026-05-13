@@ -8,6 +8,7 @@
     "ralphctl": "./bin/ralphctl.mjs"
   },
   "scripts": {
+    "dev": "node ./bin/ralphctl.mjs dev",
     "serve": "node ./bin/ralphctl.mjs serve",
     "test": "node --test test/*.test.mjs",
     "gui": "node ./bin/ralphctl.mjs gui open --no-open"

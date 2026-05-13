@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   collectRun,
+  createContext,
   createPlanJob,
   getCurrentRun,
   getHealth,
@@ -24,6 +26,7 @@ import {
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = path.resolve(MODULE_DIR, "../web");
+const DEFAULT_PROJECTS_STATE_FILE = path.join(os.homedir(), ".agent-desk", "projects.json");
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -33,13 +36,14 @@ const MIME_TYPES = {
   ".png": "image/png",
 };
 
-export function createControlPlaneServer(context) {
+export function createControlPlaneServer(initialContext = null, options = {}) {
   const clients = new Set();
+  const projects = createProjectRegistry(initialContext, options);
   let lastStamp = "";
 
   const server = http.createServer(async (req, res) => {
     try {
-      await routeRequest(context, req, res, clients);
+      await routeRequest(projects, req, res, clients);
     } catch (error) {
       sendJson(res, statusFromError(error), {
         error: error.message || "request failed",
@@ -49,6 +53,10 @@ export function createControlPlaneServer(context) {
 
   const interval = setInterval(async () => {
     if (clients.size === 0) {
+      return;
+    }
+    const context = projects.currentContext();
+    if (!context) {
       return;
     }
     const stamp = await snapshotStateStamp(context).catch(() => "");
@@ -77,7 +85,7 @@ export function createControlPlaneServer(context) {
   return server;
 }
 
-async function routeRequest(context, req, res, clients) {
+async function routeRequest(projects, req, res, clients) {
   const url = new URL(req.url || "/", "http://127.0.0.1");
   if (!url.pathname.startsWith("/api/")) {
     return serveStatic(req, res, url.pathname);
@@ -95,9 +103,37 @@ async function routeRequest(context, req, res, clients) {
     return openEventStream(res, clients);
   }
 
-  if (req.method === "GET" && url.pathname === "/api/health") {
-    return sendJson(res, 200, await getHealth(context));
+  if (req.method === "GET" && url.pathname === "/api/projects") {
+    return sendJson(res, 200, await projects.list());
   }
+
+  if (req.method === "POST" && url.pathname === "/api/projects/select") {
+    const result = await projects.select((await readJsonBody(req)).projectRoot);
+    notifyClients(clients, "project.changed", {
+      type: "project.changed",
+      projectRoot: result.current?.projectRoot || "",
+      updatedAt: new Date().toISOString(),
+    });
+    return sendJson(res, 200, result);
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/health") {
+    const context = projects.currentContext();
+    if (!context) {
+      return sendJson(res, 200, {
+        ok: true,
+        needsProject: true,
+        projectRoot: "",
+        stateRoot: "",
+        uiStateRoot: "",
+        ralphRunCli: "",
+        ralphPlanCli: "",
+      });
+    }
+    return sendJson(res, 200, { ...await getHealth(context), needsProject: false });
+  }
+
+  const context = requireProjectContext(projects);
 
   if (req.method === "GET" && url.pathname === "/api/runs") {
     return sendJson(res, 200, await listRuns(context, { status: url.searchParams.get("status") || "" }));
@@ -192,6 +228,123 @@ function openEventStream(res, clients) {
   });
 }
 
+function notifyClients(clients, event, payload) {
+  const body = JSON.stringify(payload);
+  for (const client of clients) {
+    client.write(`event: ${event}\ndata: ${body}\n\n`);
+  }
+}
+
+function requireProjectContext(projects) {
+  const context = projects.currentContext();
+  if (!context) {
+    throw new Error("select a project before using this endpoint");
+  }
+  return context;
+}
+
+function createProjectRegistry(initialContext, options = {}) {
+  const stateFile = options.stateFile || DEFAULT_PROJECTS_STATE_FILE;
+  const contextOptions = {
+    stateRoot: options.stateRoot,
+    uiStateRoot: options.uiStateRoot,
+  };
+  let context = initialContext || null;
+  let recent = [];
+
+  async function loadRecent() {
+    if (recent.length > 0) {
+      return recent;
+    }
+    const saved = await readJsonFile(stateFile);
+    recent = Array.isArray(saved?.projects) ? saved.projects.filter((item) => item?.projectRoot).slice(0, 12) : [];
+    if (context) {
+      rememberContext(context);
+    }
+    return recent;
+  }
+
+  async function saveRecent() {
+    await fs.promises.mkdir(path.dirname(stateFile), { recursive: true });
+    await fs.promises.writeFile(stateFile, `${JSON.stringify({ projects: recent }, null, 2)}\n`, "utf8");
+  }
+
+  function rememberContext(nextContext) {
+    const item = summarizeProject(nextContext);
+    recent = [
+      item,
+      ...recent.filter((candidate) => path.resolve(candidate.projectRoot) !== item.projectRoot),
+    ].slice(0, 12);
+  }
+
+  return {
+    currentContext() {
+      return context;
+    },
+    async list() {
+      await loadRecent();
+      return {
+        current: context ? summarizeProject(context) : null,
+        items: await Promise.all(recent.map(refreshProjectSummary)),
+      };
+    },
+    async select(projectRoot) {
+      const requested = String(projectRoot || "").trim();
+      if (!requested) {
+        throw new Error("projectRoot is required");
+      }
+      const resolved = path.resolve(requested);
+      const stat = await fs.promises.stat(resolved).catch(() => null);
+      if (!stat?.isDirectory()) {
+        throw new Error(`project root is not a directory: ${resolved}`);
+      }
+      await loadRecent();
+      context = createContext({
+        ...contextOptions,
+        projectRoot: resolved,
+      });
+      rememberContext(context);
+      await saveRecent();
+      return this.list();
+    },
+  };
+}
+
+async function refreshProjectSummary(item) {
+  return {
+    ...item,
+    hasState: await isDirectory(item.stateRoot || path.join(item.projectRoot, ".ralph")),
+    hasUiState: await isDirectory(item.uiStateRoot || path.join(item.projectRoot, ".ralph-ui")),
+  };
+}
+
+function summarizeProject(context) {
+  return {
+    projectRoot: path.resolve(context.projectRoot),
+    name: path.basename(context.projectRoot) || context.projectRoot,
+    stateRoot: context.stateRoot,
+    uiStateRoot: context.uiStateRoot,
+    ralphRunCli: context.ralphRunCli,
+    ralphPlanCli: context.ralphPlanCli,
+    hasState: fs.existsSync(context.stateRoot),
+    hasUiState: fs.existsSync(context.uiStateRoot),
+    selectedAt: new Date().toISOString(),
+  };
+}
+
+async function readJsonFile(filePath) {
+  try {
+    return JSON.parse(await fs.promises.readFile(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function isDirectory(dirPath) {
+  const stat = await fs.promises.stat(dirPath).catch(() => null);
+  return Boolean(stat?.isDirectory());
+}
+
 async function serveStatic(req, res, pathname) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.writeHead(405);
@@ -247,6 +400,9 @@ function setCommonHeaders(res) {
 }
 
 function statusFromError(error) {
+  if (/select a project|projectRoot is required|project root is not a directory/i.test(error.message || "")) {
+    return 400;
+  }
   if (/not found/i.test(error.message || "")) {
     return 404;
   }

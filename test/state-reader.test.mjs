@@ -13,6 +13,7 @@ import {
   listRuns,
   resolveRalphCli,
 } from "../src/lib/control-plane.mjs";
+import { createControlPlaneServer } from "../src/server/server.mjs";
 
 test("reads Ralph run state, logs, results, and artifacts", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ralph-cp-"));
@@ -113,3 +114,57 @@ test("falls back to user-level Gemini and Claude skills roots when project-local
     process.env.HOME = originalHome;
   }
 });
+
+test("server starts without a project and selects one at runtime", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ralph-select-project-"));
+  const stateFile = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-state-")), "projects.json");
+  const runDir = path.join(projectRoot, ".ralph", "runs", "demo-run");
+  await fs.mkdir(path.join(runDir, "tasks"), { recursive: true });
+  await fs.writeFile(path.join(runDir, "run.json"), `${JSON.stringify({
+    runId: "demo-run",
+    project: "selectable",
+    status: "succeeded",
+    taskIds: [],
+  }, null, 2)}\n`);
+
+  const server = createControlPlaneServer(null, { stateFile });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const initialHealth = await requestJson(`${baseUrl}/api/health`);
+    assert.equal(initialHealth.needsProject, true);
+
+    const runsBeforeProject = await fetch(`${baseUrl}/api/runs`);
+    assert.equal(runsBeforeProject.status, 400);
+
+    const selected = await requestJson(`${baseUrl}/api/projects/select`, {
+      method: "POST",
+      body: { projectRoot },
+    });
+    assert.equal(selected.current.projectRoot, projectRoot);
+    assert.equal(selected.items[0].projectRoot, projectRoot);
+
+    const selectedHealth = await requestJson(`${baseUrl}/api/health`);
+    assert.equal(selectedHealth.needsProject, false);
+    assert.equal(selectedHealth.projectRoot, projectRoot);
+
+    const runs = await requestJson(`${baseUrl}/api/runs`);
+    assert.equal(runs.items.length, 1);
+    assert.equal(runs.items[0].runId, "demo-run");
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+async function requestJson(url, options = {}) {
+  const response = await fetch(url, {
+    method: options.method || "GET",
+    headers: options.body ? { "Content-Type": "application/json" } : {},
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  const payload = await response.json();
+  assert.equal(response.ok, true, payload.error || response.statusText);
+  return payload;
+}

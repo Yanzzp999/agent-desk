@@ -14,15 +14,16 @@ The app stays intentionally thin:
 
 ```sh
 npm install
-npm run serve -- --project /absolute/path/to/your/ralph-project
+npm run dev
 ```
 
-Open `http://127.0.0.1:4317`.
+Open `http://127.0.0.1:4317` if your browser did not open automatically,
+then choose the Ralph project you want to inspect.
 
 You can also use the wrapper script:
 
 ```sh
-./scripts/ralphctl.sh serve --project /absolute/path/to/your/ralph-project
+./scripts/ralphctl.sh serve --open
 ./scripts/ralphctl.sh runs list --project /absolute/path/to/your/ralph-project
 ./scripts/ralphctl.sh planner list --project /absolute/path/to/your/ralph-project
 ```
@@ -30,6 +31,7 @@ You can also use the wrapper script:
 ## CLI
 
 ```text
+ralphctl dev
 ralphctl serve
 ralphctl runs list
 ralphctl runs show <runId>
@@ -46,8 +48,9 @@ ralphctl planner logs <planJobId>
 ralphctl gui open
 ```
 
-Every read command accepts `--json`. Use `--project DIR` to inspect a project
-other than the current git root.
+Every read command accepts `--json`. The web server can start without a
+project and lets you choose one in the browser. Use `--project DIR` for CLI
+read commands, or to preselect a project when serving.
 
 ## Ralph Script Resolution
 

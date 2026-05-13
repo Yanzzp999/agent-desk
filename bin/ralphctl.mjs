@@ -26,21 +26,24 @@ main().catch((error) => {
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   const command = parsed._[0] || "help";
-  const context = createContext({
-    projectRoot: parsed.project,
-    stateRoot: parsed["state-dir"],
-    uiStateRoot: parsed["ui-state-dir"],
-  });
 
   if (parsed.help || command === "help") {
     printHelp();
     return;
   }
 
-  if (command === "serve") {
+  if (command === "serve" || command === "dev") {
     const host = parsed.host || "127.0.0.1";
     const port = Number(parsed.port || 4317);
-    const server = createControlPlaneServer(context);
+    const initialContext = parsed.project ? createContext({
+      projectRoot: parsed.project,
+      stateRoot: parsed["state-dir"],
+      uiStateRoot: parsed["ui-state-dir"],
+    }) : null;
+    const server = createControlPlaneServer(initialContext, {
+      stateRoot: parsed["state-dir"],
+      uiStateRoot: parsed["ui-state-dir"],
+    });
     await new Promise((resolve, reject) => {
       const onError = (error) => reject(error);
       server.once("error", onError);
@@ -49,10 +52,20 @@ async function main() {
         resolve();
       });
     });
-    console.log(`Ralph control plane: http://${host}:${port}`);
-    console.log(`Project: ${context.projectRoot}`);
+    const url = `http://${host}:${port}`;
+    if (command === "dev" || parsed.open) {
+      openBrowser(url);
+    }
+    console.log(`Ralph control plane: ${url}`);
+    console.log(initialContext ? `Project: ${initialContext.projectRoot}` : "Project: choose in the browser");
     return;
   }
+
+  const context = createContext({
+    projectRoot: parsed.project,
+    stateRoot: parsed["state-dir"],
+    uiStateRoot: parsed["ui-state-dir"],
+  });
 
   if (command === "gui" && parsed._[1] === "open") {
     const host = parsed.host || "127.0.0.1";
@@ -277,7 +290,8 @@ function printHelp() {
   console.log(`Ralph control plane
 
 Usage:
-  ralphctl serve [--host 127.0.0.1] [--port 4317] [--project DIR]
+  ralphctl dev [--host 127.0.0.1] [--port 4317]
+  ralphctl serve [--host 127.0.0.1] [--port 4317] [--project DIR] [--open]
   ralphctl runs list [--status STATUS] [--json]
   ralphctl runs show <runId> [--json]
   ralphctl runs current [--json]
@@ -292,7 +306,7 @@ Usage:
   ralphctl gui open [--host 127.0.0.1] [--port 4317] [--no-open]
 
 Global options:
-  --project DIR        Project root to inspect. Default: current git root.
+  --project DIR        Project root to inspect. For serve/dev, this is optional.
   --state-dir DIR      Ralph state root. Default: <project>/.ralph.
   --ui-state-dir DIR   Control-plane state root. Default: <project>/.ralph-ui.
 `);

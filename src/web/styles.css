@@ -294,6 +294,10 @@ h3 {
   padding: 20px 22px;
 }
 
+.hero.project-picker {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.85fr);
+}
+
 .hero-copy {
   display: grid;
   gap: 10px;
@@ -550,6 +554,7 @@ tr:last-child td {
 tr[data-run-id],
 tr[data-task-id],
 tr[data-plan-id],
+tr[data-project-root],
 tr[data-artifact-path] {
   cursor: pointer;
 }
@@ -682,9 +687,20 @@ tr.selected td {
 }
 
 .form-grid,
+.project-form,
 label {
   display: grid;
   gap: 6px;
+}
+
+.project-form {
+  align-content: end;
+  gap: 12px;
+}
+
+.project-form.inline {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
 }
 
 label {
@@ -961,7 +977,8 @@ pre {
   }
 
   .hero,
-  .hero.hero-compact {
+  .hero.hero-compact,
+  .hero.project-picker {
     grid-template-columns: 1fr;
   }
 
@@ -969,6 +986,7 @@ pre {
   .code-grid,
   .info-grid,
   .artifact-meta,
+  .project-form.inline,
   .grid.two {
     grid-template-columns: 1fr;
   }

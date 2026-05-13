@@ -15,6 +15,7 @@ const state = {
   artifacts: [],
   selectedArtifactPath: "",
   artifactPreview: null,
+  projects: { current: null, items: [] },
   message: "",
 };
 
@@ -53,6 +54,11 @@ document.body.addEventListener("click", async (event) => {
     await selectArtifact(artifactRow.dataset.artifactPath);
     return;
   }
+  const projectRow = event.target.closest("[data-project-root]");
+  if (projectRow) {
+    await selectProject(projectRow.dataset.projectRoot);
+    return;
+  }
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (!action) {
     return;
@@ -76,6 +82,12 @@ document.body.addEventListener("change", async (event) => {
 });
 
 document.body.addEventListener("submit", async (event) => {
+  if (event.target.id === "project-form") {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    await selectProject(String(form.get("projectRoot") || ""));
+    return;
+  }
   if (event.target.id !== "planner-form") {
     return;
   }
@@ -130,9 +142,17 @@ function hydrateShell() {
 
 async function refreshAll(options = {}) {
   try {
+    state.projects = await api("/api/projects");
     state.health = await api("/api/health");
-    projectRoot.textContent = state.health.projectRoot;
-    projectRoot.title = state.health.projectRoot;
+    const hasProject = Boolean(state.health.projectRoot);
+    projectRoot.textContent = hasProject ? state.health.projectRoot : "Choose a Ralph project";
+    projectRoot.title = hasProject ? state.health.projectRoot : "";
+    if (!hasProject) {
+      clearLoadedProjectState();
+      setConnectionState("connected", "Connected");
+      render();
+      return;
+    }
     await Promise.all([loadRuns(), loadPlans(), loadArtifacts()]);
     if ((options.forceRun || state.selectedRunId) && state.selectedRunId) {
       await selectRun(state.selectedRunId, { quiet: true });
@@ -149,6 +169,44 @@ async function refreshAll(options = {}) {
     setConnectionState("offline", "Offline");
   }
   render();
+}
+
+function clearLoadedProjectState() {
+  state.runs = [];
+  state.selectedRunId = "";
+  state.runDetail = null;
+  state.selectedTaskId = "";
+  state.taskLogs = null;
+  state.taskResult = null;
+  state.plans = [];
+  state.selectedPlanId = "";
+  state.planDetail = null;
+  state.artifacts = [];
+  state.selectedArtifactPath = "";
+  state.artifactPreview = null;
+}
+
+async function selectProject(projectPath) {
+  const trimmed = String(projectPath || "").trim();
+  if (!trimmed) {
+    state.message = "Project path is required.";
+    render();
+    return;
+  }
+  try {
+    const result = await api("/api/projects/select", {
+      method: "POST",
+      body: { projectRoot: trimmed },
+    });
+    state.projects = result;
+    state.message = `Selected ${result.current?.name || result.current?.projectRoot || trimmed}`;
+    state.view = "overview";
+    clearLoadedProjectState();
+    await refreshAll({ forceRun: true });
+  } catch (error) {
+    state.message = error.message;
+    render();
+  }
 }
 
 async function loadRuns() {
@@ -264,9 +322,14 @@ function render() {
   document.querySelectorAll(".nav button").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === state.view);
   });
-  title.textContent = titleForView(state.view);
+  const hasProject = Boolean(state.health?.projectRoot);
+  title.textContent = hasProject ? titleForView(state.view) : "Select Project";
   const body = state.message ? `<div class="message">${escapeHtml(state.message)}</div>` : "";
   state.message = "";
+  if (!hasProject) {
+    app.innerHTML = body + renderProjectSelector();
+    return;
+  }
   app.innerHTML = body + ({
     overview: renderOverview,
     runs: renderRuns,
@@ -274,6 +337,35 @@ function render() {
     artifacts: renderArtifacts,
     settings: renderSettings,
   }[state.view] || renderOverview)();
+}
+
+function renderProjectSelector() {
+  const items = state.projects?.items || [];
+  return `
+    <section class="hero project-picker">
+      <div class="hero-copy">
+        <p class="eyebrow">Project selection</p>
+        <h2>Choose a Ralph project to inspect.</h2>
+        <p class="section-copy">AgentDesk stays standalone now; point it at any project after the server starts.</p>
+      </div>
+      <form id="project-form" class="project-form">
+        <label>Project path
+          <input name="projectRoot" placeholder="/absolute/path/to/project" autocomplete="off">
+        </label>
+        <button class="button primary" type="submit">Open Project</button>
+      </form>
+    </section>
+    <section class="stack-card list-card">
+      <div class="section-header">
+        <div>
+          <h2>Recent Projects</h2>
+          <p class="section-copy">Pick a previous Ralph workspace or enter a new absolute path above.</p>
+        </div>
+        <div class="pill-group">${renderPill("Saved", items.length)}</div>
+      </div>
+      ${renderProjectTable(items)}
+    </section>
+  `;
 }
 
 function renderOverview() {
@@ -356,7 +448,7 @@ function renderOverview() {
           ${renderPill("Queued", state.runs.reduce((sum, run) => sum + sumCounts(run.counts, ["queued"]), 0), "warning")}
           ${renderPill("Attention", state.runs.reduce((sum, run) => sum + sumCounts(run.counts, ["failed", "stale", "stopped", "needs_attention"]), 0), attention ? "danger" : "")}
         </div>
-        <p class="field-hint">${escapeHtml(latestRun ? `Latest run updated ${formatDate(latestRun.updatedAt)}.` : "Load a Ralph project to see run activity.")}</p>
+        <p class="field-hint">${escapeHtml(latestRun ? `Latest run updated ${formatDate(latestRun.updatedAt)}.` : "No run activity yet.")}</p>
       </section>
       <section class="stack-card detail-card">
         <div class="section-header">
@@ -799,6 +891,21 @@ function renderSettings() {
     <section class="stack-card detail-card">
       <div class="section-header">
         <div>
+          <h2>Switch Project</h2>
+          <p class="section-copy">Change the project root without restarting the control plane.</p>
+        </div>
+      </div>
+      <form id="project-form" class="project-form inline">
+        <label>Project path
+          <input name="projectRoot" value="${escapeAttr(health.projectRoot || "")}" placeholder="/absolute/path/to/project" autocomplete="off">
+        </label>
+        <button class="button primary" type="submit">Open Project</button>
+      </form>
+      ${renderProjectTable(state.projects?.items || [])}
+    </section>
+    <section class="stack-card detail-card">
+      <div class="section-header">
+        <div>
           <h2>Resolved Paths</h2>
           <p class="section-copy">These values come from the current server context and drive every API lookup.</p>
         </div>
@@ -811,6 +918,34 @@ function renderSettings() {
         ${infoTile("ralph", health.ralphPlanCli || "-")}
       </div>
     </section>
+  `;
+}
+
+function renderProjectTable(projects) {
+  if (!projects.length) {
+    return emptyState("No recent projects", "Open a project once and it will stay available here.");
+  }
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Project</th><th>State</th><th>Last Selected</th><th>Path</th></tr></thead>
+        <tbody>
+          ${projects.map((project) => `
+            <tr data-project-root="${escapeAttr(project.projectRoot)}" class="${project.projectRoot === state.health?.projectRoot ? "selected" : ""}">
+              <td>
+                <div class="row-title">
+                  <strong>${escapeHtml(project.name || "Project")}</strong>
+                  <span>${escapeHtml(project.hasState ? "Ralph state found" : "No .ralph state yet")}</span>
+                </div>
+              </td>
+              <td>${project.hasState ? badge("ready") : badge("empty")}</td>
+              <td>${escapeHtml(formatDate(project.selectedAt))}</td>
+              <td class="mono">${escapeHtml(project.projectRoot)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -945,7 +1080,7 @@ function sumCounts(counts = {}, statuses = []) {
 }
 
 function statusTone(status) {
-  if (["succeeded"].includes(status)) {
+  if (["succeeded", "ready"].includes(status)) {
     return "positive";
   }
   if (["failed", "stale", "stopped", "needs_attention"].includes(status)) {
@@ -954,7 +1089,7 @@ function statusTone(status) {
   if (["running", "launching", "connected"].includes(status)) {
     return "active";
   }
-  if (["queued", "received", "generating_prd", "converting_json"].includes(status)) {
+  if (["queued", "received", "generating_prd", "converting_json", "empty"].includes(status)) {
     return "warning";
   }
   return "";
@@ -1036,6 +1171,9 @@ function connectEvents() {
     setConnectionState("connected", "Connected");
   });
   events.addEventListener("state.updated", () => {
+    refreshAll({ forceRun: true });
+  });
+  events.addEventListener("project.changed", () => {
     refreshAll({ forceRun: true });
   });
   events.onerror = () => {
