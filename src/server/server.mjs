@@ -16,7 +16,7 @@ import {
   listTasks,
   snapshotStateStamp,
 } from "../lib/control-plane.mjs";
-import { listCodeSessions } from "../lib/code-sessions.mjs";
+import { continueCodeSession, listCodeSessions } from "../lib/code-sessions.mjs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = path.resolve(MODULE_DIR, "../web");
@@ -141,6 +141,30 @@ async function routeRequest(projects, req, res, clients) {
 
   const context = requireProjectContext(projects);
 
+  const codeSessionMessagesMatch = url.pathname.match(/^\/api\/code-sessions\/([^/]+)\/messages$/);
+  if (codeSessionMessagesMatch && req.method === "POST") {
+    const body = await readJsonBody(req);
+    const sessions = await listCodeSessions({
+      projectRoot: context.projectRoot,
+      limit: 60,
+    });
+    const sessionId = decodeURIComponent(codeSessionMessagesMatch[1]);
+    const session = findCodeSessionById(sessions, sessionId);
+    if (!session) {
+      throw new Error("session not found");
+    }
+    const result = await continueCodeSession({
+      codexCliPath: context.codexCli,
+      session,
+      prompt: body.prompt,
+    });
+    notifyClients(clients, "state.updated", {
+      type: "state.updated",
+      updatedAt: new Date().toISOString(),
+    });
+    return sendJson(res, 202, result);
+  }
+
   if (req.method === "GET" && (url.pathname === "/api/runtime" || url.pathname === "/api/capabilities")) {
     return sendJson(res, 200, await getRuntimeCapabilities(context));
   }
@@ -225,6 +249,14 @@ function requireProjectContext(projects) {
     throw new Error("select a project before using this endpoint");
   }
   return context;
+}
+
+function findCodeSessionById(sessions, sessionId) {
+  const allSessions = [
+    ...(sessions?.items || []),
+    ...(sessions?.recentItems || []),
+  ];
+  return allSessions.find((session) => session.id === sessionId || session.conversationId === sessionId) || null;
 }
 
 function createProjectRegistry(initialContext, options = {}) {
@@ -420,7 +452,7 @@ function setCommonHeaders(res) {
 }
 
 function statusFromError(error) {
-  if (/select a project|projectRoot is required|project root is not a directory|direction must be/i.test(error.message || "")) {
+  if (/select a project|projectRoot is required|project root is not a directory|direction must be|prompt is required|session id is required/i.test(error.message || "")) {
     return 400;
   }
   if (/not found/i.test(error.message || "")) {

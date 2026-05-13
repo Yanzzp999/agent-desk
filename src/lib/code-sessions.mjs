@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,8 @@ const DEFAULT_LIMIT = 16;
 const DEFAULT_MAX_FILES = 160;
 const MAX_LINES_PER_FILE = 900;
 const MAX_PARSEABLE_LINE_LENGTH = 8_000_000;
+const MAX_MESSAGES_PER_SESSION = 80;
+const MAX_MESSAGE_TEXT_LENGTH = 12_000;
 
 export function defaultCodeSessionRoots(homeDir = os.homedir()) {
   return [
@@ -147,6 +150,7 @@ async function parseCodeSessionFile(file) {
     tokenUsage: emptyTokenUsage(),
     rateLimits: emptyRateLimits(),
     prompts: [],
+    messages: [],
   };
 
   const stream = fs.createReadStream(file.filePath, { encoding: "utf8" });
@@ -180,8 +184,41 @@ async function parseCodeSessionFile(file) {
     .filter(Boolean)
     .filter((prompt) => !isInstructionPrompt(prompt))
     .slice(0, 5);
+  session.messages = session.messages
+    .filter((message) => message.text && !isInstructionPrompt(message.text))
+    .slice(-MAX_MESSAGES_PER_SESSION);
 
   return session;
+}
+
+export async function continueCodeSession(options = {}) {
+  const prompt = String(options.prompt || "").trim();
+  if (!prompt) {
+    throw new Error("prompt is required");
+  }
+  const session = options.session || {};
+  const sessionId = String(options.sessionId || session.conversationId || "").trim();
+  if (!sessionId) {
+    throw new Error("session id is required");
+  }
+
+  const codexCliPath = options.codexCliPath || "codex";
+  const cwd = session.cwd || options.cwd || process.cwd();
+  const args = ["exec", "resume", "--all", sessionId, "-"];
+  const runCommand = options.runCommand || spawnCapture;
+  const result = await runCommand(codexCliPath, args, { cwd, stdin: prompt });
+  if (result.exitCode !== 0) {
+    const details = cleanPromptText(result.stderr || result.stdout || "Codex resume failed");
+    throw new Error(details || "Codex resume failed");
+  }
+
+  return {
+    sessionId,
+    exitCode: result.exitCode,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 function readCodeSessionEvent(session, event) {
@@ -224,9 +261,14 @@ function readCodeSessionEvent(session, event) {
 
   const role = payload.role || payload.item?.role || payload.message?.role || "";
   if (role === "user") {
-    const text = extractReadableText(payload.content || payload.item?.content || payload.message?.content);
-    if (text) {
+    const text = cleanMessageText(extractReadableText(payload.content || payload.item?.content || payload.message?.content));
+    if (text && !isInstructionPrompt(text)) {
       session.prompts.push(text);
+      session.messages.push({
+        role: "user",
+        text,
+        timestamp: event.timestamp || session.updatedAt,
+      });
     }
     session.messageCount += 1;
     session.userMessageCount += 1;
@@ -234,6 +276,14 @@ function readCodeSessionEvent(session, event) {
   }
 
   if (role === "assistant") {
+    const text = cleanMessageText(extractReadableText(payload.content || payload.item?.content || payload.message?.content));
+    if (text) {
+      session.messages.push({
+        role: "assistant",
+        text,
+        timestamp: event.timestamp || session.updatedAt,
+      });
+    }
     session.messageCount += 1;
     session.assistantMessageCount += 1;
     return;
@@ -300,6 +350,18 @@ function cleanPromptText(value) {
     .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function cleanMessageText(value) {
+  const text = String(value || "")
+    .replace(/<image>[\s\S]*?<\/image>/gi, " ")
+    .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+/gi, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return text.length > MAX_MESSAGE_TEXT_LENGTH
+    ? `${text.slice(0, MAX_MESSAGE_TEXT_LENGTH - 1).trimEnd()}…`
+    : text;
 }
 
 function isInstructionPrompt(value) {
@@ -400,4 +462,29 @@ function excerpt(value, max) {
 async function isDirectory(dirPath) {
   const stat = await fs.promises.stat(dirPath).catch(() => null);
   return Boolean(stat?.isDirectory());
+}
+
+async function spawnCapture(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || process.cwd(),
+      env: { ...process.env, ...(options.env || {}) },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      resolve({ exitCode: 1, signal: null, stdout, stderr: `${stderr}${error.message}` });
+    });
+    child.on("close", (exitCode, signal) => {
+      resolve({ exitCode: exitCode ?? 1, signal, stdout, stderr });
+    });
+    child.stdin.end(options.stdin || "");
+  });
 }

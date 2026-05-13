@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { listCodeSessions } from "../src/lib/code-sessions.mjs";
+import { continueCodeSession, listCodeSessions } from "../src/lib/code-sessions.mjs";
 
 test("listCodeSessions matches Codex sessions to a project root", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-code-sessions-"));
@@ -39,6 +39,8 @@ test("listCodeSessions matches Codex sessions to a project root", async () => {
   assert.equal(result.items[0].contextWindow, 258400);
   assert.equal(result.items[0].tokenUsage.total.totalTokens, 222968);
   assert.equal(result.items[0].tokenUsage.last.totalTokens, 38387);
+  assert.deepEqual(result.items[0].messages.map((message) => message.role), ["user", "assistant"]);
+  assert.equal(result.items[0].messages[0].text, "Build sidebar session view");
   assert.equal(result.recentItems.length, 2);
   assert.equal(result.roots[0].exists, true);
 });
@@ -84,6 +86,35 @@ test("listCodeSessions skips AGENTS instruction blocks when choosing titles", as
 
   assert.equal(result.items[0].title, "/goal Add native project picker");
   assert.deepEqual(result.items[0].prompts, ["/goal Add native project picker"]);
+  assert.deepEqual(result.items[0].messages.map((message) => message.text), ["/goal Add native project picker"]);
+});
+
+test("continueCodeSession resumes a conversation with stdin prompt", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-code-resume-"));
+  const result = await continueCodeSession({
+    codexCliPath: "/usr/local/bin/codex",
+    session: {
+      conversationId: "019e2182-4816-7a73-b558-4871c2bbc87a",
+      cwd,
+    },
+    prompt: "Continue this conversation",
+    runCommand: async (command, args, options) => {
+      assert.equal(command, "/usr/local/bin/codex");
+      assert.deepEqual(args, [
+        "exec",
+        "resume",
+        "--all",
+        "019e2182-4816-7a73-b558-4871c2bbc87a",
+        "-",
+      ]);
+      assert.equal(options.cwd, cwd);
+      assert.equal(options.stdin, "Continue this conversation");
+      return { exitCode: 0, stdout: "done", stderr: "" };
+    },
+  });
+
+  assert.equal(result.sessionId, "019e2182-4816-7a73-b558-4871c2bbc87a");
+  assert.equal(result.exitCode, 0);
 });
 
 async function writeSession(filePath, session) {
@@ -157,6 +188,15 @@ async function writeSession(filePath, session) {
         type: "message",
         role: "user",
         content: [{ type: "input_text", text: session.userText }],
+      },
+    },
+    {
+      timestamp: session.timestamp,
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Done." }],
       },
     },
   ];

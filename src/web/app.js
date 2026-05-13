@@ -30,6 +30,7 @@ const I18N = Object.freeze({
     "action.startSession": "Start session",
     "action.generateTask": "Generate task.md",
     "action.addContext": "Add context",
+    "action.sendMessage": "Send message",
     "action.reviewLatestRun": "Review latest run",
     "action.openMatchingCodex": "Open latest local session",
     "action.moveUp": "Move up",
@@ -40,6 +41,8 @@ const I18N = Object.freeze({
     "message.startedTask": "Started task generation for {name}",
     "message.chooseTask": "Choose a task before starting a session.",
     "message.startedSession": "Started session {id}",
+    "message.promptRequired": "Write a message before sending.",
+    "message.sentSessionPrompt": "Message sent to session.",
     "empty.sidebarProjects": "Open a project once and its sessions will stay here.",
     "empty.noDeskState": "No AgentDesk state yet",
     "empty.noDeskSessions": "No sessions",
@@ -131,6 +134,7 @@ const I18N = Object.freeze({
     "copy.sessionDocumentation": "The generated session markdown remains the source of truth after orchestration finishes.",
     "copy.noChangedFiles": "The subagent has not produced repository changes yet.",
     "copy.codeSessionEmpty": "Choose a session from the current project rail.",
+    "copy.continueSession": "Continue this session with the same local history.",
     "copy.preferences": "Choose your language and color theme. Preferences are saved on this machine.",
     "copy.selectedWorkspaces": "Selected workspaces will appear here.",
     "copy.noLocalCodeSessions": "AgentDesk did not find local session files yet.",
@@ -203,6 +207,8 @@ const I18N = Object.freeze({
     "label.total": "Total",
     "label.tracked": "Tracked",
     "label.latestPrompt": "Latest session prompt",
+    "label.you": "You",
+    "label.assistant": "Assistant",
     "label.code": "Code",
     "label.tests": "Tests",
     "label.risks": "Risks",
@@ -211,6 +217,7 @@ const I18N = Object.freeze({
     "placeholder.projectPath": "/absolute/path/to/project",
     "placeholder.optionalTitle": "Optional title",
     "placeholder.featureBrief": "Describe the feature, constraints, and expected outcome",
+    "placeholder.sessionPrompt": "Ask this session anything...",
     "meta.tasks": "{count} tasks",
     "meta.sessions": "{count} sessions",
     "meta.parallel": "{count} parallel",
@@ -275,6 +282,7 @@ const I18N = Object.freeze({
     "action.startSession": "开始会话",
     "action.generateTask": "生成 task.md",
     "action.addContext": "添加上下文",
+    "action.sendMessage": "发送消息",
     "action.reviewLatestRun": "查看最近运行",
     "action.openMatchingCodex": "打开最近本地会话",
     "action.moveUp": "上移",
@@ -285,6 +293,8 @@ const I18N = Object.freeze({
     "message.startedTask": "已开始为 {name} 生成任务",
     "message.chooseTask": "启动会话前请先选择一个任务。",
     "message.startedSession": "已启动会话 {id}",
+    "message.promptRequired": "请先输入消息。",
+    "message.sentSessionPrompt": "消息已发送到会话。",
     "empty.sidebarProjects": "打开一次项目后，它的会话会留在这里。",
     "empty.noDeskState": "还没有 AgentDesk 状态",
     "empty.noDeskSessions": "暂无会话",
@@ -376,6 +386,7 @@ const I18N = Object.freeze({
     "copy.sessionDocumentation": "编排完成后，生成的会话 Markdown 仍是事实来源。",
     "copy.noChangedFiles": "这个子代理还没有产生仓库变更。",
     "copy.codeSessionEmpty": "从当前项目栏中选择一个会话。",
+    "copy.continueSession": "沿用同一条本地会话历史继续对话。",
     "copy.preferences": "选择语言和颜色主题。偏好会保存在本机。",
     "copy.selectedWorkspaces": "选过的工作区会显示在这里。",
     "copy.noLocalCodeSessions": "AgentDesk 还没有找到本地会话文件。",
@@ -448,6 +459,8 @@ const I18N = Object.freeze({
     "label.total": "总计",
     "label.tracked": "已跟踪",
     "label.latestPrompt": "最近会话提示词",
+    "label.you": "你",
+    "label.assistant": "助手",
     "label.code": "Code",
     "label.tests": "测试",
     "label.risks": "风险",
@@ -456,6 +469,7 @@ const I18N = Object.freeze({
     "placeholder.projectPath": "/absolute/path/to/project",
     "placeholder.optionalTitle": "可选标题",
     "placeholder.featureBrief": "描述功能、约束和预期结果",
+    "placeholder.sessionPrompt": "向这次会话继续提问...",
     "meta.tasks": "{count} 个任务",
     "meta.sessions": "{count} 个会话",
     "meta.parallel": "{count} 并行",
@@ -523,6 +537,10 @@ const state = {
     reasoning: "",
     parallelism: 6,
     launchPrompt: "",
+  },
+  codeSessionComposer: {
+    prompt: "",
+    sending: false,
   },
   message: "",
 };
@@ -646,6 +664,13 @@ document.body.addEventListener("submit", async (event) => {
       reasoning: String(form.get("reasoning") || ""),
       launchPrompt: String(form.get("launchPrompt") || ""),
     });
+    return;
+  }
+
+  if (event.target.id === "code-session-form") {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    await continueSelectedCodeSession(String(form.get("prompt") || ""));
   }
 });
 
@@ -659,6 +684,23 @@ document.body.addEventListener("input", (event) => {
   if (event.target instanceof HTMLTextAreaElement && event.target.name === "launchPrompt") {
     syncSessionComposer();
     state.sessionComposer.launchPrompt = event.target.value;
+    return;
+  }
+
+  if (event.target instanceof HTMLTextAreaElement && event.target.name === "prompt") {
+    state.codeSessionComposer.prompt = event.target.value;
+  }
+});
+
+document.body.addEventListener("keydown", (event) => {
+  if (
+    event.target instanceof HTMLTextAreaElement
+    && event.target.name === "prompt"
+    && event.key === "Enter"
+    && !event.shiftKey
+  ) {
+    event.preventDefault();
+    event.target.form?.requestSubmit();
   }
 });
 
@@ -809,6 +851,10 @@ function clearLoadedProjectState() {
     reasoning: "",
     parallelism: 6,
     launchPrompt: "",
+  };
+  state.codeSessionComposer = {
+    prompt: "",
+    sending: false,
   };
 }
 
@@ -1003,11 +1049,42 @@ function selectCodeSession(sessionId, options = {}) {
   }
   state.selectedCodeSessionId = sessionId;
   state.codeSessionDetail = session;
+  state.codeSessionComposer.prompt = "";
   state.selectedSessionId = "";
   state.sessionDetail = null;
   state.selectedAgentId = "";
   state.view = "code-session";
   if (!options.quiet) {
+    render();
+  }
+}
+
+async function continueSelectedCodeSession(prompt) {
+  const trimmed = String(prompt || "").trim();
+  if (!trimmed) {
+    state.message = t("message.promptRequired");
+    render();
+    return;
+  }
+  if (!state.selectedCodeSessionId || state.codeSessionComposer.sending) {
+    return;
+  }
+
+  state.codeSessionComposer.sending = true;
+  render();
+  try {
+    await api(`/api/code-sessions/${encodeURIComponent(state.selectedCodeSessionId)}/messages`, {
+      method: "POST",
+      body: { prompt: trimmed },
+    });
+    state.message = t("message.sentSessionPrompt");
+    state.codeSessionComposer.prompt = "";
+    await loadCodeSessions();
+    selectCodeSession(state.selectedCodeSessionId, { quiet: true });
+  } catch (error) {
+    state.message = error.message;
+  } finally {
+    state.codeSessionComposer.sending = false;
     render();
   }
 }
@@ -1747,12 +1824,11 @@ function renderCodeSession() {
         <section class="detail-section">
           <div class="section-head">
             <div>
-              <h3>${escapeHtml(t("section.recentPrompts"))}</h3>
+              <h3>${escapeHtml(t("section.conversationPreview"))}</h3>
             </div>
           </div>
-          ${session.prompts?.length
-            ? `<pre class="markdown-preview">${escapeHtml(session.prompts.map((prompt) => `- ${prompt}`).join("\n"))}</pre>`
-            : emptyState(t("empty.noPromptPreview"), t("empty.noPromptPreviewBody"))}
+          ${renderConversationThread(session.messages || [])}
+          ${renderCodeSessionComposer(session)}
         </section>
         <section class="detail-section">
           <div class="section-head">
@@ -1764,6 +1840,48 @@ function renderCodeSession() {
         </section>
       </div>
     </section>
+  `;
+}
+
+function renderConversationThread(messages) {
+  if (!messages.length) {
+    return emptyState(t("empty.noPromptPreview"), t("empty.noPromptPreviewBody"));
+  }
+
+  return `
+    <div class="conversation-thread">
+      ${messages.map((message) => `
+        <article class="conversation-message ${escapeAttr(message.role || "assistant")}">
+          <span>${escapeHtml(message.role === "user" ? t("label.you") : t("label.assistant"))}</span>
+          <p>${escapeHtml(message.text || "")}</p>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderCodeSessionComposer(session) {
+  const canSend = Boolean(session?.conversationId) && !state.codeSessionComposer.sending;
+  return `
+    <form id="code-session-form" class="conversation-composer">
+      <textarea
+        name="prompt"
+        rows="2"
+        placeholder="${escapeAttr(t("placeholder.sessionPrompt"))}"
+        aria-label="${escapeAttr(t("placeholder.sessionPrompt"))}"
+        ${state.codeSessionComposer.sending ? "disabled" : ""}
+      >${escapeHtml(state.codeSessionComposer.prompt || "")}</textarea>
+      <div class="conversation-composer-footer">
+        <span>${escapeHtml(t("copy.continueSession"))}</span>
+        <button
+          class="codex-send-button"
+          type="submit"
+          title="${escapeAttr(t("action.sendMessage"))}"
+          aria-label="${escapeAttr(t("action.sendMessage"))}"
+          ${canSend ? "" : "disabled"}
+        >↑</button>
+      </div>
+    </form>
   `;
 }
 
