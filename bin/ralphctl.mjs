@@ -3,20 +3,16 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import {
-  collectRun,
   CONTROL_PLANE_ROOT,
   createContext,
-  createPlanJob,
+  createSession,
+  createTask,
   formatTable,
-  getCurrentRun,
-  getPlanJob,
-  getPlanLogs,
-  getRunDetail,
-  getTaskLogs,
-  listPlanJobs,
-  listRuns,
-  retryTask,
-  stopTask,
+  getAgentLogs,
+  getSession,
+  getTask,
+  listSessions,
+  listTasks,
 } from "../src/lib/control-plane.mjs";
 import { createControlPlaneServer } from "../src/server/server.mjs";
 
@@ -50,22 +46,17 @@ async function main() {
 
   const context = createContext({
     projectRoot: parsed.project,
-    stateRoot: parsed["state-dir"],
-    uiStateRoot: parsed["ui-state-dir"],
+    deskRoot: parsed["desk-root"],
+    worktreesRoot: parsed["worktrees-root"],
   });
-
-  if (command === "runs") {
-    await handleRuns(context, parsed);
-    return;
-  }
 
   if (command === "tasks") {
     await handleTasks(context, parsed);
     return;
   }
 
-  if (command === "planner") {
-    await handlePlanner(context, parsed);
+  if (command === "sessions") {
+    await handleSessions(context, parsed);
     return;
   }
 
@@ -95,7 +86,7 @@ async function launchDesktopGui(parsed) {
 
 function buildDesktopArgs(parsed) {
   const args = [path.join(CONTROL_PLANE_ROOT, "src", "desktop", "main.mjs")];
-  for (const key of ["host", "port", "project", "state-dir", "ui-state-dir"]) {
+  for (const key of ["host", "port", "project", "desk-root", "worktrees-root"]) {
     if (parsed[key]) {
       args.push(`--${key}`, String(parsed[key]));
     }
@@ -111,12 +102,12 @@ async function serveWeb(parsed, options = {}) {
   const port = Number(parsed.port || 4317);
   const initialContext = parsed.project ? createContext({
     projectRoot: parsed.project,
-    stateRoot: parsed["state-dir"],
-    uiStateRoot: parsed["ui-state-dir"],
+    deskRoot: parsed["desk-root"],
+    worktreesRoot: parsed["worktrees-root"],
   }) : null;
   const server = createControlPlaneServer(initialContext, {
-    stateRoot: parsed["state-dir"],
-    uiStateRoot: parsed["ui-state-dir"],
+    deskRoot: parsed["desk-root"],
+    worktreesRoot: parsed["worktrees-root"],
   });
   await new Promise((resolve, reject) => {
     const onError = (error) => reject(error);
@@ -134,110 +125,92 @@ async function serveWeb(parsed, options = {}) {
   console.log(initialContext ? `Project: ${initialContext.projectRoot}` : "Project: choose in the web UI");
 }
 
-async function handleRuns(context, parsed) {
-  const subcommand = parsed._[1] || "list";
-  if (subcommand === "list") {
-    const result = await listRuns(context, { status: parsed.status || "" });
-    return output(parsed, result, () => {
-      if (result.items.length === 0) {
-        return "No Ralph runs found.";
-      }
-      return formatTable(result.items, [
-        { header: "RUN", value: (row) => row.runId, maxWidth: 32 },
-        { header: "STATUS", value: (row) => row.status, maxWidth: 16 },
-        { header: "TASKS", value: (row) => row.totalTasks, maxWidth: 7 },
-        { header: "PROJECT", value: (row) => row.project || "-", maxWidth: 24 },
-        { header: "UPDATED", value: (row) => row.updatedAt || "-", maxWidth: 24 },
-      ]);
-    });
-  }
-  if (subcommand === "show") {
-    const runId = required(parsed._[2], "run id");
-    const result = await getRunDetail(context, runId);
-    return output(parsed, result, () => {
-      const lines = [
-        `Run: ${result.run.runId}`,
-        `Project: ${result.run.project || "(unnamed)"}`,
-        `Status: ${result.run.status}`,
-        `Tasks: ${result.tasks.length}`,
-        "",
-        formatTable(result.tasks, [
-          { header: "ID", value: (row) => row.id, maxWidth: 14 },
-          { header: "STATUS", value: (row) => row.status, maxWidth: 14 },
-          { header: "PRIO", value: (row) => row.priority ?? "-", maxWidth: 5 },
-          { header: "TITLE", value: (row) => row.title || "-", maxWidth: 58 },
-        ]),
-      ];
-      return lines.filter(Boolean).join("\n");
-    });
-  }
-  if (subcommand === "current") {
-    const result = await getCurrentRun(context);
-    return output(parsed, result, () => result.runId || "No current Ralph run.");
-  }
-  if (subcommand === "collect") {
-    const runId = required(parsed._[2], "run id");
-    const result = await collectRun(context, runId);
-    return output(parsed, result, () => result.stdout.trim() || "Collected run report.");
-  }
-  throw new Error(`unknown runs command: ${subcommand}`);
-}
-
 async function handleTasks(context, parsed) {
-  const subcommand = parsed._[1];
-  const runId = required(parsed._[2], "run id");
-  const taskId = required(parsed._[3], "task id");
-  if (subcommand === "logs") {
-    const result = await getTaskLogs(context, runId, taskId, { lines: parsed.lines || 200 });
-    return output(parsed, result, () => result.content || `No log file yet: ${result.path}`);
-  }
-  if (subcommand === "retry") {
-    const result = await retryTask(context, runId, taskId, { force: Boolean(parsed.force) });
-    return output(parsed, result, () => result.stdout.trim() || `Queued ${taskId} for retry.`);
-  }
-  if (subcommand === "stop") {
-    const result = await stopTask(context, runId, taskId);
-    return output(parsed, result, () => result.stdout.trim() || `Stopped ${taskId}.`);
-  }
-  throw new Error(`unknown tasks command: ${subcommand || ""}`);
-}
-
-async function handlePlanner(context, parsed) {
   const subcommand = parsed._[1] || "list";
   if (subcommand === "list") {
-    const result = await listPlanJobs(context);
+    const result = await listTasks(context);
     return output(parsed, result, () => {
       if (result.items.length === 0) {
-        return "No Ralph planner jobs found.";
+        return "No AgentDesk tasks found.";
       }
       return formatTable(result.items, [
-        { header: "JOB", value: (row) => row.planJobId, maxWidth: 36 },
+        { header: "TASK", value: (row) => row.taskId, maxWidth: 44 },
         { header: "STATUS", value: (row) => row.status, maxWidth: 14 },
-        { header: "STAGE", value: (row) => row.stage, maxWidth: 18 },
+        { header: "SUBTASKS", value: (row) => row.subtaskCount, maxWidth: 10 },
+        { header: "SESSIONS", value: (row) => row.sessionCount, maxWidth: 10 },
         { header: "UPDATED", value: (row) => row.updatedAt || "-", maxWidth: 24 },
       ]);
     });
   }
   if (subcommand === "show") {
-    const planJobId = required(parsed._[2], "planner job id");
-    const result = await getPlanJob(context, planJobId, { includeLogs: Boolean(parsed.logs) });
+    const taskId = required(parsed._[2], "task id");
+    const result = await getTask(context, taskId);
     return output(parsed, result, () => {
-      const contract = result.result?.contract || {};
       return [
-        `Plan job: ${result.planJobId}`,
+        `Task: ${result.title || result.taskId}`,
+        `Task ID: ${result.taskId}`,
         `Status: ${result.status}`,
-        `Stage: ${result.stage}`,
-        `Mode: ${result.input.mode}`,
-        contract.PRD_FILE ? `PRD_FILE: ${contract.PRD_FILE}` : "",
-        contract.PRD_JSON ? `PRD_JSON: ${contract.PRD_JSON}` : "",
-        contract.PROGRESS_FILE ? `PROGRESS_FILE: ${contract.PROGRESS_FILE}` : "",
-        result.lastError ? `Last error: ${result.lastError}` : "",
-      ].filter(Boolean).join("\n");
+        `Subtasks: ${result.subtaskCount || 0}`,
+        `Sessions: ${result.sessions?.length || 0}`,
+        "",
+        result.markdown || "(empty task.md)",
+      ].join("\n");
     });
   }
+  if (subcommand === "create") {
+    const title = parsed.title || "";
+    const brief = parsed.brief || await readStdinIfAvailable();
+    const result = await createTask(context, { title, brief });
+    return output(parsed, result, () => `Started task generation: ${result.taskId}`);
+  }
+  throw new Error(`unknown tasks command: ${subcommand}`);
+}
+
+async function handleSessions(context, parsed) {
+  const subcommand = parsed._[1] || "list";
+  if (subcommand === "list") {
+    const taskId = parsed.task || "";
+    const result = await listSessions(context, taskId ? { taskId } : {});
+    return output(parsed, result, () => {
+      if (result.items.length === 0) {
+        return "No AgentDesk sessions found.";
+      }
+      return formatTable(result.items, [
+        { header: "SESSION", value: (row) => row.sessionId, maxWidth: 44 },
+        { header: "STATUS", value: (row) => row.status, maxWidth: 14 },
+        { header: "TASK", value: (row) => row.taskTitle, maxWidth: 28 },
+        { header: "PAR", value: (row) => row.parallelism, maxWidth: 4 },
+        { header: "UPDATED", value: (row) => row.updatedAt || "-", maxWidth: 24 },
+      ]);
+    });
+  }
+  if (subcommand === "show") {
+    const sessionId = required(parsed._[2], "session id");
+    const result = await getSession(context, sessionId);
+    return output(parsed, result, () => {
+      return [
+        `Session: ${result.sessionId}`,
+        `Task: ${result.task?.title || result.title || result.taskId}`,
+        `Status: ${result.status}`,
+        `Parallelism: ${result.parallelism}`,
+        `Succeeded: ${result.succeededAgents || 0}`,
+        `Failed: ${result.failedAgents || 0}`,
+        "",
+        result.docContent || "(empty session documentation)",
+      ].join("\n");
+    });
+  }
+  if (subcommand === "start") {
+    const taskId = required(parsed._[2], "task id");
+    const result = await createSession(context, taskId, {
+      parallelism: parsed.parallel || parsed.parallelism,
+    });
+    return output(parsed, result, () => `Started session: ${result.sessionId}`);
+  }
   if (subcommand === "logs") {
-    const planJobId = required(parsed._[2], "planner job id");
-    const result = await getPlanLogs(context, planJobId);
+    const sessionId = required(parsed._[2], "session id");
+    const agentId = required(parsed._[3], "agent id");
+    const result = await getAgentLogs(context, sessionId, agentId);
     return output(parsed, result, () => [
       "STDOUT",
       result.stdout || "(empty)",
@@ -246,22 +219,7 @@ async function handlePlanner(context, parsed) {
       result.stderr || "(empty)",
     ].join("\n"));
   }
-  if (subcommand === "start") {
-    const inputPath = parsed.input || "";
-    const featureBrief = inputPath ? "" : (parsed.brief || await readStdinIfAvailable());
-    const result = await createPlanJob(context, {
-      mode: inputPath ? "prd_to_json" : "brief_to_json",
-      inputPath,
-      featureBrief,
-      outputDir: parsed["output-dir"],
-      ralphDir: parsed["ralph-dir"],
-      model: parsed.model,
-      reasoning: parsed.reasoning,
-      ...(parsed.fast ? { fast: true } : {}),
-    });
-    return output(parsed, result, () => `Started planner job: ${result.planJobId}`);
-  }
-  throw new Error(`unknown planner command: ${subcommand}`);
+  throw new Error(`unknown sessions command: ${subcommand}`);
 }
 
 function output(parsed, payload, renderText) {
@@ -326,32 +284,23 @@ function openBrowser(url) {
 }
 
 function printHelp() {
-  console.log(`Ralph control plane
+  console.log(`AgentDesk control plane
 
 Usage:
   ralphctl dev [--host 127.0.0.1] [--port 4317]
   ralphctl gui [open] [--host 127.0.0.1] [--port 4317] [--project DIR] [--devtools]
   ralphctl serve [--host 127.0.0.1] [--port 4317] [--project DIR] [--open]
-  ralphctl runs list [--status STATUS] [--json]
-  ralphctl runs show <runId> [--json]
-  ralphctl runs current [--json]
-  ralphctl runs collect <runId> [--json]
-  ralphctl tasks logs <runId> <taskId> [--lines N] [--json]
-  ralphctl tasks retry <runId> <taskId> [--force] [--json]
-  ralphctl tasks stop <runId> <taskId> [--json]
-  ralphctl planner start [--brief TEXT | --input PRD.md] [--output-dir DIR] [--ralph-dir DIR] [--model MODEL] [--reasoning DEPTH] [--fast] [--json]
-  ralphctl planner list [--json]
-  ralphctl planner show <planJobId> [--logs] [--json]
-  ralphctl planner logs <planJobId> [--json]
+  ralphctl tasks list [--json]
+  ralphctl tasks show <taskId> [--json]
+  ralphctl tasks create [--title TEXT] [--brief TEXT] [--json]
+  ralphctl sessions list [--task <taskId>] [--json]
+  ralphctl sessions show <sessionId> [--json]
+  ralphctl sessions start <taskId> [--parallel N] [--json]
+  ralphctl sessions logs <sessionId> <agentId> [--json]
 
 Global options:
-  --project DIR        Project root to inspect. For gui/serve/dev, this is optional.
-  --state-dir DIR      Ralph state root. Default: <project>/.ralph.
-  --ui-state-dir DIR   Control-plane state root. Default: <project>/.ralph-ui.
-
-Planner start options:
-  --model MODEL        Codex-compatible model override for the planner job.
-  --reasoning DEPTH    Codex-compatible reasoning depth override for the planner job.
-  --fast               Request fast planner mode when supported by the planner backend.
+  --project DIR          Project root to inspect. For gui/serve/dev, this is optional.
+  --desk-root DIR        Override the AgentDesk state root. Default: <project>/.agent-desk.
+  --worktrees-root DIR   Override the persistent git worktrees root.
 `);
 }

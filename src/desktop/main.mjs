@@ -44,12 +44,12 @@ async function startControlPlane(parsed) {
   const preferredPort = Number(parsed.port || 4317);
   const initialContext = parsed.project ? createContext({
     projectRoot: parsed.project,
-    stateRoot: parsed["state-dir"],
-    uiStateRoot: parsed["ui-state-dir"],
+    deskRoot: parsed["desk-root"],
+    worktreesRoot: parsed["worktrees-root"],
   }) : null;
   const serverOptions = {
-    stateRoot: parsed["state-dir"],
-    uiStateRoot: parsed["ui-state-dir"],
+    deskRoot: parsed["desk-root"],
+    worktreesRoot: parsed["worktrees-root"],
   };
 
   for (let offset = 0; offset < 20; offset += 1) {

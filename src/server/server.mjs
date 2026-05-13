@@ -4,25 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  collectRun,
   createContext,
-  createPlanJob,
-  getCurrentRun,
+  createSession,
+  createTask,
+  getAgentLogs,
   getHealth,
-  getPlanJob,
-  getPlanLogs,
-  getRunDetail,
   getRuntimeCapabilities,
-  getTaskDetail,
-  getTaskLogs,
-  getTaskResult,
-  listArtifacts,
-  listPlanJobs,
-  listRuns,
-  readArtifact,
-  retryTask,
+  getSession,
+  getTask,
+  listSessions,
+  listTasks,
   snapshotStateStamp,
-  stopTask,
 } from "../lib/control-plane.mjs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -65,13 +57,10 @@ export function createControlPlaneServer(initialContext = null, options = {}) {
       return;
     }
     lastStamp = stamp;
-    const payload = JSON.stringify({
+    notifyClients(clients, "state.updated", {
       type: "state.updated",
       updatedAt: new Date().toISOString(),
     });
-    for (const client of clients) {
-      client.write(`event: state.updated\ndata: ${payload}\n\n`);
-    }
   }, 1500);
   interval.unref();
 
@@ -125,10 +114,8 @@ async function routeRequest(projects, req, res, clients) {
         ok: true,
         needsProject: true,
         projectRoot: "",
-        stateRoot: "",
-        uiStateRoot: "",
-        ralphRunCli: "",
-        ralphPlanCli: "",
+        deskRoot: "",
+        worktreesRoot: "",
       });
     }
     return sendJson(res, 200, { ...await getHealth(context), needsProject: false });
@@ -140,80 +127,54 @@ async function routeRequest(projects, req, res, clients) {
     return sendJson(res, 200, await getRuntimeCapabilities(context));
   }
 
-  if (req.method === "GET" && url.pathname === "/api/runs") {
-    return sendJson(res, 200, await listRuns(context, { status: url.searchParams.get("status") || "" }));
+  if (req.method === "GET" && url.pathname === "/api/tasks") {
+    return sendJson(res, 200, await listTasks(context));
   }
 
-  if (req.method === "GET" && url.pathname === "/api/runs/current") {
-    return sendJson(res, 200, await getCurrentRun(context));
+  if (req.method === "POST" && url.pathname === "/api/tasks") {
+    return sendJson(res, 202, await createTask(context, await readJsonBody(req)));
   }
 
-  const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
-  if (runMatch && req.method === "GET") {
-    return sendJson(res, 200, await getRunDetail(context, decodeURIComponent(runMatch[1])));
+  const taskSessionsMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/sessions$/);
+  if (taskSessionsMatch && req.method === "GET") {
+    return sendJson(res, 200, await listSessions(context, {
+      taskId: decodeURIComponent(taskSessionsMatch[1]),
+    }));
   }
 
-  const collectMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/collect$/);
-  if (collectMatch && req.method === "POST") {
-    return sendJson(res, 200, await collectRun(context, decodeURIComponent(collectMatch[1])));
+  if (taskSessionsMatch && req.method === "POST") {
+    return sendJson(res, 202, await createSession(
+      context,
+      decodeURIComponent(taskSessionsMatch[1]),
+      await readJsonBody(req),
+    ));
   }
 
-  const taskMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/tasks\/([^/]+)$/);
+  const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
   if (taskMatch && req.method === "GET") {
-    return sendJson(res, 200, await getTaskDetail(context, decodeURIComponent(taskMatch[1]), decodeURIComponent(taskMatch[2])));
+    return sendJson(res, 200, await getTask(context, decodeURIComponent(taskMatch[1])));
   }
 
-  const taskLogsMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/tasks\/([^/]+)\/logs$/);
-  if (taskLogsMatch && req.method === "GET") {
-    return sendJson(res, 200, await getTaskLogs(context, decodeURIComponent(taskLogsMatch[1]), decodeURIComponent(taskLogsMatch[2]), {
-      lines: url.searchParams.get("lines"),
-    }));
+  if (req.method === "GET" && url.pathname === "/api/sessions") {
+    return sendJson(res, 200, await listSessions(context));
   }
 
-  const taskResultMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/tasks\/([^/]+)\/result$/);
-  if (taskResultMatch && req.method === "GET") {
-    return sendJson(res, 200, await getTaskResult(context, decodeURIComponent(taskResultMatch[1]), decodeURIComponent(taskResultMatch[2])));
+  const sessionAgentLogsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/agents\/([^/]+)\/logs$/);
+  if (sessionAgentLogsMatch && req.method === "GET") {
+    return sendJson(
+      res,
+      200,
+      await getAgentLogs(
+        context,
+        decodeURIComponent(sessionAgentLogsMatch[1]),
+        decodeURIComponent(sessionAgentLogsMatch[2]),
+      ),
+    );
   }
 
-  const taskRetryMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/tasks\/([^/]+)\/retry$/);
-  if (taskRetryMatch && req.method === "POST") {
-    const body = await readJsonBody(req);
-    return sendJson(res, 200, await retryTask(context, decodeURIComponent(taskRetryMatch[1]), decodeURIComponent(taskRetryMatch[2]), {
-      force: Boolean(body.force),
-    }));
-  }
-
-  const taskStopMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/tasks\/([^/]+)\/stop$/);
-  if (taskStopMatch && req.method === "POST") {
-    return sendJson(res, 200, await stopTask(context, decodeURIComponent(taskStopMatch[1]), decodeURIComponent(taskStopMatch[2])));
-  }
-
-  if (url.pathname === "/api/plans" && req.method === "GET") {
-    return sendJson(res, 200, await listPlanJobs(context));
-  }
-
-  if (url.pathname === "/api/plans" && req.method === "POST") {
-    return sendJson(res, 202, await createPlanJob(context, await readJsonBody(req)));
-  }
-
-  const planLogsMatch = url.pathname.match(/^\/api\/plans\/([^/]+)\/logs$/);
-  if (planLogsMatch && req.method === "GET") {
-    return sendJson(res, 200, await getPlanLogs(context, decodeURIComponent(planLogsMatch[1])));
-  }
-
-  const planMatch = url.pathname.match(/^\/api\/plans\/([^/]+)$/);
-  if (planMatch && req.method === "GET") {
-    return sendJson(res, 200, await getPlanJob(context, decodeURIComponent(planMatch[1]), {
-      includeLogs: url.searchParams.get("logs") === "1",
-    }));
-  }
-
-  if (url.pathname === "/api/artifacts" && req.method === "GET") {
-    return sendJson(res, 200, await listArtifacts(context));
-  }
-
-  if (url.pathname === "/api/artifacts/preview" && req.method === "GET") {
-    return sendJson(res, 200, await readArtifact(context, url.searchParams.get("path")));
+  const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+  if (sessionMatch && req.method === "GET") {
+    return sendJson(res, 200, await getSession(context, decodeURIComponent(sessionMatch[1])));
   }
 
   sendJson(res, 404, { error: "not found" });
@@ -251,8 +212,8 @@ function requireProjectContext(projects) {
 function createProjectRegistry(initialContext, options = {}) {
   const stateFile = options.stateFile || DEFAULT_PROJECTS_STATE_FILE;
   const contextOptions = {
-    stateRoot: options.stateRoot,
-    uiStateRoot: options.uiStateRoot,
+    deskRoot: options.deskRoot,
+    worktreesRoot: options.worktreesRoot,
   };
   let context = initialContext || null;
   let recent = [];
@@ -289,7 +250,7 @@ function createProjectRegistry(initialContext, options = {}) {
     async list() {
       await loadRecent();
       return {
-        current: context ? summarizeProject(context) : null,
+        current: context ? await refreshProjectSummary(summarizeProject(context)) : null,
         items: await Promise.all(recent.map(refreshProjectSummary)),
       };
     },
@@ -316,10 +277,20 @@ function createProjectRegistry(initialContext, options = {}) {
 }
 
 async function refreshProjectSummary(item) {
+  const deskRoot = item.deskRoot || path.join(item.projectRoot, ".agent-desk");
+  const tasksRoot = path.join(deskRoot, "tasks");
+  const sessionsRoot = path.join(deskRoot, "sessions");
+  const [hasDeskState, taskCount, sessionCount] = await Promise.all([
+    isDirectory(deskRoot),
+    countDirectories(tasksRoot),
+    countDirectories(sessionsRoot),
+  ]);
   return {
     ...item,
-    hasState: await isDirectory(item.stateRoot || path.join(item.projectRoot, ".ralph")),
-    hasUiState: await isDirectory(item.uiStateRoot || path.join(item.projectRoot, ".ralph-ui")),
+    deskRoot,
+    hasDeskState,
+    taskCount,
+    sessionCount,
   };
 }
 
@@ -327,14 +298,15 @@ function summarizeProject(context) {
   return {
     projectRoot: path.resolve(context.projectRoot),
     name: path.basename(context.projectRoot) || context.projectRoot,
-    stateRoot: context.stateRoot,
-    uiStateRoot: context.uiStateRoot,
-    ralphRunCli: context.ralphRunCli,
-    ralphPlanCli: context.ralphPlanCli,
-    hasState: fs.existsSync(context.stateRoot),
-    hasUiState: fs.existsSync(context.uiStateRoot),
+    deskRoot: context.deskRoot,
+    worktreesRoot: context.worktreesRoot,
     selectedAt: new Date().toISOString(),
   };
+}
+
+async function countDirectories(dirPath) {
+  const entries = await fs.promises.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  return entries.filter((entry) => entry.isDirectory()).length;
 }
 
 async function readJsonFile(filePath) {

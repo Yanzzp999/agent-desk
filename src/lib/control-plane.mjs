@@ -13,12 +13,20 @@ import {
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const CONTROL_PLANE_ROOT = path.resolve(MODULE_DIR, "../..");
-const SCHEMA_VERSION = 1;
-const ATTENTION_STATUSES = new Set(["failed", "stale", "stopped", "needs_attention"]);
-const PLANNER_MODES = ["brief_to_json", "prd_to_json"];
-const SUPPORTED_PLANNER_MODES = new Set(PLANNER_MODES);
+export const AGENT_DESK_STATE_DIRNAME = ".agent-desk";
+export const DEFAULT_SUBAGENT_MODEL = "gpt-5.5";
+export const DEFAULT_SUBAGENT_REASONING = "xhigh";
+export const DEFAULT_SERVICE_TIER = "fast";
+export const DEFAULT_PARALLELISM = 6;
+export const DEFAULT_LAUNCH_BATCH_SIZE = 6;
+const MAX_PARALLELISM = 24;
+const SCHEMA_VERSION = 2;
+const TASK_STATUSES = new Set(["received", "generating", "ready", "running", "succeeded", "failed"]);
+const SESSION_STATUSES = new Set(["queued", "running", "succeeded", "failed"]);
+const AGENT_STATUSES = new Set(["queued", "running", "integrating", "succeeded", "failed"]);
 const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const BOOLEAN_FALSE_VALUES = new Set(["0", "false", "no", "off"]);
+const SUBAGENT_REPORT_SCHEMA_PATH = path.join(CONTROL_PLANE_ROOT, "src", "lib", "subagent-report.schema.json");
 
 export function findProjectRoot(cwd = process.cwd()) {
   const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
@@ -33,102 +41,51 @@ export function findProjectRoot(cwd = process.cwd()) {
 
 export function createContext(options = {}) {
   const projectRoot = path.resolve(options.projectRoot || findProjectRoot(options.cwd || process.cwd()));
-  const stateRoot = path.resolve(options.stateRoot || process.env.RALPH_STATE_DIR || path.join(projectRoot, ".ralph"));
-  const uiStateRoot = path.resolve(options.uiStateRoot || process.env.RALPH_UI_STATE_DIR || path.join(projectRoot, ".ralph-ui"));
+  const deskRoot = path.resolve(options.deskRoot || path.join(projectRoot, AGENT_DESK_STATE_DIRNAME));
+  const projectKey = `${slug(path.basename(projectRoot))}-${shortHash(projectRoot)}`;
+  const worktreesRoot = path.resolve(
+    options.worktreesRoot || path.join(os.homedir(), ".agent-desk", "worktrees", projectKey),
+  );
   return {
     projectRoot,
-    stateRoot,
-    runsRoot: path.join(stateRoot, "runs"),
-    currentRunFile: path.join(stateRoot, "current-run"),
-    uiStateRoot,
-    plansRoot: path.join(uiStateRoot, "plans"),
+    deskRoot,
+    tasksRoot: path.join(deskRoot, "tasks"),
+    sessionsRoot: path.join(deskRoot, "sessions"),
+    docsRoot: path.join(deskRoot, "docs"),
+    locksRoot: path.join(deskRoot, "locks"),
     controlPlaneRoot: CONTROL_PLANE_ROOT,
-    ralphRunCli: resolveRalphCli(options.ralphRunCli || process.env.RALPH_RUN_CLI, projectRoot, [
-      "ralph-run",
-      "scripts",
-      "ralph-run.sh",
-    ]),
-    ralphPlanCli: resolveRalphCli(options.ralphPlanCli || process.env.RALPH_PLAN_CLI, projectRoot, [
-      "ralph",
-      "scripts",
-      "ralph.sh",
-    ]),
+    worktreesRoot,
     codexCli: resolveCodexCliPath({
       explicitPath: options.codexCli || process.env.CODEX_CLI || process.env.CODEX_CLI_PATH || process.env.CODEX_BIN,
     }),
   };
 }
 
-export function resolveRalphCli(explicitPath, projectRoot, relativeSegments) {
-  if (explicitPath) {
-    return path.resolve(explicitPath);
-  }
-
-  const candidateRoots = resolveSkillRoots(projectRoot);
-
-  for (const root of candidateRoots) {
-    const candidate = path.join(root, ...relativeSegments);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return path.join(preferredSkillRoot(candidateRoots), ...relativeSegments);
-}
-
-function resolveSkillRoots(projectRoot) {
-  const configuredSkillsRoot = process.env.RALPH_SKILLS_ROOT
-    ? [path.resolve(process.env.RALPH_SKILLS_ROOT)]
-    : [];
-  return uniquePaths([
-    ...configuredSkillsRoot,
-    path.join(projectRoot, "skills"),
-    path.join(projectRoot, ".codex", "skills"),
-    path.join(projectRoot, ".gemini", "skills"),
-    path.join(projectRoot, ".claude", "skills"),
-    path.join(CONTROL_PLANE_ROOT, "skills"),
-    path.join(path.dirname(CONTROL_PLANE_ROOT), "skills"),
-    path.join(os.homedir(), ".codex", "skills"),
-    path.join(os.homedir(), ".gemini", "skills"),
-    path.join(os.homedir(), ".claude", "skills"),
-  ]);
-}
-
-function preferredSkillRoot(candidateRoots) {
-  const existingRoot = candidateRoots.find((root) => {
-    try {
-      return fs.statSync(root).isDirectory();
-    } catch {
-      return false;
-    }
-  });
-  return existingRoot || path.join(os.homedir(), ".codex", "skills");
-}
-
-function uniquePaths(paths) {
-  return [...new Set(paths.map((entry) => path.resolve(entry)))];
-}
-
 export async function getHealth(context) {
-  const { runtime, capabilities } = await getRuntimeCapabilities(context);
+  const [{ runtime, capabilities }, tasks, sessions] = await Promise.all([
+    getRuntimeCapabilities(context),
+    listTasks(context),
+    listSessions(context),
+  ]);
   return {
     ok: true,
     projectRoot: context.projectRoot,
-    stateRoot: context.stateRoot,
-    uiStateRoot: context.uiStateRoot,
-    ralphRunCli: context.ralphRunCli,
-    ralphPlanCli: context.ralphPlanCli,
+    deskRoot: context.deskRoot,
+    worktreesRoot: context.worktreesRoot,
     codexRuntime: runtime,
     runtime,
     capabilities,
+    counts: {
+      tasks: tasks.items.length,
+      sessions: sessions.items.length,
+    },
   };
 }
 
 export async function getRuntimeCapabilities(context) {
-  const [codexDiscovery, codexVersion, plannerCapabilities] = await Promise.all([
+  const [codexDiscovery, codexVersion] = await Promise.all([
     discoverCodexModels({ codexCliPath: context.codexCli, timeoutMs: 1000 }),
     detectCodexVersion(context.codexCli),
-    detectPlannerCapabilities(context.ralphPlanCli),
   ]);
   const codexModels = Array.isArray(codexDiscovery.models) ? codexDiscovery.models : [];
   const reasoningEfforts = Array.isArray(codexDiscovery.reasoningEfforts)
@@ -153,6 +110,13 @@ export async function getRuntimeCapabilities(context) {
     fast,
     supportsFast: fast.supported,
     lastErrors: Array.isArray(codexDiscovery.errors) ? codexDiscovery.errors : [],
+    defaults: {
+      model: DEFAULT_SUBAGENT_MODEL,
+      reasoning: DEFAULT_SUBAGENT_REASONING,
+      serviceTier: DEFAULT_SERVICE_TIER,
+      batchSize: DEFAULT_LAUNCH_BATCH_SIZE,
+      parallelism: DEFAULT_PARALLELISM,
+    },
   };
   return {
     runtime: {
@@ -165,241 +129,97 @@ export async function getRuntimeCapabilities(context) {
       ...runtimeMetadata,
     },
     capabilities: {
-      planner: {
-        modes: PLANNER_MODES,
-        input: {
-          model: "string",
-          reasoning: "string",
-          fast: "boolean",
-        },
-        options: {
-          model: true,
-          reasoning: true,
-          fast: true,
-        },
-        runtime: runtimeMetadata,
-        cli: {
-          path: context.ralphPlanCli,
-          available: plannerCapabilities.available,
-          flags: plannerCapabilities.flags,
-        },
+      tasks: {
+        generation: true,
+        markdownOnly: true,
+      },
+      sessions: {
+        worktrees: true,
+        masterIntegration: true,
+        batchSize: DEFAULT_LAUNCH_BATCH_SIZE,
+        fixedModel: DEFAULT_SUBAGENT_MODEL,
+        fixedReasoning: DEFAULT_SUBAGENT_REASONING,
+        fixedServiceTier: DEFAULT_SERVICE_TIER,
       },
     },
   };
 }
 
-function normalizeFastMetadata(fast) {
-  const supportedModels = Array.isArray(fast?.supportedModels) ? fast.supportedModels.map(String) : [];
-  return {
-    supported: Boolean(fast?.supported || supportedModels.length > 0),
-    tier: normalizeOptionalString(fast?.tier) || "fast",
-    source: normalizeOptionalString(fast?.source),
-    supportedModels,
-  };
-}
-
-export async function listRuns(context, options = {}) {
-  const entries = await readdirSafe(context.runsRoot, { withFileTypes: true });
+export async function listTasks(context) {
+  const entries = await readdirSafe(context.tasksRoot, { withFileTypes: true });
   const items = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) {
       continue;
     }
-    const runId = entry.name;
-    const runDir = path.join(context.runsRoot, runId);
-    const runPath = path.join(runDir, "run.json");
-    const run = await readJsonSafe(runPath);
-    if (!run) {
+    const meta = await readTaskMeta(context, entry.name).catch(() => null);
+    if (!meta) {
       continue;
     }
-    const tasks = await readTasksForRun(runDir, run);
-    const summary = buildRunSummary(tasks);
-    const stat = await statSafe(runPath);
-    const item = {
-      runId: String(run.runId || runId),
-      project: String(run.project || ""),
-      status: String(run.status || deriveRunStatus(tasks)),
-      counts: summary.counts,
-      totalTasks: tasks.length,
-      sourcePrd: run.sourcePrd || "",
-      branchName: run.branchName || "",
-      maxParallel: run.maxParallel || null,
-      createdAt: run.createdAt || null,
-      updatedAt: run.updatedAt || stat?.mtime?.toISOString() || null,
-      runDir,
-    };
-    if (!options.status || options.status === item.status) {
-      items.push(item);
-    }
+    items.push(await enrichTaskSummary(context, meta));
   }
   items.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
   return { items };
 }
 
-export async function getCurrentRun(context) {
-  const runId = await readTextSafe(context.currentRunFile);
-  const current = runId.trim();
-  if (!current) {
-    return { runId: "", item: null };
-  }
-  const detail = await getRunDetail(context, current).catch(() => null);
-  return { runId: current, item: detail ? summarizeRunItem(detail) : null };
-}
-
-export async function getRunDetail(context, runId) {
-  const runDir = path.join(context.runsRoot, runId);
-  const runPath = path.join(runDir, "run.json");
-  const run = await readJsonRequired(runPath);
-  const tasks = await readTasksForRun(runDir, run);
-  const summary = buildRunSummary(tasks);
-  return {
-    run,
-    tasks: tasks.sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0)),
-    summary,
-    paths: {
-      runDir,
-      reportPath: path.join(runDir, "report.md"),
-    },
-  };
-}
-
-export async function getTaskDetail(context, runId, taskId) {
-  const detail = await getRunDetail(context, runId);
-  const task = detail.tasks.find((candidate) => candidate.id === taskId);
-  if (!task) {
-    throw new Error(`task not found in run ${runId}: ${taskId}`);
-  }
-  return { run: detail.run, task };
-}
-
-export async function getTaskLogs(context, runId, taskId, options = {}) {
-  const { task } = await getTaskDetail(context, runId, taskId);
-  const lineCount = clampPositiveInteger(options.lines, 200, 2000);
-  const logPath = task.logPath || path.join(context.runsRoot, runId, "logs", `${taskId}.log`);
-  return {
-    path: logPath,
-    lines: lineCount,
-    content: await readLastLines(logPath, lineCount),
-  };
-}
-
-export async function getTaskResult(context, runId, taskId) {
-  const { task } = await getTaskDetail(context, runId, taskId);
-  const resultPath = task.resultPath || path.join(context.runsRoot, runId, "results", `${taskId}.md`);
-  return {
-    path: resultPath,
-    content: await readTextSafe(resultPath),
-  };
-}
-
-export async function collectRun(context, runId) {
-  return runRalphRun(context, ["collect", "--run", runId]);
-}
-
-export async function retryTask(context, runId, taskId, options = {}) {
-  const args = ["retry", taskId, "--run", runId];
-  if (options.force) {
-    args.push("--force");
-  }
-  return runRalphRun(context, args);
-}
-
-export async function stopTask(context, runId, taskId) {
-  return runRalphRun(context, ["stop", taskId, "--run", runId]);
-}
-
-export async function runRalphRun(context, args) {
-  await assertExecutable(context.ralphRunCli, "ralph-run CLI");
-  const result = await spawnCapture(context.ralphRunCli, args, {
-    cwd: context.projectRoot,
-  });
-  if (result.exitCode !== 0) {
-    const details = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
-    throw new Error(details || `ralph-run exited with code ${result.exitCode}`);
-  }
-  return result;
-}
-
-export async function listPlanJobs(context) {
-  const entries = await readdirSafe(context.plansRoot, { withFileTypes: true });
-  const items = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const meta = await readPlanMeta(context, entry.name).catch(() => null);
-    if (meta) {
-      items.push(meta);
-    }
-  }
-  items.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
-  return { items };
-}
-
-export async function getPlanJob(context, planJobId, options = {}) {
-  const meta = await readPlanMeta(context, planJobId);
-  const result = await readJsonSafe(path.join(planJobDir(context, planJobId), "result.json"));
-  const includeLogs = Boolean(options.includeLogs);
+export async function getTask(context, taskId) {
+  const meta = await readTaskMeta(context, taskId);
+  const sessions = await listSessions(context, { taskId });
   return {
     ...meta,
-    result: result || null,
-    stdout: includeLogs ? await readTextSafe(meta.paths.stdoutLog) : undefined,
-    stderr: includeLogs ? await readTextSafe(meta.paths.stderrLog) : undefined,
+    markdown: await readTextSafe(meta.paths.taskMd),
+    sessions: sessions.items,
   };
 }
 
-export async function getPlanLogs(context, planJobId) {
-  const meta = await readPlanMeta(context, planJobId);
-  return {
-    stdoutLog: meta.paths.stdoutLog,
-    stderrLog: meta.paths.stderrLog,
-    stdout: await readTextSafe(meta.paths.stdoutLog),
-    stderr: await readTextSafe(meta.paths.stderrLog),
-  };
-}
+export async function createTask(context, request = {}) {
+  const normalized = normalizeTaskRequest(request);
+  await assertExecutable(context.codexCli || "codex", "codex CLI");
+  await fsp.mkdir(context.tasksRoot, { recursive: true });
 
-export async function createPlanJob(context, request = {}) {
-  const normalizedInput = normalizePlannerInput(context, request);
-  await assertExecutable(context.ralphPlanCli, "ralph planner CLI");
-  await fsp.mkdir(context.plansRoot, { recursive: true });
-
+  const taskId = await uniqueTaskId(context, normalized);
+  const taskDir = taskDirPath(context, taskId);
   const now = new Date().toISOString();
-  const planJobId = await uniquePlanJobId(context, request);
-  const jobDir = planJobDir(context, planJobId);
-  await fsp.mkdir(jobDir, { recursive: true });
   const meta = {
     schemaVersion: SCHEMA_VERSION,
-    planJobId,
+    taskId,
+    title: normalized.title,
+    brief: normalized.brief,
     status: "received",
-    stage: "received",
-    input: normalizedInput,
-    pid: null,
     createdAt: now,
     updatedAt: now,
-    startedAt: null,
     completedAt: null,
+    lastError: "",
+    subtaskCount: 0,
     paths: {
-      jobDir,
-      stdoutLog: path.join(jobDir, "stdout.log"),
-      stderrLog: path.join(jobDir, "stderr.log"),
-      resultJson: path.join(jobDir, "result.json"),
+      taskDir,
+      briefMd: path.join(taskDir, "brief.md"),
+      promptMd: path.join(taskDir, "prompt.md"),
+      taskMd: path.join(taskDir, "task.md"),
+      metaJson: path.join(taskDir, "meta.json"),
+      stdoutLog: path.join(taskDir, "stdout.log"),
+      stderrLog: path.join(taskDir, "stderr.log"),
     },
   };
-  await writeJsonAtomic(path.join(jobDir, "meta.json"), meta);
+  await fsp.mkdir(taskDir, { recursive: true });
+  await fsp.writeFile(meta.paths.briefMd, normalized.brief, "utf8");
   await fsp.writeFile(meta.paths.stdoutLog, "", "utf8");
   await fsp.writeFile(meta.paths.stderrLog, "", "utf8");
+  await writeJsonAtomic(meta.paths.metaJson, meta);
 
-  const workerPath = path.join(CONTROL_PLANE_ROOT, "src", "worker", "run-plan-job.mjs");
+  const workerPath = path.join(CONTROL_PLANE_ROOT, "src", "worker", "run-agent-desk-job.mjs");
   const child = spawn(process.execPath, [
     workerPath,
     "--project",
     context.projectRoot,
-    "--state-dir",
-    context.stateRoot,
-    "--ui-state-dir",
-    context.uiStateRoot,
+    "--desk-root",
+    context.deskRoot,
+    "--worktrees-root",
+    context.worktreesRoot,
     "--job",
-    planJobId,
+    "generate-task",
+    "--task",
+    taskId,
   ], {
     cwd: context.projectRoot,
     detached: true,
@@ -407,306 +227,416 @@ export async function createPlanJob(context, request = {}) {
   });
   child.unref();
 
-  meta.pid = child.pid;
-  meta.updatedAt = new Date().toISOString();
-  await writeJsonAtomic(path.join(jobDir, "meta.json"), meta);
-  return meta;
+  return enrichTaskSummary(context, {
+    ...meta,
+    pid: child.pid,
+  });
 }
 
-export async function runPlanJob(context, planJobId) {
-  const metaPath = path.join(planJobDir(context, planJobId), "meta.json");
-  let meta = await readJsonRequired(metaPath);
-  const initialStage = meta.input.mode === "brief_to_json" ? "generating_prd" : "converting_json";
-  meta = await updatePlanMeta(context, planJobId, {
-    status: "running",
-    stage: initialStage,
-    startedAt: new Date().toISOString(),
+export async function runTaskGenerationJob(context, taskId) {
+  const meta = await readTaskMeta(context, taskId);
+  const prompt = buildTaskGenerationPrompt(meta);
+  await fsp.writeFile(meta.paths.promptMd, prompt, "utf8");
+  await updateTaskMeta(context, taskId, {
+    status: "generating",
+    lastError: "",
   });
 
-  const args = buildPlannerArgs(meta.input);
-  const child = spawn(context.ralphPlanCli, args, {
+  const result = await runCodexPrompt({
+    context,
     cwd: context.projectRoot,
-    stdio: ["pipe", "pipe", "pipe"],
+    prompt,
+    outputFile: meta.paths.taskMd,
+    stdoutLog: meta.paths.stdoutLog,
+    stderrLog: meta.paths.stderrLog,
+    skipGitRepoCheck: true,
   });
-  await updatePlanMeta(context, planJobId, { pid: child.pid });
-
-  if (meta.input.mode === "brief_to_json") {
-    child.stdin.end(`${meta.input.featureBrief}\n`);
-  } else {
-    child.stdin.end();
+  if (result.exitCode !== 0) {
+    const error = describeCommandFailure(result, "task generation failed");
+    await updateTaskMeta(context, taskId, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      lastError: error,
+    });
+    throw new Error(error);
   }
 
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    const text = chunk.toString();
-    stdout += text;
-    fs.appendFileSync(meta.paths.stdoutLog, text, "utf8");
-    const contract = extractContract(stdout);
-    if (contract.PRD_FILE && meta.input.mode === "brief_to_json") {
-      updatePlanMetaSync(context, planJobId, { stage: "converting_json" });
-    }
-  });
-  child.stderr.on("data", (chunk) => {
-    const text = chunk.toString();
-    stderr += text;
-    fs.appendFileSync(meta.paths.stderrLog, text, "utf8");
-  });
+  const markdown = await readTextSafe(meta.paths.taskMd);
+  if (!markdown.trim()) {
+    const error = "Codex returned an empty task markdown document";
+    await updateTaskMeta(context, taskId, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      lastError: error,
+    });
+    throw new Error(error);
+  }
 
-  const result = await new Promise((resolve) => {
-    child.on("error", (error) => resolve({ exitCode: 1, signal: null, error: error.message }));
-    child.on("close", (exitCode, signal) => resolve({ exitCode: exitCode ?? 1, signal, error: "" }));
-  });
-
-  const contract = extractContract(stdout);
-  const final = {
-    planJobId,
-    exitCode: result.exitCode,
-    signal: result.signal,
-    error: result.error,
-    contract,
+  const items = parseTaskMarkdownItems(markdown);
+  const title = extractMarkdownTitle(markdown) || meta.title;
+  await updateTaskMeta(context, taskId, {
+    title,
+    status: "ready",
     completedAt: new Date().toISOString(),
-  };
-  await writeJsonAtomic(meta.paths.resultJson, final);
-  await updatePlanMeta(context, planJobId, {
-    status: result.exitCode === 0 ? "succeeded" : "failed",
-    stage: result.exitCode === 0 ? "succeeded" : "failed",
-    completedAt: final.completedAt,
-    lastError: result.exitCode === 0 ? "" : (result.error || stderr.trim().split(/\r?\n/).slice(-5).join("\n")),
+    subtaskCount: items.length,
+    lastError: "",
   });
-  return final;
+  return getTask(context, taskId);
 }
 
-export async function listArtifacts(context) {
-  const artifacts = [];
-  const runs = await listRuns(context);
-  for (const runItem of runs.items) {
-    const detail = await getRunDetail(context, runItem.runId).catch(() => null);
-    if (!detail) {
+export async function listSessions(context, options = {}) {
+  const entries = await readdirSafe(context.sessionsRoot, { withFileTypes: true });
+  const items = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
       continue;
     }
-    await addArtifactIfExists(artifacts, {
-      kind: "run-report",
-      title: `${runItem.runId} report`,
-      path: detail.paths.reportPath,
-      runId: runItem.runId,
+    const meta = await readSessionMeta(context, entry.name).catch(() => null);
+    if (!meta) {
+      continue;
+    }
+    if (options.taskId && meta.taskId !== options.taskId) {
+      continue;
+    }
+    items.push(await enrichSessionSummary(context, meta));
+  }
+  items.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+  return { items };
+}
+
+export async function getSession(context, sessionId) {
+  const meta = await readSessionMeta(context, sessionId);
+  const task = await readTaskMeta(context, meta.taskId).catch(() => null);
+  return {
+    ...meta,
+    task: task ? {
+      taskId: task.taskId,
+      title: task.title,
+      status: task.status,
+      path: task.paths.taskMd,
+    } : null,
+    docContent: await readTextSafe(meta.paths.docMd),
+  };
+}
+
+export async function createSession(context, taskId, request = {}) {
+  const task = await readTaskMeta(context, taskId);
+  if (!TASK_STATUSES.has(task.status) || !["ready", "running", "succeeded", "failed"].includes(task.status)) {
+    throw new Error(`task is not ready to execute: ${task.status}`);
+  }
+  await assertGitRepository(context.projectRoot);
+  await assertMasterBranch(context.projectRoot);
+
+  const parallelism = normalizeParallelism(request.parallelism);
+  const sessionId = await uniqueSessionId(context, task);
+  const sessionDir = sessionDirPath(context, sessionId);
+  const now = new Date().toISOString();
+  const meta = {
+    schemaVersion: SCHEMA_VERSION,
+    sessionId,
+    taskId: task.taskId,
+    title: task.title,
+    status: "queued",
+    parallelism,
+    batchSize: DEFAULT_LAUNCH_BATCH_SIZE,
+    createdAt: now,
+    updatedAt: now,
+    startedAt: null,
+    completedAt: null,
+    lastError: "",
+    totalAgents: 0,
+    succeededAgents: 0,
+    failedAgents: 0,
+    runningAgents: 0,
+    agents: [],
+    paths: {
+      sessionDir,
+      metaJson: path.join(sessionDir, "meta.json"),
+      docMd: path.join(sessionDir, "session.md"),
+      stdoutLog: path.join(sessionDir, "stdout.log"),
+      stderrLog: path.join(sessionDir, "stderr.log"),
+    },
+  };
+  await fsp.mkdir(sessionDir, { recursive: true });
+  await fsp.writeFile(meta.paths.stdoutLog, "", "utf8");
+  await fsp.writeFile(meta.paths.stderrLog, "", "utf8");
+  await writeJsonAtomic(meta.paths.metaJson, meta);
+
+  const workerPath = path.join(CONTROL_PLANE_ROOT, "src", "worker", "run-agent-desk-job.mjs");
+  const child = spawn(process.execPath, [
+    workerPath,
+    "--project",
+    context.projectRoot,
+    "--desk-root",
+    context.deskRoot,
+    "--worktrees-root",
+    context.worktreesRoot,
+    "--job",
+    "run-session",
+    "--session",
+    sessionId,
+  ], {
+    cwd: context.projectRoot,
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+
+  await updateTaskMeta(context, taskId, { status: "running" });
+  return enrichSessionSummary(context, meta);
+}
+
+export async function runSessionJob(context, sessionId) {
+  const session = await readSessionMeta(context, sessionId);
+  const task = await readTaskMeta(context, session.taskId);
+  const markdown = await readTextSafe(task.paths.taskMd);
+  const parsedItems = parseTaskMarkdownItems(markdown);
+  if (parsedItems.length === 0) {
+    const error = "task.md does not contain any executable subtasks";
+    await updateSessionMeta(context, sessionId, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      lastError: error,
     });
-    for (const task of detail.tasks) {
-      if (task.resultPath) {
-        await addArtifactIfExists(artifacts, {
-          kind: "task-result",
-          title: `${task.id} result`,
-          path: task.resultPath,
-          runId: runItem.runId,
-          taskId: task.id,
-        });
+    await updateTaskMeta(context, task.taskId, {
+      status: "failed",
+      lastError: error,
+    });
+    throw new Error(error);
+  }
+
+  const agents = parsedItems.map((item, index) => {
+    const agentId = `agent-${String(index + 1).padStart(2, "0")}`;
+    const agentDir = path.join(session.paths.sessionDir, "agents", agentId);
+    const worktreePath = path.join(context.worktreesRoot, sessionId, agentId);
+    const branchName = `agentdesk/${task.taskId}/${sessionId}/${agentId}`;
+    return {
+      id: agentId,
+      order: index + 1,
+      title: item.title,
+      detail: item.detail,
+      status: "queued",
+      branchName,
+      worktreePath,
+      baseCommit: "",
+      headCommit: "",
+      mergedCommit: "",
+      changedFiles: [],
+      testsRun: [],
+      risks: [],
+      notes: [],
+      summary: "",
+      startedAt: null,
+      updatedAt: null,
+      completedAt: null,
+      exitCode: null,
+      lastError: "",
+      paths: {
+        agentDir,
+        promptMd: path.join(agentDir, "prompt.md"),
+        reportJson: path.join(agentDir, "report.json"),
+        stdoutLog: path.join(agentDir, "stdout.log"),
+        stderrLog: path.join(agentDir, "stderr.log"),
+      },
+    };
+  });
+
+  await updateSessionMeta(context, sessionId, {
+    status: "running",
+    startedAt: new Date().toISOString(),
+    lastError: "",
+    totalAgents: agents.length,
+    agents,
+  });
+  await writeSessionDocumentation(context, sessionId);
+
+  const pending = [...agents];
+  const running = new Map();
+
+  while (pending.length > 0 || running.size > 0) {
+    const availableSlots = Math.max(0, session.parallelism - running.size);
+    const launchCount = Math.min(DEFAULT_LAUNCH_BATCH_SIZE, availableSlots, pending.length);
+    for (let index = 0; index < launchCount; index += 1) {
+      const nextAgent = pending.shift();
+      if (!nextAgent) {
+        break;
       }
+      const promise = runSingleAgent(context, task, sessionId, nextAgent)
+        .then((result) => ({ agentId: nextAgent.id, result }))
+        .catch((error) => ({ agentId: nextAgent.id, error }));
+      running.set(nextAgent.id, promise);
     }
-  }
 
-  const plans = await listPlanJobs(context);
-  for (const plan of plans.items) {
-    const result = await readJsonSafe(plan.paths.resultJson);
-    if (!result?.contract) {
+    if (running.size === 0) {
       continue;
     }
-    await addArtifactIfExists(artifacts, {
-      kind: "planner-prd",
-      title: `${plan.planJobId} PRD`,
-      path: result.contract.PRD_FILE,
-      planJobId: plan.planJobId,
-    });
-    await addArtifactIfExists(artifacts, {
-      kind: "planner-json",
-      title: `${plan.planJobId} prd.json`,
-      path: result.contract.PRD_JSON,
-      planJobId: plan.planJobId,
-    });
-    await addArtifactIfExists(artifacts, {
-      kind: "planner-progress",
-      title: `${plan.planJobId} progress`,
-      path: result.contract.PROGRESS_FILE,
-      planJobId: plan.planJobId,
-    });
+
+    const settled = await Promise.race([...running.values()]);
+    running.delete(settled.agentId);
+    if (settled.error) {
+      appendFileSyncSafe(session.paths.stderrLog, `${settled.agentId}: ${settled.error.message}\n`);
+    }
+    await refreshSessionCounts(context, sessionId);
+    await writeSessionDocumentation(context, sessionId);
   }
 
-  artifacts.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
-  return { items: artifacts };
+  const finalSession = await readSessionMeta(context, sessionId);
+  const finalStatus = finalSession.failedAgents > 0 ? "failed" : "succeeded";
+  await updateSessionMeta(context, sessionId, {
+    status: finalStatus,
+    completedAt: new Date().toISOString(),
+    lastError: finalStatus === "failed" ? finalSession.lastError : "",
+  });
+  await updateTaskMeta(context, task.taskId, {
+    status: finalStatus,
+    completedAt: new Date().toISOString(),
+    lastError: finalStatus === "failed" ? finalSession.lastError : "",
+  });
+  await writeSessionDocumentation(context, sessionId);
+  return getSession(context, sessionId);
 }
 
-export async function readArtifact(context, artifactPath) {
-  const resolved = path.resolve(String(artifactPath || ""));
-  const allowedRoots = [context.projectRoot, context.stateRoot, context.uiStateRoot].map((root) => path.resolve(root));
-  if (!allowedRoots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`))) {
-    throw new Error("artifact path is outside the current Ralph project");
+async function runSingleAgent(context, task, sessionId, agent) {
+  let created = null;
+  try {
+    const taskMarkdown = await readTextSafe(task.paths.taskMd);
+    await fsp.mkdir(agent.paths.agentDir, { recursive: true });
+    await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
+    await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
+
+    created = await prepareAgentWorktree(context, agent);
+    const prompt = buildSubagentPrompt(task, taskMarkdown, sessionId, {
+      ...agent,
+      worktreePath: created.worktreePath,
+      branchName: created.branchName,
+      baseCommit: created.baseCommit,
+    });
+    await fsp.writeFile(agent.paths.promptMd, prompt, "utf8");
+
+    await patchSessionAgent(context, sessionId, agent.id, {
+      status: "running",
+      worktreePath: created.worktreePath,
+      branchName: created.branchName,
+      baseCommit: created.baseCommit,
+      startedAt: new Date().toISOString(),
+      lastError: "",
+    });
+    await refreshSessionCounts(context, sessionId);
+
+    const result = await runCodexPrompt({
+      context,
+      cwd: created.worktreePath,
+      prompt,
+      outputFile: agent.paths.reportJson,
+      stdoutLog: agent.paths.stdoutLog,
+      stderrLog: agent.paths.stderrLog,
+      outputSchemaFile: SUBAGENT_REPORT_SCHEMA_PATH,
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(describeCommandFailure(result, `subagent ${agent.id} failed`));
+    }
+
+    const report = await readJsonSafe(agent.paths.reportJson);
+    const normalizedReport = normalizeSubagentReport(report);
+    const commitInfo = await finalizeAgentBranch(context, created.worktreePath, created.branchName, created.baseCommit, agent.title);
+    const changedFiles = await listBranchFiles(created.worktreePath, created.baseCommit);
+    const integration = await integrateBranchIntoMaster(context, created.worktreePath, created.baseCommit, commitInfo.headCommit);
+
+    await patchSessionAgent(context, sessionId, agent.id, {
+      status: "succeeded",
+      completedAt: new Date().toISOString(),
+      exitCode: result.exitCode,
+      summary: normalizedReport.summary,
+      testsRun: normalizedReport.testsRun,
+      risks: normalizedReport.risks,
+      notes: normalizedReport.notes,
+      changedFiles,
+      headCommit: commitInfo.headCommit,
+      mergedCommit: integration.masterCommit,
+      lastError: "",
+    });
+    return {
+      report: normalizedReport,
+      changedFiles,
+      integration,
+    };
+  } catch (error) {
+    await patchSessionAgent(context, sessionId, agent.id, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      worktreePath: created?.worktreePath || agent.worktreePath,
+      branchName: created?.branchName || agent.branchName,
+      baseCommit: created?.baseCommit || agent.baseCommit,
+      lastError: error.message,
+    });
+    await updateSessionLastError(context, sessionId, error.message);
+    throw error;
+  }
+}
+
+export async function getAgentLogs(context, sessionId, agentId) {
+  const session = await readSessionMeta(context, sessionId);
+  const agent = session.agents.find((candidate) => candidate.id === agentId);
+  if (!agent) {
+    throw new Error(`agent not found in session ${sessionId}: ${agentId}`);
   }
   return {
-    path: resolved,
-    content: await readTextSafe(resolved),
+    stdoutLog: agent.paths.stdoutLog,
+    stderrLog: agent.paths.stderrLog,
+    stdout: await readTextSafe(agent.paths.stdoutLog),
+    stderr: await readTextSafe(agent.paths.stderrLog),
   };
 }
 
 export async function snapshotStateStamp(context) {
-  const roots = [context.stateRoot, context.uiStateRoot];
-  let newest = 0;
-  for (const root of roots) {
-    newest = Math.max(newest, await newestMtime(root));
-  }
-  return String(newest);
+  return String(await newestMtime(context.deskRoot));
 }
 
-function summarizeRunItem(detail) {
+async function enrichTaskSummary(context, meta) {
+  const sessions = await listSessions(context, { taskId: meta.taskId });
+  const latestSession = sessions.items[0] || null;
   return {
-    runId: detail.run.runId,
-    project: detail.run.project || "",
-    status: detail.run.status || deriveRunStatus(detail.tasks),
-    counts: detail.summary.counts,
-    totalTasks: detail.tasks.length,
-    updatedAt: detail.run.updatedAt || null,
-    runDir: detail.paths.runDir,
+    ...meta,
+    sessionCount: sessions.items.length,
+    latestSessionId: latestSession?.sessionId || "",
+    latestSessionStatus: latestSession?.status || "",
+    latestSessionAt: latestSession?.updatedAt || "",
   };
 }
 
-async function readTasksForRun(runDir, run) {
-  const tasksDir = path.join(runDir, "tasks");
-  const taskIds = Array.isArray(run.taskIds) ? run.taskIds.map(String) : [];
-  if (taskIds.length > 0) {
-    const tasks = [];
-    for (const taskId of taskIds) {
-      const task = await readJsonSafe(path.join(tasksDir, `${taskId}.json`));
-      if (task) {
-        tasks.push(task);
-      }
-    }
-    return tasks;
-  }
-  const entries = await readdirSafe(tasksDir, { withFileTypes: true });
-  const tasks = [];
-  for (const entry of entries) {
-    if (entry.isFile() && entry.name.endsWith(".json")) {
-      const task = await readJsonSafe(path.join(tasksDir, entry.name));
-      if (task) {
-        tasks.push(task);
-      }
-    }
-  }
-  return tasks;
-}
-
-function buildRunSummary(tasks) {
-  const counts = {};
-  for (const task of tasks) {
-    const status = String(task.status || "unknown");
-    counts[status] = (counts[status] || 0) + 1;
-  }
-  const byId = new Map(tasks.map((task) => [task.id, task]));
-  const blockedTasks = tasks.filter((task) => {
-    if (task.status !== "queued" || !Array.isArray(task.dependencies) || task.dependencies.length === 0) {
-      return false;
-    }
-    return task.dependencies.some((dependencyId) => byId.get(dependencyId)?.status !== "succeeded");
-  });
+async function enrichSessionSummary(context, meta) {
+  const task = await readTaskMeta(context, meta.taskId).catch(() => null);
   return {
-    counts,
-    blockedTasks: blockedTasks.map(compactTask),
-    runningTasks: tasks.filter((task) => ["running", "launching"].includes(task.status)).map(compactTask),
-    failedTasks: tasks.filter((task) => ATTENTION_STATUSES.has(task.status)).map(compactTask),
+    ...meta,
+    taskTitle: task?.title || meta.title || meta.taskId,
   };
 }
 
-function deriveRunStatus(tasks) {
-  if (tasks.length === 0) {
-    return "empty";
+function normalizeTaskRequest(request = {}) {
+  const brief = String(request.brief || "").trim();
+  if (!brief) {
+    throw new Error("brief is required");
   }
-  if (tasks.every((task) => task.status === "succeeded")) {
-    return "succeeded";
-  }
-  if (tasks.some((task) => ["running", "launching"].includes(task.status))) {
-    return "running";
-  }
-  if (tasks.some((task) => ATTENTION_STATUSES.has(task.status))) {
-    return "needs_attention";
-  }
-  return "queued";
+  const title = String(request.title || "").trim() || firstSentence(brief);
+  return { brief, title };
 }
 
-function compactTask(task) {
+function normalizeParallelism(value) {
+  const number = Number(value || DEFAULT_PARALLELISM);
+  if (!Number.isFinite(number) || number <= 0) {
+    return DEFAULT_PARALLELISM;
+  }
+  return Math.max(1, Math.min(MAX_PARALLELISM, Math.floor(number)));
+}
+
+function normalizeFastMetadata(fast) {
+  const supportedModels = Array.isArray(fast?.supportedModels) ? fast.supportedModels.map(String) : [];
   return {
-    id: task.id,
-    title: task.title || task.id,
-    status: task.status || "unknown",
-    priority: task.priority || null,
-    lastError: task.lastError || "",
+    supported: Boolean(fast?.supported || supportedModels.length > 0),
+    tier: normalizeOptionalString(fast?.tier) || DEFAULT_SERVICE_TIER,
+    source: normalizeOptionalString(fast?.source),
+    supportedModels,
   };
-}
-
-function buildPlannerArgs(input) {
-  const args = ["--output-mode", "json", "--ralph-dir", input.ralphDir];
-  if (input.model) {
-    args.push("--model", input.model);
-  }
-  if (input.reasoning) {
-    args.push("--reasoning", input.reasoning);
-  }
-  if (input.fast) {
-    args.push("--fast");
-  }
-  if (input.mode === "prd_to_json") {
-    args.push("--input", input.inputPath);
-  } else {
-    args.push("--output-dir", input.outputDir);
-  }
-  return args;
-}
-
-function normalizePlannerInput(context, request = {}) {
-  const inputPath = normalizeOptionalString(request.inputPath);
-  const mode = normalizeOptionalString(request.mode) || (inputPath ? "prd_to_json" : "brief_to_json");
-  if (!SUPPORTED_PLANNER_MODES.has(mode)) {
-    throw new Error(`unsupported planner mode: ${mode}`);
-  }
-  if (mode === "brief_to_json" && !String(request.featureBrief || "").trim()) {
-    throw new Error("featureBrief is required for brief_to_json planner jobs");
-  }
-  if (mode === "prd_to_json" && !inputPath) {
-    throw new Error("inputPath is required for prd_to_json planner jobs");
-  }
-
-  return {
-    mode,
-    featureBrief: mode === "brief_to_json" ? String(request.featureBrief || "") : "",
-    inputPath: mode === "prd_to_json" ? resolveProjectPath(context.projectRoot, inputPath) : "",
-    outputDir: resolveProjectPath(context.projectRoot, normalizeOptionalString(request.outputDir) || path.join(context.projectRoot, "tasks")),
-    ralphDir: resolveProjectPath(context.projectRoot, normalizeOptionalString(request.ralphDir) || context.projectRoot),
-    model: normalizeOptionalString(request.model),
-    reasoning: normalizeOptionalString(request.reasoning),
-    fast: normalizeBoolean(request.fast, "fast"),
-  };
-}
-
-function normalizeOptionalString(value) {
-  return value === undefined || value === null ? "" : String(value).trim();
-}
-
-function normalizeBoolean(value, fieldName) {
-  if (value === undefined || value === null || value === "") {
-    return false;
-  }
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return value !== 0;
-  }
-
-  const text = String(value).trim().toLowerCase();
-  if (BOOLEAN_TRUE_VALUES.has(text)) {
-    return true;
-  }
-  if (BOOLEAN_FALSE_VALUES.has(text)) {
-    return false;
-  }
-  throw new Error(`${fieldName} must be a boolean`);
 }
 
 async function detectCodexVersion(codexCli) {
@@ -714,108 +644,544 @@ async function detectCodexVersion(codexCli) {
   return firstNonEmptyLine(result.stdout) || firstNonEmptyLine(result.stderr);
 }
 
-async function detectPlannerCapabilities(ralphPlanCli) {
-  const stat = await statSafe(ralphPlanCli);
-  const source = await readTextSafe(ralphPlanCli);
-  const help = source || await readPlannerHelp(ralphPlanCli);
+function buildTaskGenerationPrompt(task) {
+  return [
+    "You are generating a task markdown file for AgentDesk.",
+    "",
+    "Write markdown only.",
+    "Do not return JSON.",
+    "Produce a practical engineering task document with these sections in order:",
+    "1. # Title",
+    "2. ## Goal",
+    "3. ## Context",
+    "4. ## Acceptance Criteria",
+    "5. ## Subtasks",
+    "",
+    "Subtask rules:",
+    "- Use markdown checkboxes like `- [ ] ...`.",
+    "- Each subtask should be implementable by one Codex subagent in its own git worktree.",
+    "- Prefer 4 to 12 subtasks.",
+    "- Keep subtasks concrete and code-oriented.",
+    "- Avoid PRD phrasing and do not mention prd.json.",
+    "",
+    `Task title hint: ${task.title}`,
+    "",
+    "Feature brief:",
+    task.brief,
+  ].join("\n");
+}
+
+function buildSubagentPrompt(task, taskMarkdown, sessionId, agent) {
+  return [
+    "You are one AgentDesk execution subagent working in your own git worktree.",
+    "",
+    `Task ID: ${task.taskId}`,
+    `Session ID: ${sessionId}`,
+    `Assigned subtask: ${agent.title}`,
+    `Branch: ${agent.branchName}`,
+    `Worktree: ${agent.worktreePath}`,
+    "",
+    "Rules:",
+    "- Work only on the assigned subtask.",
+    "- Stay inside the current git worktree and current branch.",
+    "- Do not delete worktrees, do not merge to master, and do not switch to another branch.",
+    "- Run the narrowest meaningful self-tests before finishing.",
+    "- Keep your changes scoped and production-oriented.",
+    "- If you are blocked, explain the blocker clearly in the final response.",
+    "",
+    "Before you finish:",
+    "- Leave the branch ready for the orchestrator to integrate.",
+    "- Include concise notes about tests and remaining risks in the final response.",
+    "",
+    "Full task markdown:",
+    taskMarkdown,
+  ].join("\n");
+}
+
+export function parseTaskMarkdownItems(markdown) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const checklistItems = [];
+  for (const line of lines) {
+    const match = line.match(/^\s*(?:[-*+]|\d+[.)])\s+\[(?: |x|X)\]\s+(.+?)\s*$/);
+    if (match) {
+      checklistItems.push({
+        title: match[1].trim(),
+        detail: "",
+      });
+    }
+  }
+  if (checklistItems.length > 0) {
+    return uniqueTaskItems(checklistItems);
+  }
+
+  const subtasks = [];
+  let insideSubtasks = false;
+  for (const line of lines) {
+    if (/^##+\s+subtasks\b/i.test(line)) {
+      insideSubtasks = true;
+      continue;
+    }
+    if (insideSubtasks && /^##+\s+/.test(line)) {
+      break;
+    }
+    if (!insideSubtasks) {
+      continue;
+    }
+    const match = line.match(/^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/);
+    if (match) {
+      subtasks.push({
+        title: match[1].trim(),
+        detail: "",
+      });
+    }
+  }
+  if (subtasks.length > 0) {
+    return uniqueTaskItems(subtasks);
+  }
+
+  const fallback = extractMarkdownTitle(markdown) || firstSentence(markdown);
+  return fallback
+    ? [{ title: fallback, detail: "" }]
+    : [];
+}
+
+function uniqueTaskItems(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = item.title.toLowerCase();
+    if (!item.title || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+export function renderSessionDocument(session, task) {
+  const lines = [
+    `# Session ${session.sessionId}`,
+    "",
+    `- Task: ${task?.title || session.title || session.taskId}`,
+    `- Status: ${session.status}`,
+    `- Parallelism: ${session.parallelism}`,
+    `- Batch size: ${session.batchSize}`,
+    `- Started: ${session.startedAt || "-"}`,
+    `- Completed: ${session.completedAt || "-"}`,
+    "",
+    "## Agents",
+    "",
+  ];
+
+  for (const agent of session.agents || []) {
+    lines.push(`### ${agent.id} · ${agent.title}`);
+    lines.push(`- Status: ${agent.status}`);
+    lines.push(`- Branch: ${agent.branchName || "-"}`);
+    lines.push(`- Worktree: ${agent.worktreePath || "-"}`);
+    lines.push(`- Started: ${agent.startedAt || "-"}`);
+    lines.push(`- Completed: ${agent.completedAt || "-"}`);
+    if (Array.isArray(agent.changedFiles) && agent.changedFiles.length > 0) {
+      lines.push(`- Changed files: ${agent.changedFiles.join(", ")}`);
+    }
+    if (Array.isArray(agent.testsRun) && agent.testsRun.length > 0) {
+      lines.push(`- Tests: ${agent.testsRun.join(" | ")}`);
+    }
+    if (agent.summary) {
+      lines.push(`- Summary: ${agent.summary}`);
+    }
+    if (Array.isArray(agent.risks) && agent.risks.length > 0) {
+      lines.push(`- Risks: ${agent.risks.join(" | ")}`);
+    }
+    if (agent.lastError) {
+      lines.push(`- Error: ${agent.lastError}`);
+    }
+    lines.push("");
+  }
+
+  return `${lines.join("\n").trim()}\n`;
+}
+
+async function writeSessionDocumentation(context, sessionId) {
+  const session = await readSessionMeta(context, sessionId);
+  const task = await readTaskMeta(context, session.taskId).catch(() => null);
+  await fsp.mkdir(path.dirname(session.paths.docMd), { recursive: true });
+  await fsp.writeFile(session.paths.docMd, renderSessionDocument(session, task), "utf8");
+}
+
+async function prepareAgentWorktree(context, agent) {
+  await fsp.mkdir(path.dirname(agent.worktreePath), { recursive: true });
+  const worktreeExists = await statSafe(agent.worktreePath);
+  if (!worktreeExists) {
+    const created = await spawnCapture("git", [
+      "worktree",
+      "add",
+      "-b",
+      agent.branchName,
+      agent.worktreePath,
+      "master",
+    ], {
+      cwd: context.projectRoot,
+    });
+    if (created.exitCode !== 0) {
+      throw new Error(describeCommandFailure(created, `failed to create worktree for ${agent.id}`));
+    }
+  }
+  const baseCommit = await gitRevParse(agent.worktreePath, "HEAD");
   return {
-    available: Boolean(stat?.isFile()),
-    flags: {
-      model: hasCliFlag(help, "--model"),
-      reasoning: hasCliFlag(help, "--reasoning"),
-      fast: hasCliFlag(help, "--fast"),
-    },
+    worktreePath: agent.worktreePath,
+    branchName: agent.branchName,
+    baseCommit,
   };
 }
 
-async function readPlannerHelp(ralphPlanCli) {
-  if (!ralphPlanCli) {
-    return "";
+async function finalizeAgentBranch(context, worktreePath, branchName, baseCommit, title) {
+  const status = await spawnCapture("git", ["status", "--porcelain"], { cwd: worktreePath });
+  if (status.exitCode !== 0) {
+    throw new Error(describeCommandFailure(status, "failed to read worktree status"));
   }
-  const result = await spawnCapture(ralphPlanCli, ["--help"]);
-  return `${result.stdout}\n${result.stderr}`;
-}
-
-function hasCliFlag(text, flag) {
-  return String(text || "").includes(flag);
-}
-
-function firstNonEmptyLine(text) {
-  return String(text || "").split(/\r?\n/).find((line) => line.trim())?.trim() || "";
-}
-
-function extractContract(text) {
-  const result = {};
-  for (const line of String(text || "").split(/\r?\n/)) {
-    const match = line.match(/^([A-Z_]+):\s*(.+?)\s*$/);
-    if (match) {
-      result[match[1]] = match[2];
+  if (status.stdout.trim()) {
+    const add = await spawnCapture("git", ["add", "-A"], { cwd: worktreePath });
+    if (add.exitCode !== 0) {
+      throw new Error(describeCommandFailure(add, "failed to stage subagent changes"));
+    }
+    const commit = await spawnCapture("git", ["commit", "-m", `AgentDesk: ${title}`], { cwd: worktreePath });
+    if (commit.exitCode !== 0) {
+      throw new Error(describeCommandFailure(commit, "failed to commit subagent changes"));
     }
   }
-  return result;
+  const headCommit = await gitRevParse(worktreePath, "HEAD");
+  const branchCount = await gitRevListCount(worktreePath, `${baseCommit}..${headCommit}`);
+  return {
+    branchName,
+    headCommit,
+    branchCount,
+  };
 }
 
-async function uniquePlanJobId(context, request) {
-  const base = `plan-${compactTimestamp(new Date())}-${slug(request.name || request.mode || "job")}`;
+async function integrateBranchIntoMaster(context, worktreePath, baseCommit, headCommit) {
+  if (baseCommit === headCommit) {
+    return {
+      masterBefore: await gitRevParse(context.projectRoot, "master"),
+      masterCommit: await gitRevParse(context.projectRoot, "master"),
+      integrated: false,
+    };
+  }
+
+  const lock = await acquireLock(path.join(context.locksRoot, "master-integrate.lock"));
+  try {
+    const masterBefore = await gitRevParse(context.projectRoot, "master");
+    const rebase = await spawnCapture("git", ["rebase", "master"], { cwd: worktreePath });
+    if (rebase.exitCode !== 0) {
+      await spawnCapture("git", ["rebase", "--abort"], { cwd: worktreePath });
+      throw new Error(describeCommandFailure(rebase, "failed to rebase branch onto master"));
+    }
+    const rebasedHead = await gitRevParse(worktreePath, "HEAD");
+    const isAncestor = await gitIsAncestor(worktreePath, masterBefore, rebasedHead);
+    if (!isAncestor) {
+      throw new Error("rebased branch is not based on current master");
+    }
+    const update = await spawnCapture("git", ["update-ref", "refs/heads/master", rebasedHead, masterBefore], {
+      cwd: context.projectRoot,
+    });
+    if (update.exitCode !== 0) {
+      throw new Error(describeCommandFailure(update, "failed to advance master"));
+    }
+    return {
+      masterBefore,
+      masterCommit: rebasedHead,
+      integrated: true,
+    };
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
+async function runCodexPrompt(options) {
+  const args = [
+    "exec",
+    "-m",
+    DEFAULT_SUBAGENT_MODEL,
+    "-c",
+    `model_reasoning_effort="${DEFAULT_SUBAGENT_REASONING}"`,
+    "-c",
+    `service_tier="${DEFAULT_SERVICE_TIER}"`,
+    "-s",
+    "danger-full-access",
+    "-a",
+    "never",
+    "-C",
+    options.cwd,
+    "-o",
+    options.outputFile,
+  ];
+  if (options.skipGitRepoCheck) {
+    args.push("--skip-git-repo-check");
+  }
+  if (options.outputSchemaFile) {
+    args.push("--output-schema", options.outputSchemaFile);
+  }
+  args.push("-");
+  return spawnStreamingCapture(options.context.codexCli || "codex", args, {
+    cwd: options.cwd,
+    stdin: options.prompt,
+    stdoutLog: options.stdoutLog,
+    stderrLog: options.stderrLog,
+  });
+}
+
+function normalizeSubagentReport(report) {
+  return {
+    summary: String(report?.summary || "").trim(),
+    testsRun: Array.isArray(report?.tests_run) ? report.tests_run.map(String) : [],
+    risks: Array.isArray(report?.risks) ? report.risks.map(String) : [],
+    notes: Array.isArray(report?.notes) ? report.notes.map(String) : [],
+  };
+}
+
+async function refreshSessionCounts(context, sessionId) {
+  const session = await readSessionMeta(context, sessionId);
+  const counts = session.agents.reduce((accumulator, agent) => {
+    accumulator.total += 1;
+    if (agent.status === "succeeded") {
+      accumulator.succeeded += 1;
+    }
+    if (agent.status === "failed") {
+      accumulator.failed += 1;
+    }
+    if (agent.status === "running" || agent.status === "integrating") {
+      accumulator.running += 1;
+    }
+    return accumulator;
+  }, { total: 0, succeeded: 0, failed: 0, running: 0 });
+  await updateSessionMeta(context, sessionId, {
+    totalAgents: counts.total,
+    succeededAgents: counts.succeeded,
+    failedAgents: counts.failed,
+    runningAgents: counts.running,
+  });
+}
+
+async function patchSessionAgent(context, sessionId, agentId, patch) {
+  await mutateSessionMeta(context, sessionId, (session) => {
+    const agents = session.agents.map((agent) => {
+      if (agent.id !== agentId) {
+        return agent;
+      }
+      return {
+        ...agent,
+        ...patch,
+        status: patch.status ? normalizeAgentStatus(patch.status) : agent.status,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    return {
+      ...session,
+      agents,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+}
+
+async function updateSessionLastError(context, sessionId, message) {
+  await updateSessionMeta(context, sessionId, {
+    lastError: String(message || ""),
+  });
+}
+
+async function readTaskMeta(context, taskId) {
+  return readJsonRequired(path.join(taskDirPath(context, taskId), "meta.json"));
+}
+
+async function readSessionMeta(context, sessionId) {
+  return readJsonRequired(path.join(sessionDirPath(context, sessionId), "meta.json"));
+}
+
+async function updateTaskMeta(context, taskId, patch) {
+  return mutateTaskMeta(context, taskId, (meta) => {
+    const status = patch.status ? normalizeTaskStatus(patch.status) : meta.status;
+    return {
+      ...meta,
+      ...patch,
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+}
+
+async function updateSessionMeta(context, sessionId, patch) {
+  return mutateSessionMeta(context, sessionId, (meta) => {
+    const status = patch.status ? normalizeSessionStatus(patch.status) : meta.status;
+    return {
+      ...meta,
+      ...patch,
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+}
+
+function normalizeTaskStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!TASK_STATUSES.has(normalized)) {
+    throw new Error(`unsupported task status: ${status}`);
+  }
+  return normalized;
+}
+
+function normalizeSessionStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!SESSION_STATUSES.has(normalized)) {
+    throw new Error(`unsupported session status: ${status}`);
+  }
+  return normalized;
+}
+
+function normalizeAgentStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!AGENT_STATUSES.has(normalized)) {
+    throw new Error(`unsupported agent status: ${status}`);
+  }
+  return normalized;
+}
+
+async function mutateTaskMeta(context, taskId, mutate) {
+  const metaPath = path.join(taskDirPath(context, taskId), "meta.json");
+  const lock = await acquireLock(path.join(context.locksRoot, `task-${taskId}.lock`));
+  try {
+    const meta = await readJsonRequired(metaPath);
+    const updated = mutate(meta);
+    await writeJsonAtomic(metaPath, updated);
+    return updated;
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
+async function mutateSessionMeta(context, sessionId, mutate) {
+  const metaPath = path.join(sessionDirPath(context, sessionId), "meta.json");
+  const lock = await acquireLock(path.join(context.locksRoot, `session-${sessionId}.lock`));
+  try {
+    const meta = await readJsonRequired(metaPath);
+    const updated = mutate(meta);
+    await writeJsonAtomic(metaPath, updated);
+    return updated;
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
+async function uniqueTaskId(context, request) {
+  const base = `task-${compactTimestamp(new Date())}-${slug(request.title)}`;
   let candidate = base;
   let suffix = 2;
-  while (fs.existsSync(planJobDir(context, candidate))) {
+  while (fs.existsSync(taskDirPath(context, candidate))) {
     candidate = `${base}-${suffix}`;
     suffix += 1;
   }
   return candidate;
 }
 
-function compactTimestamp(date) {
-  return date.toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z");
+async function uniqueSessionId(context, task) {
+  const base = `session-${compactTimestamp(new Date())}-${slug(task.title || task.taskId)}`;
+  let candidate = base;
+  let suffix = 2;
+  while (fs.existsSync(sessionDirPath(context, candidate))) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
 }
 
-function slug(value) {
-  const text = String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return text || "job";
+function taskDirPath(context, taskId) {
+  return path.join(context.tasksRoot, taskId);
 }
 
-function planJobDir(context, planJobId) {
-  return path.join(context.plansRoot, planJobId);
+function sessionDirPath(context, sessionId) {
+  return path.join(context.sessionsRoot, sessionId);
 }
 
-async function readPlanMeta(context, planJobId) {
-  return readJsonRequired(path.join(planJobDir(context, planJobId), "meta.json"));
+async function assertGitRepository(projectRoot) {
+  const result = await spawnCapture("git", ["rev-parse", "--show-toplevel"], { cwd: projectRoot });
+  if (result.exitCode !== 0) {
+    throw new Error("selected project is not a git repository");
+  }
 }
 
-async function updatePlanMeta(context, planJobId, patch) {
-  const metaPath = path.join(planJobDir(context, planJobId), "meta.json");
-  const meta = await readJsonRequired(metaPath);
-  const updated = { ...meta, ...patch, updatedAt: new Date().toISOString() };
-  await writeJsonAtomic(metaPath, updated);
-  return updated;
+async function assertMasterBranch(projectRoot) {
+  const result = await spawnCapture("git", ["rev-parse", "--verify", "master"], { cwd: projectRoot });
+  if (result.exitCode !== 0) {
+    throw new Error("selected project does not have a master branch");
+  }
 }
 
-function updatePlanMetaSync(context, planJobId, patch) {
-  const metaPath = path.join(planJobDir(context, planJobId), "meta.json");
-  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
-  const updated = { ...meta, ...patch, updatedAt: new Date().toISOString() };
-  writeJsonAtomicSync(metaPath, updated);
-  return updated;
+async function assertExecutable(filePath, label) {
+  try {
+    await fsp.access(filePath, fs.constants.X_OK);
+  } catch {
+    throw new Error(`${label} is not executable: ${filePath}`);
+  }
 }
 
-async function addArtifactIfExists(artifacts, item) {
-  if (!item.path) {
+async function gitRevParse(cwd, ref) {
+  const result = await spawnCapture("git", ["rev-parse", ref], { cwd });
+  if (result.exitCode !== 0) {
+    throw new Error(describeCommandFailure(result, `git rev-parse ${ref} failed`));
+  }
+  return result.stdout.trim();
+}
+
+async function gitRevListCount(cwd, range) {
+  const result = await spawnCapture("git", ["rev-list", "--count", range], { cwd });
+  if (result.exitCode !== 0) {
+    throw new Error(describeCommandFailure(result, "git rev-list failed"));
+  }
+  return Number(result.stdout.trim() || "0");
+}
+
+async function gitIsAncestor(cwd, ancestor, descendant) {
+  const result = await spawnCapture("git", ["merge-base", "--is-ancestor", ancestor, descendant], { cwd });
+  return result.exitCode === 0;
+}
+
+async function listBranchFiles(cwd, baseCommit) {
+  const result = await spawnCapture("git", ["diff", "--name-only", `${baseCommit}..HEAD`], { cwd });
+  if (result.exitCode !== 0) {
+    return [];
+  }
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+async function acquireLock(lockPath) {
+  const started = Date.now();
+  await fsp.mkdir(path.dirname(lockPath), { recursive: true });
+  while (true) {
+    try {
+      await fsp.mkdir(lockPath, { recursive: false });
+      const markerPath = path.join(lockPath, "owner.json");
+      await fsp.writeFile(markerPath, JSON.stringify({
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+      }, null, 2), "utf8");
+      return { lockPath };
+    } catch (error) {
+      if (error.code !== "EEXIST") {
+        throw error;
+      }
+      if (Date.now() - started > 30 * 60 * 1000) {
+        throw new Error(`timed out waiting for lock: ${lockPath}`);
+      }
+      await sleep(500);
+    }
+  }
+}
+
+async function releaseLock(lock) {
+  if (!lock?.lockPath) {
     return;
   }
-  const stat = await statSafe(item.path);
-  if (!stat?.isFile()) {
-    return;
-  }
-  artifacts.push({
-    id: `${item.kind}:${item.path}`,
-    ...item,
-    size: stat.size,
-    updatedAt: stat.mtime.toISOString(),
-  });
+  await fsp.rm(lock.lockPath, { recursive: true, force: true });
 }
 
 async function spawnCapture(command, args, options = {}) {
@@ -842,12 +1208,45 @@ async function spawnCapture(command, args, options = {}) {
   });
 }
 
-async function assertExecutable(filePath, label) {
-  try {
-    await fsp.access(filePath, fs.constants.X_OK);
-  } catch {
-    throw new Error(`${label} is not executable: ${filePath}`);
+async function spawnStreamingCapture(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || process.cwd(),
+      env: { ...process.env, ...(options.env || {}) },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      appendFileSyncSafe(options.stdoutLog, text);
+    });
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      appendFileSyncSafe(options.stderrLog, text);
+    });
+    child.on("error", (error) => {
+      resolve({ exitCode: 1, signal: null, stdout, stderr: `${stderr}${error.message}` });
+    });
+    child.on("close", (exitCode, signal) => {
+      resolve({ exitCode: exitCode ?? 1, signal, stdout, stderr });
+    });
+    if (options.stdin) {
+      child.stdin.end(`${options.stdin}\n`);
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+
+function appendFileSyncSafe(filePath, content) {
+  if (!filePath || !content) {
+    return;
   }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.appendFileSync(filePath, content, "utf8");
 }
 
 async function readJsonRequired(filePath) {
@@ -868,13 +1267,6 @@ async function writeJsonAtomic(filePath, value) {
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   await fsp.writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   await fsp.rename(tmpPath, filePath);
-}
-
-function writeJsonAtomicSync(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  fs.renameSync(tmpPath, filePath);
 }
 
 async function readdirSafe(dirPath, options) {
@@ -904,30 +1296,6 @@ async function readTextSafe(filePath) {
   }
 }
 
-async function readLastLines(filePath, lineCount) {
-  const content = await readTextSafe(filePath);
-  if (!content) {
-    return "";
-  }
-  const lines = content.split(/\r?\n/);
-  return lines.slice(Math.max(0, lines.length - lineCount - 1)).join("\n");
-}
-
-function clampPositiveInteger(value, fallback, max) {
-  const number = Number(value || fallback);
-  if (!Number.isFinite(number) || number <= 0) {
-    return fallback;
-  }
-  return Math.min(Math.floor(number), max);
-}
-
-function resolveProjectPath(projectRoot, value) {
-  if (!value) {
-    return "";
-  }
-  return path.isAbsolute(String(value)) ? path.resolve(String(value)) : path.resolve(projectRoot, String(value));
-}
-
 async function newestMtime(root) {
   const stat = await statSafe(root);
   if (!stat) {
@@ -945,6 +1313,76 @@ async function newestMtime(root) {
     }
   }
   return newest;
+}
+
+function normalizeOptionalString(value) {
+  return value === undefined || value === null ? "" : String(value).trim();
+}
+
+function normalizeBoolean(value, fieldName) {
+  if (value === undefined || value === null || value === "") {
+    return false;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  const text = String(value).trim().toLowerCase();
+  if (BOOLEAN_TRUE_VALUES.has(text)) {
+    return true;
+  }
+  if (BOOLEAN_FALSE_VALUES.has(text)) {
+    return false;
+  }
+  throw new Error(`${fieldName} must be a boolean`);
+}
+
+function firstNonEmptyLine(text) {
+  return String(text || "").split(/\r?\n/).find((line) => line.trim())?.trim() || "";
+}
+
+function extractMarkdownTitle(markdown) {
+  const match = String(markdown || "").match(/^#\s+(.+?)\s*$/m);
+  return match ? match[1].trim() : "";
+}
+
+function compactTimestamp(date) {
+  return date.toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z");
+}
+
+function slug(value) {
+  const text = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return text || "item";
+}
+
+function shortHash(value) {
+  let hash = 2166136261;
+  for (const character of String(value || "")) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function firstSentence(text) {
+  const line = String(text || "").split(/\r?\n/).find((entry) => entry.trim()) || "";
+  return line.trim().slice(0, 96) || "Task";
+}
+
+function describeCommandFailure(result, fallback) {
+  const details = [String(result?.stderr || "").trim(), String(result?.stdout || "").trim()]
+    .filter(Boolean)
+    .join("\n");
+  return details || fallback;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function formatTable(rows, columns) {
