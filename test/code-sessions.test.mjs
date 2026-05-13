@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { continueCodeSession, listCodeSessions } from "../src/lib/code-sessions.mjs";
+import { continueCodeSession, listCodeSessions, streamCodeSession } from "../src/lib/code-sessions.mjs";
 
 test("listCodeSessions matches Codex sessions to a project root", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-code-sessions-"));
@@ -115,6 +115,42 @@ test("continueCodeSession resumes a conversation with stdin prompt", async () =>
 
   assert.equal(result.sessionId, "019e2182-4816-7a73-b558-4871c2bbc87a");
   assert.equal(result.exitCode, 0);
+});
+
+test("streamCodeSession streams stdout and close events", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-code-stream-"));
+  const chunks = [];
+  const closes = [];
+  const result = streamCodeSession({
+    codexCliPath: "/usr/local/bin/codex",
+    session: {
+      conversationId: "019e2182-4816-7a73-b558-4871c2bbc87a",
+      cwd,
+    },
+    prompt: "Continue this conversation",
+    onStdout: (text) => chunks.push(text),
+    onClose: (event) => closes.push(event),
+    runCommand: (command, args, options) => {
+      assert.equal(command, "/usr/local/bin/codex");
+      assert.deepEqual(args, [
+        "exec",
+        "resume",
+        "--all",
+        "019e2182-4816-7a73-b558-4871c2bbc87a",
+        "-",
+      ]);
+      assert.equal(options.cwd, cwd);
+      assert.equal(options.stdin, "Continue this conversation");
+      options.onStdout("hel");
+      options.onStdout("lo");
+      options.onClose({ exitCode: 0, signal: null });
+      return { pid: 1234 };
+    },
+  });
+
+  assert.equal(result.pid, 1234);
+  assert.deepEqual(chunks, ["hel", "lo"]);
+  assert.deepEqual(closes, [{ exitCode: 0, signal: null }]);
 });
 
 async function writeSession(filePath, session) {

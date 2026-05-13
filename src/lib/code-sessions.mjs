@@ -221,6 +221,30 @@ export async function continueCodeSession(options = {}) {
   };
 }
 
+export function streamCodeSession(options = {}) {
+  const prompt = String(options.prompt || "").trim();
+  if (!prompt) {
+    throw new Error("prompt is required");
+  }
+  const session = options.session || {};
+  const sessionId = String(options.sessionId || session.conversationId || "").trim();
+  if (!sessionId) {
+    throw new Error("session id is required");
+  }
+
+  const codexCliPath = options.codexCliPath || "codex";
+  const cwd = session.cwd || options.cwd || process.cwd();
+  const args = ["exec", "resume", "--all", sessionId, "-"];
+  const runCommand = options.runCommand || spawnStreamingCapture;
+  return runCommand(codexCliPath, args, {
+    cwd,
+    stdin: prompt,
+    onStdout: options.onStdout,
+    onStderr: options.onStderr,
+    onClose: options.onClose,
+  });
+}
+
 function readCodeSessionEvent(session, event) {
   const payload = event?.payload || {};
   if (event.timestamp) {
@@ -487,4 +511,40 @@ async function spawnCapture(command, args, options = {}) {
     });
     child.stdin.end(options.stdin || "");
   });
+}
+
+function spawnStreamingCapture(command, args, options = {}) {
+  const child = spawn(command, args, {
+    cwd: options.cwd || process.cwd(),
+    env: { ...process.env, ...(options.env || {}) },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let closed = false;
+  const closeOnce = (event) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    options.onClose?.(event);
+  };
+  child.stdout.on("data", (chunk) => {
+    options.onStdout?.(chunk.toString());
+  });
+  child.stderr.on("data", (chunk) => {
+    options.onStderr?.(chunk.toString());
+  });
+  child.on("error", (error) => {
+    options.onStderr?.(error.message);
+    closeOnce({ exitCode: 1, signal: null, error });
+  });
+  child.on("close", (exitCode, signal) => {
+    closeOnce({ exitCode: exitCode ?? 1, signal });
+  });
+  child.stdin.end(options.stdin || "");
+  return {
+    pid: child.pid || 0,
+    command,
+    args,
+    cwd: options.cwd || process.cwd(),
+  };
 }
