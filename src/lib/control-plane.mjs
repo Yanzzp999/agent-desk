@@ -5,11 +5,20 @@ import path from "node:path";
 import process from "node:process";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  CODEX_REASONING_EFFORT_OPTIONS,
+  discoverCodexModels,
+  resolveCodexCliPath,
+} from "./codex-cli.mjs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const CONTROL_PLANE_ROOT = path.resolve(MODULE_DIR, "../..");
 const SCHEMA_VERSION = 1;
 const ATTENTION_STATUSES = new Set(["failed", "stale", "stopped", "needs_attention"]);
+const PLANNER_MODES = ["brief_to_json", "prd_to_json"];
+const SUPPORTED_PLANNER_MODES = new Set(PLANNER_MODES);
+const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+const BOOLEAN_FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 
 export function findProjectRoot(cwd = process.cwd()) {
   const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
@@ -44,6 +53,9 @@ export function createContext(options = {}) {
       "scripts",
       "ralph.sh",
     ]),
+    codexCli: resolveCodexCliPath({
+      explicitPath: options.codexCli || process.env.CODEX_CLI || process.env.CODEX_CLI_PATH || process.env.CODEX_BIN,
+    }),
   };
 }
 
@@ -98,6 +110,7 @@ function uniquePaths(paths) {
 }
 
 export async function getHealth(context) {
+  const { runtime, capabilities } = await getRuntimeCapabilities(context);
   return {
     ok: true,
     projectRoot: context.projectRoot,
@@ -105,6 +118,83 @@ export async function getHealth(context) {
     uiStateRoot: context.uiStateRoot,
     ralphRunCli: context.ralphRunCli,
     ralphPlanCli: context.ralphPlanCli,
+    codexRuntime: runtime,
+    runtime,
+    capabilities,
+  };
+}
+
+export async function getRuntimeCapabilities(context) {
+  const [codexDiscovery, codexVersion, plannerCapabilities] = await Promise.all([
+    discoverCodexModels({ codexCliPath: context.codexCli, timeoutMs: 1000 }),
+    detectCodexVersion(context.codexCli),
+    detectPlannerCapabilities(context.ralphPlanCli),
+  ]);
+  const codexModels = Array.isArray(codexDiscovery.models) ? codexDiscovery.models : [];
+  const reasoningEfforts = Array.isArray(codexDiscovery.reasoningEfforts)
+    ? codexDiscovery.reasoningEfforts
+    : CODEX_REASONING_EFFORT_OPTIONS;
+  const fast = normalizeFastMetadata(codexDiscovery.fast);
+  const modelChoices = codexModels.map((model) => ({
+    value: model.slug,
+    label: model.displayName,
+    description: model.description,
+    defaultReasoning: model.defaultReasoningEffort,
+    reasoningEfforts: model.reasoningEfforts,
+    supportsFast: Boolean(model.fast?.supported),
+  }));
+  const runtimeMetadata = {
+    source: codexDiscovery.source || "fallback",
+    codexCliPath: codexDiscovery.codexCliPath || context.codexCli || "codex",
+    modelChoices,
+    models: modelChoices,
+    reasoningEfforts,
+    reasoningOptions: reasoningEfforts,
+    fast,
+    supportsFast: fast.supported,
+    lastErrors: Array.isArray(codexDiscovery.errors) ? codexDiscovery.errors : [],
+  };
+  return {
+    runtime: {
+      id: "codex-cli",
+      name: "Codex CLI",
+      codexBin: runtimeMetadata.codexCliPath,
+      codexVersion,
+      available: runtimeMetadata.source === "codex-cli",
+      metadata: runtimeMetadata,
+      ...runtimeMetadata,
+    },
+    capabilities: {
+      planner: {
+        modes: PLANNER_MODES,
+        input: {
+          model: "string",
+          reasoning: "string",
+          fast: "boolean",
+        },
+        options: {
+          model: true,
+          reasoning: true,
+          fast: true,
+        },
+        runtime: runtimeMetadata,
+        cli: {
+          path: context.ralphPlanCli,
+          available: plannerCapabilities.available,
+          flags: plannerCapabilities.flags,
+        },
+      },
+    },
+  };
+}
+
+function normalizeFastMetadata(fast) {
+  const supportedModels = Array.isArray(fast?.supportedModels) ? fast.supportedModels.map(String) : [];
+  return {
+    supported: Boolean(fast?.supported || supportedModels.length > 0),
+    tier: normalizeOptionalString(fast?.tier) || "fast",
+    source: normalizeOptionalString(fast?.source),
+    supportedModels,
   };
 }
 
@@ -269,17 +359,7 @@ export async function getPlanLogs(context, planJobId) {
 }
 
 export async function createPlanJob(context, request = {}) {
-  const mode = request.mode || (request.inputPath ? "prd_to_json" : "brief_to_json");
-  if (!["brief_to_json", "prd_to_json"].includes(mode)) {
-    throw new Error(`unsupported planner mode: ${mode}`);
-  }
-  if (mode === "brief_to_json" && !String(request.featureBrief || "").trim()) {
-    throw new Error("featureBrief is required for brief_to_json planner jobs");
-  }
-  if (mode === "prd_to_json" && !String(request.inputPath || "").trim()) {
-    throw new Error("inputPath is required for prd_to_json planner jobs");
-  }
-
+  const normalizedInput = normalizePlannerInput(context, request);
   await assertExecutable(context.ralphPlanCli, "ralph planner CLI");
   await fsp.mkdir(context.plansRoot, { recursive: true });
 
@@ -287,16 +367,6 @@ export async function createPlanJob(context, request = {}) {
   const planJobId = await uniquePlanJobId(context, request);
   const jobDir = planJobDir(context, planJobId);
   await fsp.mkdir(jobDir, { recursive: true });
-
-  const normalizedInput = {
-    mode,
-    featureBrief: mode === "brief_to_json" ? String(request.featureBrief || "") : "",
-    inputPath: mode === "prd_to_json" ? resolveProjectPath(context.projectRoot, request.inputPath) : "",
-    outputDir: resolveProjectPath(context.projectRoot, request.outputDir || path.join(context.projectRoot, "tasks")),
-    ralphDir: resolveProjectPath(context.projectRoot, request.ralphDir || context.projectRoot),
-    model: request.model || "",
-    reasoning: request.reasoning || "",
-  };
   const meta = {
     schemaVersion: SCHEMA_VERSION,
     planJobId,
@@ -578,12 +648,100 @@ function buildPlannerArgs(input) {
   if (input.reasoning) {
     args.push("--reasoning", input.reasoning);
   }
+  if (input.fast) {
+    args.push("--fast");
+  }
   if (input.mode === "prd_to_json") {
     args.push("--input", input.inputPath);
   } else {
     args.push("--output-dir", input.outputDir);
   }
   return args;
+}
+
+function normalizePlannerInput(context, request = {}) {
+  const inputPath = normalizeOptionalString(request.inputPath);
+  const mode = normalizeOptionalString(request.mode) || (inputPath ? "prd_to_json" : "brief_to_json");
+  if (!SUPPORTED_PLANNER_MODES.has(mode)) {
+    throw new Error(`unsupported planner mode: ${mode}`);
+  }
+  if (mode === "brief_to_json" && !String(request.featureBrief || "").trim()) {
+    throw new Error("featureBrief is required for brief_to_json planner jobs");
+  }
+  if (mode === "prd_to_json" && !inputPath) {
+    throw new Error("inputPath is required for prd_to_json planner jobs");
+  }
+
+  return {
+    mode,
+    featureBrief: mode === "brief_to_json" ? String(request.featureBrief || "") : "",
+    inputPath: mode === "prd_to_json" ? resolveProjectPath(context.projectRoot, inputPath) : "",
+    outputDir: resolveProjectPath(context.projectRoot, normalizeOptionalString(request.outputDir) || path.join(context.projectRoot, "tasks")),
+    ralphDir: resolveProjectPath(context.projectRoot, normalizeOptionalString(request.ralphDir) || context.projectRoot),
+    model: normalizeOptionalString(request.model),
+    reasoning: normalizeOptionalString(request.reasoning),
+    fast: normalizeBoolean(request.fast, "fast"),
+  };
+}
+
+function normalizeOptionalString(value) {
+  return value === undefined || value === null ? "" : String(value).trim();
+}
+
+function normalizeBoolean(value, fieldName) {
+  if (value === undefined || value === null || value === "") {
+    return false;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+
+  const text = String(value).trim().toLowerCase();
+  if (BOOLEAN_TRUE_VALUES.has(text)) {
+    return true;
+  }
+  if (BOOLEAN_FALSE_VALUES.has(text)) {
+    return false;
+  }
+  throw new Error(`${fieldName} must be a boolean`);
+}
+
+async function detectCodexVersion(codexCli) {
+  const result = await spawnCapture(codexCli || "codex", ["--version"]);
+  return firstNonEmptyLine(result.stdout) || firstNonEmptyLine(result.stderr);
+}
+
+async function detectPlannerCapabilities(ralphPlanCli) {
+  const stat = await statSafe(ralphPlanCli);
+  const source = await readTextSafe(ralphPlanCli);
+  const help = source || await readPlannerHelp(ralphPlanCli);
+  return {
+    available: Boolean(stat?.isFile()),
+    flags: {
+      model: hasCliFlag(help, "--model"),
+      reasoning: hasCliFlag(help, "--reasoning"),
+      fast: hasCliFlag(help, "--fast"),
+    },
+  };
+}
+
+async function readPlannerHelp(ralphPlanCli) {
+  if (!ralphPlanCli) {
+    return "";
+  }
+  const result = await spawnCapture(ralphPlanCli, ["--help"]);
+  return `${result.stdout}\n${result.stderr}`;
+}
+
+function hasCliFlag(text, flag) {
+  return String(text || "").includes(flag);
+}
+
+function firstNonEmptyLine(text) {
+  return String(text || "").split(/\r?\n/).find((line) => line.trim())?.trim() || "";
 }
 
 function extractContract(text) {

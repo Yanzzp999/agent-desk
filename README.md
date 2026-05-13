@@ -1,7 +1,8 @@
 # AgentDesk
 
 Standalone Ralph control plane for inspecting planner jobs and `ralph-run`
-execution state from a separate repository.
+execution state from a separate repository, with Codex CLI-compatible terminal
+and browser workflows.
 
 The app stays intentionally thin:
 
@@ -10,6 +11,11 @@ The app stays intentionally thin:
 - Existing Ralph scripts still do the real orchestration work.
 - The desktop app embeds a local control-plane server on `127.0.0.1:4317`
   by default.
+
+AgentDesk is moving toward a pure GUI/terminal control surface: start the local
+server, use the browser, or call `ralphctl` directly. Skill-root discovery is
+kept as a transition bridge for existing Ralph installations, but new workflows
+should not depend on launching AgentDesk from a skill-root mode.
 
 ## Quick Start
 
@@ -46,6 +52,7 @@ ralphctl tasks logs <runId> <taskId>
 ralphctl tasks retry <runId> <taskId>
 ralphctl tasks stop <runId> <taskId>
 ralphctl planner start --brief "Build ..."
+ralphctl planner start --brief "Build ..." --model gpt-5.5 --reasoning xhigh --fast
 ralphctl planner start --input tasks/prd-example.md
 ralphctl planner list
 ralphctl planner show <planJobId>
@@ -60,6 +67,31 @@ server.
 `ralphctl serve` keeps the browser-based local web server available for
 debugging or remote inspection. `ralphctl gui` and `npm run dev` launch the
 desktop window.
+
+Planner starts accept optional model overrides that mirror Codex CLI-style
+configuration:
+
+- `--model MODEL` passes a model name through to the planner script.
+- `--reasoning LEVEL` passes a reasoning effort/profile through to the planner
+  script.
+- `--fast` requests the Codex CLI fast service tier when the selected model and
+  installed planner script support it.
+
+The browser planner form reads the local Codex CLI model catalog with
+`codex debug models` and exposes the same model, reasoning, and fast controls,
+so GUI and terminal starts stay aligned.
+
+## Codex CLI Compatibility
+
+AgentDesk is intended to sit beside a Codex CLI-oriented project rather than
+inside an agent skill. Point `--project` at the target checkout and AgentDesk
+will read run state from `<project>/.ralph` and control-plane state from
+`<project>/.ralph-ui`.
+
+Codex CLI-compatible planner scripts should preserve the same contract files and
+JSON output that AgentDesk reads today. Model, reasoning, and fast presets should
+be treated as terminal-facing planner options instead of skill-root-specific
+configuration.
 
 ## Ralph Script Resolution
 
@@ -76,8 +108,10 @@ AgentDesk looks for Ralph scripts in this order:
 9. `~/.gemini/skills`
 10. `~/.claude/skills`
 
-That makes it work with repo-local and user-level synced skills across Codex
-CLI, Gemini CLI, and Claude Code setups.
+That makes it work with existing repo-local and user-level synced skills across
+Codex CLI, Gemini CLI, and Claude Code setups. This lookup order is legacy
+compatibility, not the desired long-term product shape; prefer explicit
+`ralphctl` commands and the local GUI for new workflows.
 
 ## API
 

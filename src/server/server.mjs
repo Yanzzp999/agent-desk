@@ -12,6 +12,7 @@ import {
   getPlanJob,
   getPlanLogs,
   getRunDetail,
+  getRuntimeCapabilities,
   getTaskDetail,
   getTaskLogs,
   getTaskResult,
@@ -134,6 +135,10 @@ async function routeRequest(projects, req, res, clients) {
   }
 
   const context = requireProjectContext(projects);
+
+  if (req.method === "GET" && (url.pathname === "/api/runtime" || url.pathname === "/api/capabilities")) {
+    return sendJson(res, 200, await getRuntimeCapabilities(context));
+  }
 
   if (req.method === "GET" && url.pathname === "/api/runs") {
     return sendJson(res, 200, await listRuns(context, { status: url.searchParams.get("status") || "" }));
