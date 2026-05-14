@@ -112,11 +112,19 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.match(sessionDoc, /- Parallelism: 2/);
 
   for (const agent of sessionMeta.agents) {
+    const taskSnapshot = await fs.readFile(agent.paths.taskSnapshotMd, "utf8");
+    const memorySnapshot = await fs.readFile(agent.paths.memorySnapshotMd, "utf8");
     const prompt = await fs.readFile(agent.paths.promptMd, "utf8");
+    assert.match(taskSnapshot, /- \[ \] Implement CLI config plumbing/);
+    assert.match(memorySnapshot, /# Task Memory/);
+    assert.doesNotMatch(memorySnapshot, /completed via fake Codex/);
     assert.match(prompt, /Execution model: gpt-5\.5/);
     assert.match(prompt, /Execution reasoning: high/);
     assert.match(prompt, new RegExp(`Assigned subtask: ${escapeRegExp(agent.title)}`));
-    assert.match(prompt, /Shared task memory:/);
+    assert.match(prompt, new RegExp(`Task markdown snapshot: ${escapeRegExp(agent.paths.taskSnapshotMd)}`));
+    assert.match(prompt, new RegExp(`Shared memory snapshot: ${escapeRegExp(agent.paths.memorySnapshotMd)}`));
+    assert.match(prompt, new RegExp(`Prompt snapshot: ${escapeRegExp(agent.paths.promptMd)}`));
+    assert.match(prompt, /Shared task memory snapshot:/);
     assert.match(prompt, /# Task Memory/);
     assert.deepEqual(agent.testsRun, ["fake codex"]);
   }
@@ -129,6 +137,11 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   const invocations = await readJsonLines(fakeLog);
   const subagentInvocations = invocations.filter((entry) => entry.hasOutputSchema);
   assert.equal(subagentInvocations.length, 3);
+  const invocationsByOutput = new Map(subagentInvocations.map((entry) => [entry.outputFile, entry]));
+  for (const agent of sessionMeta.agents) {
+    const prompt = await fs.readFile(agent.paths.promptMd, "utf8");
+    assert.equal(invocationsByOutput.get(agent.paths.reportJson)?.prompt, `${prompt}\n`);
+  }
   for (const entry of subagentInvocations) {
     assert.equal(entry.model, "gpt-5.5");
     assert.deepEqual(entry.configs, [
@@ -326,6 +339,7 @@ await appendInvocation({
   configs: valuesAfter("-c", execArgs),
   outputFile,
   hasOutputSchema: Boolean(outputSchemaFile),
+  prompt,
 });
 
 await incrementActive();

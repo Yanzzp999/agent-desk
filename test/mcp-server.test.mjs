@@ -158,8 +158,10 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.equal(meta.succeededAgents, 3);
     assert.equal(meta.executionMode, "current-branch");
     assert.equal(meta.subagentLauncher, "codex-cli");
+    assert.match(await fs.readFile(meta.agents[0].paths.taskSnapshotMd, "utf8"), /Inspect API surface/);
+    assert.match(await fs.readFile(meta.agents[0].paths.memorySnapshotMd, "utf8"), /Existing MCP memory/);
     const firstPrompt = await fs.readFile(meta.agents[0].paths.promptMd, "utf8");
-    assert.match(firstPrompt, /Shared task memory:/);
+    assert.match(firstPrompt, /Shared task memory snapshot:/);
     assert.match(firstPrompt, /Existing MCP memory/);
 
     const state = JSON.parse(await fs.readFile(fakeState, "utf8"));
@@ -235,9 +237,11 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
     assert.equal(started.structuredContent.appLaunchPlan.launchTool, "spawn_agent");
     assert.equal(started.structuredContent.appLaunchPlan.parallelism, 5);
     assert.equal(started.structuredContent.appLaunchPlan.subagents.length, 3);
+    assert.match(started.structuredContent.appLaunchPlan.subagents[0].taskSnapshotPath, /task\.snapshot\.md$/);
+    assert.match(started.structuredContent.appLaunchPlan.subagents[0].memorySnapshotPath, /memory\.snapshot\.md$/);
     assert.match(started.structuredContent.appLaunchPlan.subagents[0].prompt, /Subagent launcher: codex-app/);
     assert.match(started.structuredContent.appLaunchPlan.subagents[0].prompt, /Assigned subtask: Inspect API surface/);
-    assert.match(started.structuredContent.appLaunchPlan.subagents[0].prompt, /Shared task memory:/);
+    assert.match(started.structuredContent.appLaunchPlan.subagents[0].prompt, /Shared task memory snapshot:/);
     assert.match(started.structuredContent.appLaunchPlan.subagents[0].prompt, /Existing MCP memory/);
 
     const read = await client.callTool({
@@ -338,6 +342,7 @@ await appendInvocation({
   model: argAfter("-m", execArgs),
   outputFile,
   hasOutputSchema: Boolean(outputSchemaFile),
+  prompt,
 });
 
 await incrementActive();

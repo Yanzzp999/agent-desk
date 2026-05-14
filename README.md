@@ -167,6 +167,8 @@ Implement the checkout flow end to end.
       stderr.log
       agents/
         <agentId>/
+          task.snapshot.md
+          memory.snapshot.md
           prompt.md
           report.json
           stdout.log
@@ -258,6 +260,7 @@ Session 执行：
 
 - 从 `task.md` 解析子任务
 - 每个子任务启动一个 Codex CLI 子代理
+- 每个子代理使用独立的 `task.snapshot.md`、`memory.snapshot.md` 和 `prompt.md` 作为启动上下文
 - 每批最多启动 6 个新的子代理
 - 遵守 session 选择的并发 Codex CLI 上限
 - 为每个子代理创建独立 git branch 和 git worktree

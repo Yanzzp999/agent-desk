@@ -26,6 +26,8 @@ export const EXECUTION_MODES = Object.freeze(["worktree", "current-branch"]);
 export const CURRENT_BRANCH_SUBAGENT_LAUNCHERS = Object.freeze(["codex-cli", "codex-app"]);
 export const DEFAULT_CONFIG_FILENAME = "config.toml";
 export const DEFAULT_TASK_MEMORY_FILENAME = "memory.md";
+export const AGENT_TASK_SNAPSHOT_FILENAME = "task.snapshot.md";
+export const AGENT_MEMORY_SNAPSHOT_FILENAME = "memory.snapshot.md";
 const SCHEMA_VERSION = 2;
 const TASK_STATUSES = new Set(["received", "generating", "ready", "running", "succeeded", "failed"]);
 const SESSION_STATUSES = new Set(["queued", "waiting_for_app", "running", "succeeded", "failed"]);
@@ -556,6 +558,8 @@ export async function getCodexAppLaunchPlan(context, sessionId) {
       agentId: agent.id,
       title: agent.title,
       status: agent.status,
+      taskSnapshotPath: agent.paths.taskSnapshotMd,
+      memorySnapshotPath: agent.paths.memorySnapshotMd,
       promptPath: agent.paths.promptMd,
       prompt: await readTextSafe(agent.paths.promptMd),
     })))
@@ -611,24 +615,16 @@ async function prepareCodexAppSession(context, task, sessionId) {
       exitCode: null,
       lastError: "",
       paths: {
-        agentDir,
-        promptMd: path.join(agentDir, "prompt.md"),
-        reportJson: path.join(agentDir, "report.json"),
-        stdoutLog: path.join(agentDir, "stdout.log"),
-        stderrLog: path.join(agentDir, "stderr.log"),
+        ...buildAgentPaths(agentDir),
       },
     };
   });
 
   for (const agent of agents) {
-    await fsp.mkdir(agent.paths.agentDir, { recursive: true });
-    await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
-    await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
-    await fsp.writeFile(
-      agent.paths.promptMd,
-      buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent),
-      "utf8",
-    );
+    await writeAgentContextSnapshots(agent, taskMarkdown, taskMemory);
+    await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, agent, {
+      analysis: true,
+    });
   }
 
   await updateSessionMeta(context, sessionId, {
@@ -693,14 +689,15 @@ export async function runSessionJob(context, sessionId) {
       exitCode: null,
       lastError: "",
       paths: {
-        agentDir,
-        promptMd: path.join(agentDir, "prompt.md"),
-        reportJson: path.join(agentDir, "report.json"),
-        stdoutLog: path.join(agentDir, "stdout.log"),
-        stderrLog: path.join(agentDir, "stderr.log"),
+        ...buildAgentPaths(agentDir),
       },
     };
   });
+
+  const taskMemory = await readTaskMemory(context, task);
+  for (const agent of agents) {
+    await writeAgentContextSnapshots(agent, markdown, taskMemory);
+  }
 
   await updateSessionMeta(context, sessionId, {
     status: "running",
@@ -764,20 +761,19 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
 
   let created = null;
   try {
-    const taskMarkdown = await readTextSafe(task.paths.taskMd);
-    const taskMemory = await readTaskMemory(context, task);
     await fsp.mkdir(agent.paths.agentDir, { recursive: true });
     await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
     await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
 
     created = await prepareAgentWorktree(context, agent);
-    const prompt = buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, {
+    const { taskMarkdown, taskMemory } = await readAgentContextSnapshots(context, task, agent);
+    await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, {
       ...agent,
       worktreePath: created.worktreePath,
       branchName: created.branchName,
       baseCommit: created.baseCommit,
     });
-    await fsp.writeFile(agent.paths.promptMd, prompt, "utf8");
+    const prompt = await readTextSafe(agent.paths.promptMd);
 
     await patchSessionAgent(context, sessionId, agent.id, {
       status: "running",
@@ -849,21 +845,22 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
 
 async function runSingleAnalysisAgent(context, task, session, sessionId, agent) {
   try {
-    const taskMarkdown = await readTextSafe(task.paths.taskMd);
-    const taskMemory = await readTaskMemory(context, task);
     await fsp.mkdir(agent.paths.agentDir, { recursive: true });
     await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
     await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
 
     const baseCommit = await gitRevParse(context.projectRoot, "HEAD");
     const branchName = await gitCurrentBranch(context.projectRoot).catch(() => "current-branch");
-    const prompt = buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, {
+    const { taskMarkdown, taskMemory } = await readAgentContextSnapshots(context, task, agent);
+    await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, {
       ...agent,
       branchName,
       worktreePath: context.projectRoot,
       baseCommit,
+    }, {
+      analysis: true,
     });
-    await fsp.writeFile(agent.paths.promptMd, prompt, "utf8");
+    const prompt = await readTextSafe(agent.paths.promptMd);
 
     await patchSessionAgent(context, sessionId, agent.id, {
       status: "running",
@@ -1199,6 +1196,47 @@ function buildTaskGenerationPrompt(task) {
   ].join("\n");
 }
 
+function buildAgentPaths(agentDir) {
+  return {
+    agentDir,
+    taskSnapshotMd: path.join(agentDir, AGENT_TASK_SNAPSHOT_FILENAME),
+    memorySnapshotMd: path.join(agentDir, AGENT_MEMORY_SNAPSHOT_FILENAME),
+    promptMd: path.join(agentDir, "prompt.md"),
+    reportJson: path.join(agentDir, "report.json"),
+    stdoutLog: path.join(agentDir, "stdout.log"),
+    stderrLog: path.join(agentDir, "stderr.log"),
+  };
+}
+
+async function writeAgentContextSnapshots(agent, taskMarkdown, taskMemory) {
+  await fsp.mkdir(agent.paths.agentDir, { recursive: true });
+  await Promise.all([
+    fsp.writeFile(agent.paths.taskSnapshotMd, taskMarkdown, "utf8"),
+    fsp.writeFile(agent.paths.memorySnapshotMd, taskMemory, "utf8"),
+    fsp.writeFile(agent.paths.stdoutLog, "", "utf8"),
+    fsp.writeFile(agent.paths.stderrLog, "", "utf8"),
+  ]);
+}
+
+async function readAgentContextSnapshots(context, task, agent) {
+  const [taskSnapshot, memorySnapshot] = await Promise.all([
+    readTextSafe(agent.paths.taskSnapshotMd),
+    readTextSafe(agent.paths.memorySnapshotMd),
+  ]);
+  return {
+    taskMarkdown: taskSnapshot || await readTextSafe(task.paths.taskMd),
+    taskMemory: memorySnapshot || await readTaskMemory(context, task),
+  };
+}
+
+async function writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, agent, options = {}) {
+  const prompt = options.analysis
+    ? buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent)
+    : buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent);
+  await fsp.writeFile(agent.paths.promptMd, prompt, "utf8");
+  return prompt;
+}
+
 function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent) {
   return [
     "You are one AgentDesk execution subagent working in your own git worktree.",
@@ -1213,10 +1251,16 @@ function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId,
     `Branch: ${agent.branchName}`,
     `Worktree: ${agent.worktreePath}`,
     "",
+    "Context snapshot files:",
+    `- Task markdown snapshot: ${agent.paths.taskSnapshotMd}`,
+    `- Shared memory snapshot: ${agent.paths.memorySnapshotMd}`,
+    `- Prompt snapshot: ${agent.paths.promptMd}`,
+    "",
     "Rules:",
     "- Work only on the assigned subtask.",
     "- Stay inside the current git worktree and current branch.",
     "- Do not delete worktrees, do not merge to master, and do not switch to another branch.",
+    "- Treat the context snapshots in this prompt as the complete launch context; do not resume a parent Codex conversation.",
     "- Run the narrowest meaningful self-tests before finishing.",
     "- Keep your changes scoped and production-oriented.",
     "- If you are blocked, explain the blocker clearly in the final response.",
@@ -1232,10 +1276,10 @@ function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId,
         "",
       ]
       : []),
-    "Shared task memory:",
+    "Shared task memory snapshot:",
     taskMemory.trim() || "(empty)",
     "",
-    "Full task markdown:",
+    "Full task markdown snapshot:",
     taskMarkdown,
   ].join("\n");
 }
@@ -1254,10 +1298,16 @@ function buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, se
     `Current branch: ${agent.branchName}`,
     `Project root: ${agent.worktreePath}`,
     "",
+    "Context snapshot files:",
+    `- Task markdown snapshot: ${agent.paths.taskSnapshotMd}`,
+    `- Shared memory snapshot: ${agent.paths.memorySnapshotMd}`,
+    `- Prompt snapshot: ${agent.paths.promptMd}`,
+    "",
     "Rules:",
     "- Analyze only. Do not create, edit, delete, move, stage, commit, rebase, merge, or format files.",
     "- Inspect the codebase and explain exactly how the main agent should implement this subtask on the current branch.",
     "- Keep the plan scoped to the assigned subtask.",
+    "- Treat the context snapshots in this prompt as the complete launch context; do not resume a parent Codex conversation.",
     "- Prefer concrete file paths, functions, tests, and risk notes over broad advice.",
     "- If the subtask needs user confirmation, state the decision clearly.",
     "",
@@ -1273,10 +1323,10 @@ function buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, se
         "",
       ]
       : []),
-    "Shared task memory:",
+    "Shared task memory snapshot:",
     taskMemory.trim() || "(empty)",
     "",
-    "Full task markdown:",
+    "Full task markdown snapshot:",
     taskMarkdown,
   ].join("\n");
 }
@@ -1373,6 +1423,15 @@ export function renderSessionDocument(session, task) {
     lines.push(`- Status: ${agent.status}`);
     lines.push(`- Branch: ${agent.branchName || "-"}`);
     lines.push(`- Worktree: ${agent.worktreePath || "-"}`);
+    if (agent.paths?.taskSnapshotMd) {
+      lines.push(`- Task snapshot: ${agent.paths.taskSnapshotMd}`);
+    }
+    if (agent.paths?.memorySnapshotMd) {
+      lines.push(`- Memory snapshot: ${agent.paths.memorySnapshotMd}`);
+    }
+    if (agent.paths?.promptMd) {
+      lines.push(`- Prompt snapshot: ${agent.paths.promptMd}`);
+    }
     lines.push(`- Started: ${agent.startedAt || "-"}`);
     lines.push(`- Completed: ${agent.completedAt || "-"}`);
     if (Array.isArray(agent.changedFiles) && agent.changedFiles.length > 0) {
