@@ -446,6 +446,10 @@ export async function createSession(context, taskId, request = {}) {
   await assertGitRepository(context.projectRoot);
 
   const sessionRequest = await resolveSessionRequest(context, request);
+  const waitForCompletion = normalizeBoolean(
+    request.waitForCompletion ?? request.wait_for_completion,
+    "waitForCompletion",
+  );
   if (sessionRequest.executionMode === "worktree") {
     await assertMasterBranch(context.projectRoot);
   }
@@ -493,6 +497,11 @@ export async function createSession(context, taskId, request = {}) {
     return enrichSessionSummary(context, await readSessionMeta(context, sessionId));
   }
 
+  await updateTaskMeta(context, taskId, { status: "running" });
+  if (waitForCompletion) {
+    return runSessionJobAndReturnStatus(context, taskId, sessionId);
+  }
+
   const workerPath = path.join(CONTROL_PLANE_ROOT, "src", "worker", "run-agent-desk-job.mjs");
   const child = spawn(process.execPath, [
     workerPath,
@@ -517,8 +526,26 @@ export async function createSession(context, taskId, request = {}) {
   });
   child.unref();
 
-  await updateTaskMeta(context, taskId, { status: "running" });
   return enrichSessionSummary(context, meta);
+}
+
+async function runSessionJobAndReturnStatus(context, taskId, sessionId) {
+  try {
+    return enrichSessionSummary(context, await runSessionJob(context, sessionId));
+  } catch (error) {
+    const message = error.message || String(error);
+    await updateSessionMeta(context, sessionId, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      lastError: message,
+    }).catch(() => {});
+    await updateTaskMeta(context, taskId, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      lastError: message,
+    }).catch(() => {});
+    return enrichSessionSummary(context, await readSessionMeta(context, sessionId));
+  }
 }
 
 export async function getCodexAppLaunchPlan(context, sessionId) {

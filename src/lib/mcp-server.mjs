@@ -195,7 +195,7 @@ export function createAgentDeskMcpServer(options = {}) {
 
   server.registerTool("start_subagent_session", {
     title: "Start Subagent Session",
-    description: "Start an AgentDesk subagent session. codex-cli sessions are launched by AgentDesk. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
+    description: "Start an AgentDesk subagent session. codex-cli sessions are launched by AgentDesk and block until completion by default. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
     inputSchema: {
       taskId: z.string().min(1).describe("Ready AgentDesk task id under <project>/.agent-desk/tasks."),
       parallelism: z.number().optional().describe("Maximum concurrent subagents. Default 6, max 24."),
@@ -204,12 +204,16 @@ export function createAgentDeskMcpServer(options = {}) {
       executionMode: z.enum(["worktree", "current-branch"]).optional().describe("Execution mode. codex-app uses current-branch."),
       subagentLauncher: z.enum(["codex-cli", "codex-app"]).optional().describe("Subagent launcher. Default: codex-cli."),
       launchPrompt: z.string().optional().describe("Optional extra launch context included in each subagent prompt."),
+      waitForCompletion: z.boolean().optional().describe("For codex-cli sessions, wait for all subagents to finish before returning. Default: true."),
       ...contextInputSchema(),
     },
     outputSchema: sessionStartSchema(),
   }, async (args) => {
     const context = createMcpContext(args, options);
     const subagentLauncher = args.subagentLauncher || "codex-cli";
+    const waitForCompletion = subagentLauncher === "codex-cli"
+      ? args.waitForCompletion ?? true
+      : false;
     const result = await createSession(context, args.taskId, {
       parallelism: args.parallelism,
       model: args.model,
@@ -217,6 +221,7 @@ export function createAgentDeskMcpServer(options = {}) {
       executionMode: args.executionMode || (subagentLauncher === "codex-app" ? "current-branch" : undefined),
       subagentLauncher,
       launchPrompt: args.launchPrompt,
+      waitForCompletion,
     });
     const appLaunchPlan = subagentLauncher === "codex-app"
       ? await getCodexAppLaunchPlan(context, result.sessionId)
@@ -224,11 +229,14 @@ export function createAgentDeskMcpServer(options = {}) {
     const payload = {
       ...result,
       requiresHostLaunch: appLaunchPlan.requiresHostLaunch,
+      waitedForCompletion: waitForCompletion,
       appLaunchPlan,
     };
     const text = appLaunchPlan.requiresHostLaunch
       ? `Prepared ${appLaunchPlan.subagents.length} Codex App subagent prompt(s) for session ${result.sessionId}`
-      : `Started AgentDesk Codex CLI session: ${result.sessionId}`;
+      : waitForCompletion
+        ? `Completed AgentDesk Codex CLI session ${result.sessionId} with status ${result.status}`
+        : `Started AgentDesk Codex CLI session: ${result.sessionId}`;
     return toolResult(payload, text);
   });
 
@@ -402,6 +410,7 @@ function sessionDetailSchema() {
 function sessionStartSchema() {
   return sessionSummarySchema().extend({
     requiresHostLaunch: z.boolean(),
+    waitedForCompletion: z.boolean().optional(),
     appLaunchPlan: appLaunchPlanSchema(),
   }).passthrough();
 }

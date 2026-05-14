@@ -21,7 +21,7 @@ Use this skill to execute an existing AgentDesk task with concurrent subagents.
    - `parallelism`: user requested value, defaulting to 6
    - `model`: default `gpt-5.5`
    - `reasoning`: default `xhigh`
-3. For `codex-cli`, poll `read_subagent_session` until status is `succeeded` or `failed`.
+3. For `codex-cli`, rely on `start_subagent_session` to block until status is `succeeded` or `failed` unless you explicitly pass `waitForCompletion: false`.
 4. For `codex-app`, use `appLaunchPlan.subagents`:
    - Start up to `parallelism` app subagents with `spawn_agent`.
    - Give each subagent its returned prompt exactly enough to execute its assigned subtask.

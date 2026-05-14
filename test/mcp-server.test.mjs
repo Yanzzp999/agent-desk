@@ -109,7 +109,7 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
       ...process.env,
       FAKE_CODEX_STATE: fakeState,
       FAKE_CODEX_LOG: fakeLog,
-      FAKE_CODEX_DELAY_MS: "2500",
+      FAKE_CODEX_DELAY_MS: "200",
     },
     stderr: "pipe",
   });
@@ -141,13 +141,18 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
 
     assert.equal(started.structuredContent.subagentLauncher, "codex-cli");
     assert.equal(started.structuredContent.requiresHostLaunch, false);
+    assert.equal(started.structuredContent.waitedForCompletion, true);
     assert.equal(started.structuredContent.parallelism, 2);
+    assert.equal(started.structuredContent.status, "succeeded", started.structuredContent.lastError);
+    assert.equal(started.structuredContent.totalAgents, 3);
+    assert.equal(started.structuredContent.succeededAgents, 3);
+    assert.equal(started.structuredContent.executionMode, "current-branch");
 
     const sessionId = started.structuredContent.sessionId;
-    const meta = await waitForJson(
+    const meta = JSON.parse(await fs.readFile(
       path.join(projectRoot, ".agent-desk", "sessions", sessionId, "meta.json"),
-      (value) => ["succeeded", "failed"].includes(value.status) ? value : null,
-    );
+      "utf8",
+    ));
     assert.equal(meta.status, "succeeded", meta.lastError);
     assert.equal(meta.totalAgents, 3);
     assert.equal(meta.succeededAgents, 3);
