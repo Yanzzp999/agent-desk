@@ -9,10 +9,10 @@
 
 ## Git Workflow
 
-- After a large code update, Codex should automatically create a git commit once the implementation has been verified.
-- "Large code update" includes multi-file feature work, substantial UI redesigns, meaningful refactors, or any change set that would be inconvenient to leave uncommitted.
+- After a large or important update, Codex should automatically create a git commit once the implementation has been verified, then push the committed branch to its configured remote.
+- "Large or important update" includes multi-file feature work, substantial UI redesigns, meaningful refactors, user-facing documentation/configuration changes, or any change set that would be inconvenient to leave uncommitted or unpushed.
 - Only commit files related to the completed change, and avoid bundling unrelated local edits into the same commit.
-- If the user explicitly says not to commit, follow the user's instruction instead.
+- If the user explicitly says not to commit or not to push, follow the user's instruction instead.
 
 ## Product Direction
 
