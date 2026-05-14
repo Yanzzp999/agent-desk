@@ -166,6 +166,38 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
   }
 });
 
+test("MCP create_agentdesk_task requires confirmation for similar tasks", async () => {
+  const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-confirm-")));
+  await initializeGitProject(projectRoot);
+  await writeReadyAgentDeskTask(projectRoot, "task-mcp-similar", "MCP duplicate guard");
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [MCP_BIN],
+    cwd: projectRoot,
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-desk-mcp-confirm-test", version: "0.0.0" });
+
+  try {
+    await client.connect(transport);
+    const result = await client.callTool({
+      name: "create_agentdesk_task",
+      arguments: {
+        projectRoot,
+        title: "MCP duplicate guard",
+        brief: "Exercise AgentDesk MCP session orchestration.",
+      },
+    });
+
+    assert.equal(result.structuredContent.requiresConfirmation, true);
+    assert.equal(result.structuredContent.similarTasks[0].taskId, "task-mcp-similar");
+    assert.match(result.content[0].text, /continue an existing task or rebuild a fresh task/);
+  } finally {
+    await client.close();
+  }
+});
+
 test("MCP server prepares Codex App subagent launch plans", async () => {
   const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-app-")));
   await initializeGitProject(projectRoot);

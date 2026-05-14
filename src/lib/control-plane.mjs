@@ -30,6 +30,8 @@ const SCHEMA_VERSION = 2;
 const TASK_STATUSES = new Set(["received", "generating", "ready", "running", "succeeded", "failed"]);
 const SESSION_STATUSES = new Set(["queued", "waiting_for_app", "running", "succeeded", "failed"]);
 const AGENT_STATUSES = new Set(["queued", "running", "integrating", "succeeded", "failed"]);
+const SIMILAR_TASK_ACTIONS = new Set(["confirm", "continue", "rebuild"]);
+const SIMILAR_TASK_SCORE_THRESHOLD = 0.72;
 const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const BOOLEAN_FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 const SUPPORTED_REASONING_EFFORTS = new Set(
@@ -261,9 +263,26 @@ export async function getTask(context, taskId) {
 
 export async function createTask(context, request = {}) {
   const normalized = normalizeTaskRequest(request);
+  const similarTasks = await findSimilarTasks(context, normalized);
+  if (similarTasks.length > 0) {
+    if (normalized.similarTaskAction === "confirm") {
+      return buildSimilarTaskConfirmation(normalized, similarTasks);
+    }
+    if (normalized.similarTaskAction === "continue") {
+      return {
+        ...similarTasks[0],
+        requiresConfirmation: false,
+        reusedExistingTask: true,
+        similarTaskAction: "continue",
+        similarTasks,
+      };
+    }
+  } else if (normalized.similarTaskAction === "continue") {
+    throw new Error("no similar AgentDesk task found to continue");
+  }
+
   await assertExecutable(context.codexCli || "codex", "codex CLI");
   await fsp.mkdir(context.tasksRoot, { recursive: true });
-
   const { taskId, taskDir } = await allocateTaskDir(context, normalized);
   const now = new Date().toISOString();
   const meta = {
@@ -318,10 +337,16 @@ export async function createTask(context, request = {}) {
   });
   child.unref();
 
-  return enrichTaskSummary(context, {
+  const summary = await enrichTaskSummary(context, {
     ...meta,
     pid: child.pid,
   });
+  return {
+    ...summary,
+    requiresConfirmation: false,
+    similarTaskAction: normalized.similarTaskAction,
+    similarTasks: normalized.similarTaskAction === "rebuild" ? similarTasks : [],
+  };
 }
 
 export async function runTaskGenerationJob(context, taskId) {
@@ -925,7 +950,80 @@ function normalizeTaskRequest(request = {}) {
     throw new Error("brief is required");
   }
   const title = String(request.title || "").trim() || firstSentence(brief);
-  return { brief, title };
+  const similarTaskAction = normalizeSimilarTaskAction(request.similarTaskAction);
+  return { brief, title, similarTaskAction };
+}
+
+function normalizeSimilarTaskAction(value) {
+  const action = String(value || "confirm").trim().toLowerCase();
+  if (!SIMILAR_TASK_ACTIONS.has(action)) {
+    throw new Error(`similarTaskAction must be one of: ${[...SIMILAR_TASK_ACTIONS].join(", ")}`);
+  }
+  return action;
+}
+
+async function findSimilarTasks(context, request) {
+  const tasks = await listTasks(context);
+  const matches = [];
+  for (const task of tasks.items) {
+    const match = scoreTaskSimilarity(request, task);
+    if (match.score >= SIMILAR_TASK_SCORE_THRESHOLD) {
+      matches.push({
+        ...task,
+        similarityScore: Number(match.score.toFixed(3)),
+        similarityReason: match.reason,
+      });
+    }
+  }
+  matches.sort((left, right) => {
+    const scoreOrder = right.similarityScore - left.similarityScore;
+    if (scoreOrder !== 0) {
+      return scoreOrder;
+    }
+    return String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+  });
+  return matches.slice(0, 5);
+}
+
+function buildSimilarTaskConfirmation(request, similarTasks) {
+  return {
+    requiresConfirmation: true,
+    requestedTitle: request.title,
+    requestedBrief: request.brief,
+    similarTaskAction: "confirm",
+    message: "Similar AgentDesk task(s) were found. Confirm whether to continue an existing task or rebuild a fresh task.",
+    confirmationChoices: [
+      {
+        action: "continue",
+        description: "Use an existing task by taskId; no new task will be generated.",
+      },
+      {
+        action: "rebuild",
+        description: "Generate a fresh task from this request; existing tasks are left untouched.",
+      },
+    ],
+    similarTasks,
+  };
+}
+
+function scoreTaskSimilarity(request, task) {
+  const titleScore = similarityScore(request.title, task.title);
+  const briefScore = similarityScore(request.brief, task.brief);
+  const combinedScore = similarityScore(
+    `${request.title}\n${request.brief}`,
+    `${task.title || ""}\n${task.brief || ""}`,
+  );
+  const score = Math.max(titleScore, briefScore, combinedScore);
+  if (score >= 0.98) {
+    return { score, reason: "same or near-identical title/brief" };
+  }
+  if (titleScore === score) {
+    return { score, reason: "similar title" };
+  }
+  if (briefScore === score) {
+    return { score, reason: "similar brief" };
+  }
+  return { score, reason: "similar title and brief" };
 }
 
 export function normalizeSessionRequest(request = {}) {
@@ -1913,6 +2011,82 @@ async function newestMtime(root) {
 
 function normalizeOptionalString(value) {
   return value === undefined || value === null ? "" : String(value).trim();
+}
+
+function similarityScore(left, right) {
+  const normalizedLeft = normalizeComparableText(left);
+  const normalizedRight = normalizeComparableText(right);
+  if (!normalizedLeft || !normalizedRight) {
+    return 0;
+  }
+  if (normalizedLeft === normalizedRight) {
+    return 1;
+  }
+  if (
+    normalizedLeft.length >= 12
+    && normalizedRight.length >= 12
+    && (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft))
+  ) {
+    return 0.92;
+  }
+  return Math.max(
+    jaccardScore(comparableTokens(normalizedLeft), comparableTokens(normalizedRight)),
+    diceScore(characterBigrams(normalizedLeft), characterBigrams(normalizedRight)),
+  );
+}
+
+function normalizeComparableText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function comparableTokens(value) {
+  return new Set(String(value || "").split(/\s+/).filter(Boolean));
+}
+
+function characterBigrams(value) {
+  const characters = [...String(value || "").replace(/\s+/g, "")];
+  if (characters.length === 0) {
+    return new Set();
+  }
+  if (characters.length < 3) {
+    return new Set([characters.join("")]);
+  }
+  const grams = new Set();
+  for (let index = 0; index < characters.length - 1; index += 1) {
+    grams.add(characters.slice(index, index + 2).join(""));
+  }
+  return grams;
+}
+
+function jaccardScore(left, right) {
+  if (left.size === 0 || right.size === 0) {
+    return 0;
+  }
+  let intersection = 0;
+  for (const value of left) {
+    if (right.has(value)) {
+      intersection += 1;
+    }
+  }
+  return intersection / new Set([...left, ...right]).size;
+}
+
+function diceScore(left, right) {
+  if (left.size === 0 || right.size === 0) {
+    return 0;
+  }
+  let intersection = 0;
+  for (const value of left) {
+    if (right.has(value)) {
+      intersection += 1;
+    }
+  }
+  return (2 * intersection) / (left.size + right.size);
 }
 
 function definedObject(object) {

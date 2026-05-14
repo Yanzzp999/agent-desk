@@ -148,20 +148,22 @@ export function createAgentDeskMcpServer(options = {}) {
 
   server.registerTool("create_agentdesk_task", {
     title: "Create AgentDesk Task",
-    description: "Create an AgentDesk control-plane task under <project>/.agent-desk/tasks by asking Codex CLI to generate task.md.",
+    description: "Create an AgentDesk control-plane task under <project>/.agent-desk/tasks by asking Codex CLI to generate task.md. If a similar task exists, the default response requires user confirmation before continuing an existing task or rebuilding a fresh one.",
     inputSchema: {
       title: z.string().min(1).optional().describe("Task title hint."),
       brief: z.string().min(1).describe("Task brief to turn into task.md."),
+      similarTaskAction: z.enum(["confirm", "continue", "rebuild"]).optional().describe("What to do when a similar task exists. Default 'confirm' returns requiresConfirmation with candidates. Use 'continue' or 'rebuild' only after the user confirms."),
       ...contextInputSchema(),
     },
-    outputSchema: taskSummarySchema(),
+    outputSchema: taskCreateResultSchema(),
   }, async (args) => {
     const context = createMcpContext(args, options);
     const result = await createTask(context, {
       title: args.title,
       brief: args.brief,
+      similarTaskAction: args.similarTaskAction,
     });
-    return toolResult(result, `Started AgentDesk task generation: ${result.taskId}`);
+    return toolResult(result, taskCreateResultText(result));
   });
 
   server.registerTool("list_agentdesk_tasks", {
@@ -326,6 +328,46 @@ function taskSummarySchema() {
     subtaskCount: z.number(),
     updatedAt: z.string(),
   }).passthrough();
+}
+
+function taskCreateResultSchema() {
+  return z.object({
+    requiresConfirmation: z.boolean().optional(),
+    taskId: z.string().optional(),
+    title: z.string().optional(),
+    status: z.string().optional(),
+    subtaskCount: z.number().optional(),
+    requestedTitle: z.string().optional(),
+    requestedBrief: z.string().optional(),
+    similarTaskAction: z.string().optional(),
+    reusedExistingTask: z.boolean().optional(),
+    similarTasks: z.array(taskSummarySchema().extend({
+      similarityScore: z.number(),
+      similarityReason: z.string(),
+    }).passthrough()).optional(),
+    message: z.string().optional(),
+    confirmationChoices: z.array(z.object({
+      action: z.string(),
+      description: z.string(),
+    })).optional(),
+  }).passthrough();
+}
+
+function taskCreateResultText(result) {
+  if (result.requiresConfirmation) {
+    const matches = (result.similarTasks || [])
+      .map((task) => `- ${task.taskId} (${task.status}, score ${task.similarityScore}): ${task.title}`)
+      .join("\n");
+    return [
+      "Similar AgentDesk task(s) found. Ask the user whether to continue an existing task or rebuild a fresh task.",
+      matches,
+      "Use similarTaskAction='continue' to reuse the best match, or similarTaskAction='rebuild' to create a fresh task after confirmation.",
+    ].filter(Boolean).join("\n");
+  }
+  if (result.reusedExistingTask) {
+    return `Continuing existing AgentDesk task: ${result.taskId}`;
+  }
+  return `Started AgentDesk task generation: ${result.taskId}`;
 }
 
 function taskDetailSchema() {

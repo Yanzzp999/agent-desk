@@ -103,7 +103,7 @@ MCP tools：
 - `list_tasks`：列出 `<project>/task/` 下的 markdown task 文件
 - `read_task`：读取 `<project>/task/` 下的某个 markdown task 文件
 - `claim_task_items`：为 checklist item 写入可见的 AgentDesk claim 标记，便于多 agent 协作
-- `create_agentdesk_task`：通过 Codex CLI 生成 `.agent-desk/tasks/<taskId>/task.md`
+- `create_agentdesk_task`：通过 Codex CLI 生成 `.agent-desk/tasks/<taskId>/task.md`；若发现相似 task，默认返回候选项并要求用户确认继续已有 task 还是 `rebuild` 新 task
 - `list_agentdesk_tasks` / `read_agentdesk_task`：查看 AgentDesk control-plane task、生成的 `task.md` 和共享 `memory.md`
 - `start_subagent_session`：启动或准备 AgentDesk subagent session
 - `list_subagent_sessions` / `read_subagent_session`：查看 session 状态、agent 摘要和日志索引
@@ -193,6 +193,8 @@ npm install
   --brief "Implement the checkout flow end to end"
 ```
 
+如果已有 task 与本次需求相似或一致，创建命令会先返回候选 task，不会直接生成新 task。确认要重新生成时加 `--rebuild`；确认继续已有 task 时用候选 `taskId` 启动 session，或加 `--continue-similar` 让命令返回最佳匹配 task。
+
 任务生成会通过 `codex exec` 执行，并把 markdown 写入：
 
 ```text
@@ -221,7 +223,7 @@ npm install
 ```text
 verunectl tasks list [--json]
 verunectl tasks show <taskId> [--json]
-verunectl tasks create [--title TEXT] [--brief TEXT] [--json]
+verunectl tasks create [--title TEXT] [--brief TEXT] [--rebuild|--continue-similar] [--json]
 verunectl mcp [--project DIR]
 verunectl sessions list [--task <taskId>] [--json]
 verunectl sessions show <sessionId> [--json]

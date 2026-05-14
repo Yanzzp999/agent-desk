@@ -7,6 +7,7 @@ import {
   AGENT_DESK_STATE_DIRNAME,
   buildCodexExecArgs,
   createContext,
+  createTask,
   getAgentLogs,
   getSession,
   getTask,
@@ -29,6 +30,50 @@ test("createContext uses project-scoped .agent-desk roots", async () => {
   assert.equal(context.tasksRoot, path.join(projectRoot, AGENT_DESK_STATE_DIRNAME, "tasks"));
   assert.equal(context.sessionsRoot, path.join(projectRoot, AGENT_DESK_STATE_DIRNAME, "sessions"));
   assert.match(context.worktreesRoot, /agent-desk\/worktrees/);
+});
+
+test("createTask requires confirmation before duplicating a similar AgentDesk task", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-confirm-"));
+  const context = createContext({ projectRoot });
+  const taskDir = path.join(context.tasksRoot, "task-existing-checkout-flow");
+  await fs.mkdir(taskDir, { recursive: true });
+  await fs.writeFile(path.join(taskDir, "meta.json"), JSON.stringify({
+    schemaVersion: 2,
+    taskId: "task-existing-checkout-flow",
+    title: "Checkout flow",
+    brief: "Implement checkout end to end.",
+    status: "ready",
+    createdAt: "2026-05-13T10:00:00.000Z",
+    updatedAt: "2026-05-13T10:05:00.000Z",
+    completedAt: "2026-05-13T10:05:00.000Z",
+    lastError: "",
+    subtaskCount: 2,
+    paths: {
+      taskDir,
+      briefMd: path.join(taskDir, "brief.md"),
+      promptMd: path.join(taskDir, "prompt.md"),
+      taskMd: path.join(taskDir, "task.md"),
+      memoryMd: path.join(taskDir, "memory.md"),
+      metaJson: path.join(taskDir, "meta.json"),
+      stdoutLog: path.join(taskDir, "stdout.log"),
+      stderrLog: path.join(taskDir, "stderr.log"),
+    },
+  }, null, 2), "utf8");
+
+  const blocked = await createTask(context, {
+    title: "Checkout flow",
+    brief: "Implement checkout end to end.",
+  });
+  assert.equal(blocked.requiresConfirmation, true);
+  assert.equal(blocked.similarTasks[0].taskId, "task-existing-checkout-flow");
+
+  const continued = await createTask(context, {
+    title: "Checkout flow",
+    brief: "Implement checkout end to end.",
+    similarTaskAction: "continue",
+  });
+  assert.equal(continued.reusedExistingTask, true);
+  assert.equal(continued.taskId, "task-existing-checkout-flow");
 });
 
 test("parses markdown checklist subtasks for subagent fanout", () => {

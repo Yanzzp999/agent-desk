@@ -114,8 +114,12 @@ async function handleTasks(context, parsed) {
   if (subcommand === "create") {
     const title = parsed.title || "";
     const brief = parsed.brief || await readStdinIfAvailable();
-    const result = await createTask(context, { title, brief });
-    return output(parsed, result, () => `Started task generation: ${result.taskId}`);
+    const result = await createTask(context, {
+      title,
+      brief,
+      similarTaskAction: taskCreateAction(parsed),
+    });
+    return output(parsed, result, () => renderTaskCreateResult(result));
   }
   throw new Error(`unknown tasks command: ${subcommand}`);
 }
@@ -188,6 +192,41 @@ function output(parsed, payload, renderText) {
   console.log(renderText());
 }
 
+function taskCreateAction(parsed) {
+  if (parsed.rebuild) {
+    return "rebuild";
+  }
+  if (parsed["continue-similar"]) {
+    return "continue";
+  }
+  return "confirm";
+}
+
+function renderTaskCreateResult(result) {
+  if (result.requiresConfirmation) {
+    return [
+      "Similar AgentDesk task(s) found. Confirm the next step before creating a new task.",
+      "",
+      formatTable(result.similarTasks || [], [
+        { header: "TASK", value: (row) => row.taskId, maxWidth: 44 },
+        { header: "STATUS", value: (row) => row.status, maxWidth: 14 },
+        { header: "SCORE", value: (row) => row.similarityScore, maxWidth: 8 },
+        { header: "TITLE", value: (row) => row.title, maxWidth: 42 },
+      ]),
+      "",
+      "Continue an existing task:",
+      `  verunectl sessions start ${(result.similarTasks || [])[0]?.taskId || "<taskId>"}`,
+      "",
+      "Rebuild a fresh task from this request:",
+      "  verunectl tasks create --rebuild --title <title> --brief <brief>",
+    ].join("\n");
+  }
+  if (result.reusedExistingTask) {
+    return `Continuing existing task: ${result.taskId}`;
+  }
+  return `Started task generation: ${result.taskId}`;
+}
+
 function parseArgs(argv) {
   const result = { _: [] };
   for (let index = 0; index < argv.length; index += 1) {
@@ -237,7 +276,7 @@ function printHelp() {
 Usage:
   verunectl tasks list [--json]
   verunectl tasks show <taskId> [--json]
-  verunectl tasks create [--title TEXT] [--brief TEXT] [--json]
+  verunectl tasks create [--title TEXT] [--brief TEXT] [--rebuild|--continue-similar] [--json]
   verunectl mcp [--project DIR]
   verunectl config show [--json]
   verunectl config init [--force] [--json]
@@ -252,6 +291,10 @@ Global options:
   --config FILE          Override the AgentDesk TOML config path. Default: <desk-root>/config.toml.
   --worktrees-root DIR   Override the persistent git worktrees root.
   --codex-cli PATH       Override the Codex CLI executable path.
+
+Task create options:
+  --rebuild              Create a fresh task even when a similar task exists.
+  --continue-similar     Return the best matching existing task instead of creating a new one.
 
 Session start options:
   --model MODEL          Codex model for subagents. Default: gpt-5.5.
