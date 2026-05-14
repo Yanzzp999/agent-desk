@@ -102,6 +102,7 @@ MCP tools：
 - `create_task`：默认在 `<project>/task/` 下创建 `<title-slug>.task.md`
 - `list_tasks`：列出 `<project>/task/` 下的 markdown task 文件
 - `read_task`：读取 `<project>/task/` 下的某个 markdown task 文件
+- `claim_task_items`：为 checklist item 写入可见的 AgentDesk claim 标记，便于多 agent 协作
 
 `create_task` 写出的任务始终使用 markdown 待办清单格式：
 
