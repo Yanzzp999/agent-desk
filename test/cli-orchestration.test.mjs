@@ -41,7 +41,7 @@ test("ralphctl creates a task and runs configured Codex CLI subagents", { timeou
     CODEX_CLI: fakeCodex,
     FAKE_CODEX_STATE: fakeState,
     FAKE_CODEX_LOG: fakeLog,
-    FAKE_CODEX_DELAY_MS: "600",
+    FAKE_CODEX_DELAY_MS: "2500",
   };
 
   const taskCreate = await run(process.execPath, [

@@ -109,7 +109,7 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
       ...process.env,
       FAKE_CODEX_STATE: fakeState,
       FAKE_CODEX_LOG: fakeLog,
-      FAKE_CODEX_DELAY_MS: "300",
+      FAKE_CODEX_DELAY_MS: "2500",
     },
     stderr: "pipe",
   });
