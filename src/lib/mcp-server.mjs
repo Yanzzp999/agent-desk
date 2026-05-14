@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
 import {
+  claimTaskMarkdownItems,
   createTaskMarkdownFile,
   listTaskMarkdownFiles,
   readTaskMarkdownFile,
@@ -57,6 +58,10 @@ export function createAgentDeskMcpServer(options = {}) {
         filePath: z.string(),
         title: z.string(),
         taskCount: z.number(),
+        openCount: z.number(),
+        doneCount: z.number(),
+        claimedCount: z.number(),
+        items: z.array(taskItemSchema()),
       })),
     },
   }, async (args) => {
@@ -71,7 +76,8 @@ export function createAgentDeskMcpServer(options = {}) {
     title: "Read Task Markdown",
     description: "Read a markdown task file from the project's task/ directory.",
     inputSchema: {
-      filename: z.string().min(1).describe("Task markdown filename inside task/."),
+      filename: z.string().optional().describe("Task markdown filename inside task/."),
+      taskName: z.string().optional().describe("Task filename, title, or title slug inside task/."),
       projectRoot: z.string().optional().describe("Project root. Defaults to AGENT_DESK_PROJECT_ROOT, INIT_CWD, or the MCP server working directory."),
       taskDir: z.string().optional().describe("Task directory relative to projectRoot. Default: task."),
     },
@@ -82,6 +88,10 @@ export function createAgentDeskMcpServer(options = {}) {
       filename: z.string(),
       title: z.string(),
       taskCount: z.number(),
+      openCount: z.number(),
+      doneCount: z.number(),
+      claimedCount: z.number(),
+      items: z.array(taskItemSchema()),
       markdown: z.string(),
     },
   }, async (args) => {
@@ -90,6 +100,40 @@ export function createAgentDeskMcpServer(options = {}) {
       projectRoot: args.projectRoot || options.projectRoot,
     });
     return toolResult(result, result.markdown);
+  });
+
+  server.registerTool("claim_task_items", {
+    title: "Claim Task Items",
+    description: "Claim one or more checklist items in a markdown task file by task name, filename, or title. Claims are written back as visible AgentDesk claim markers so other agents can see ownership.",
+    inputSchema: {
+      taskName: z.string().min(1).describe("Task filename, title, or title slug inside task/. Examples: 'checkout-flow.task.md' or 'Checkout flow'."),
+      items: z.array(z.union([z.number(), z.string().min(1)])).min(1).describe("Checklist item selectors. Use 1-based item numbers, exact titles, or unique title fragments."),
+      assignee: z.string().optional().describe("Agent/session name to show in the claim marker. Defaults to AGENT_DESK_AGENT_NAME, CODEX_SESSION_ID, or 'agent'."),
+      note: z.string().optional().describe("Optional short note stored beside the claim marker."),
+      force: z.boolean().optional().describe("Overwrite claims owned by another assignee. Default: false."),
+      projectRoot: z.string().optional().describe("Project root. Defaults to AGENT_DESK_PROJECT_ROOT, INIT_CWD, or the MCP server working directory."),
+      taskDir: z.string().optional().describe("Task directory relative to projectRoot. Default: task."),
+    },
+    outputSchema: {
+      projectRoot: z.string(),
+      taskDir: z.string(),
+      filePath: z.string(),
+      filename: z.string(),
+      title: z.string(),
+      taskCount: z.number(),
+      openCount: z.number(),
+      doneCount: z.number(),
+      claimedCount: z.number(),
+      items: z.array(taskItemSchema()),
+      claimed: z.array(taskItemSchema()),
+      markdown: z.string(),
+    },
+  }, async (args) => {
+    const result = await claimTaskMarkdownItems({
+      ...args,
+      projectRoot: args.projectRoot || options.projectRoot,
+    });
+    return toolResult(result, `Claimed ${result.claimed.length} item(s) in ${result.filePath}`);
   });
 
   return server;
@@ -107,4 +151,17 @@ function toolResult(structuredContent, text) {
     content: [{ type: "text", text }],
     structuredContent,
   };
+}
+
+function taskItemSchema() {
+  return z.object({
+    index: z.number(),
+    line: z.number(),
+    title: z.string(),
+    checked: z.boolean(),
+    claimedBy: z.string(),
+    claimedAt: z.string(),
+    claimNote: z.string(),
+    claimLine: z.number(),
+  });
 }

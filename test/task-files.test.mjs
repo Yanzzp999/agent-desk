@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  claimTaskMarkdownItems,
   createTaskMarkdownFile,
   listTaskMarkdownFiles,
+  readTaskMarkdownFile,
   renderTaskMarkdown,
 } from "../src/lib/task-files.mjs";
 
@@ -34,6 +36,7 @@ test("creates a named task markdown file in project task directory", async () =>
   const listed = await listTaskMarkdownFiles({ projectRoot });
   assert.equal(listed.items.length, 1);
   assert.equal(listed.items[0].taskCount, 2);
+  assert.equal(listed.items[0].claimedCount, 0);
 });
 
 test("creates unique task markdown files under concurrent same-name writes", async () => {
@@ -75,4 +78,45 @@ test("renders fallback checklist item when tasks are omitted", () => {
   const markdown = renderTaskMarkdown({ title: "Small task" });
   assert.match(markdown, /^## Tasks/m);
   assert.match(markdown, /^- \[ \] Define and implement the requested change/m);
+});
+
+test("claims checklist items by task name and preserves visible ownership markers", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-"));
+  await createTaskMarkdownFile({
+    projectRoot,
+    title: "Manual claim flow",
+    tasks: [
+      "Implement the API",
+      "Wire the UI",
+      "Add tests",
+    ],
+  });
+
+  const claimed = await claimTaskMarkdownItems({
+    projectRoot,
+    taskName: "Manual claim flow",
+    items: [1, "UI"],
+    assignee: "agent-alpha",
+    claimedAt: "2026-05-14T00:00:00.000Z",
+  });
+
+  assert.equal(claimed.filename, "manual-claim-flow.task.md");
+  assert.equal(claimed.claimedCount, 2);
+  assert.deepEqual(claimed.claimed.map((item) => item.index), [1, 2]);
+  assert.match(claimed.markdown, /^  - AgentDesk claim: `agent-alpha` at 2026-05-14T00:00:00.000Z/m);
+
+  const read = await readTaskMarkdownFile({ projectRoot, taskName: "manual-claim-flow" });
+  assert.equal(read.claimedCount, 2);
+  assert.equal(read.items[0].claimedBy, "agent-alpha");
+  assert.equal(read.items[1].claimedBy, "agent-alpha");
+
+  await assert.rejects(
+    () => claimTaskMarkdownItems({
+      projectRoot,
+      taskName: "manual-claim-flow.task.md",
+      items: [1],
+      assignee: "agent-beta",
+    }),
+    /already claimed: 1 by agent-alpha/,
+  );
 });

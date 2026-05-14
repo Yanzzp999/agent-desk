@@ -26,7 +26,7 @@ test("MCP server creates task markdown in the launched project", async () => {
     const tools = await client.listTools();
     assert.deepEqual(
       tools.tools.map((tool) => tool.name).sort(),
-      ["create_task", "list_tasks", "read_task"],
+      ["claim_task_items", "create_task", "list_tasks", "read_task"],
     );
 
     const created = await client.callTool({
@@ -42,11 +42,36 @@ test("MCP server creates task markdown in the launched project", async () => {
     assert.equal(created.structuredContent.taskDir, path.join(projectRoot, "task"));
     assert.match(created.structuredContent.markdown, /^- \[ \] Expose MCP entrypoint/m);
 
+    const claimed = await client.callTool({
+      name: "claim_task_items",
+      arguments: {
+        taskName: "MCP task generation",
+        items: [1, "Write task"],
+        assignee: "mcp-agent",
+        note: "manual session",
+      },
+    });
+
+    assert.equal(claimed.structuredContent.claimed.length, 2);
+    assert.equal(claimed.structuredContent.claimedCount, 2);
+    assert.equal(claimed.structuredContent.items[0].claimedBy, "mcp-agent");
+    assert.match(claimed.structuredContent.markdown, /AgentDesk claim: `mcp-agent`/);
+
+    const read = await client.callTool({
+      name: "read_task",
+      arguments: {
+        taskName: "mcp-task-generation",
+      },
+    });
+
+    assert.equal(read.structuredContent.claimedCount, 2);
+    assert.equal(read.structuredContent.items[1].claimNote, "manual session");
+
     const fileText = await fs.readFile(
       path.join(projectRoot, "task", "mcp-task-generation.task.md"),
       "utf8",
     );
-    assert.equal(fileText, created.structuredContent.markdown);
+    assert.equal(fileText, claimed.structuredContent.markdown);
   } finally {
     await client.close();
   }
