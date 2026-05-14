@@ -424,6 +424,8 @@ function appLaunchPlanSchema() {
       agentId: z.string(),
       title: z.string(),
       status: z.string(),
+      taskSnapshotPath: z.string(),
+      memorySnapshotPath: z.string(),
       promptPath: z.string(),
       prompt: z.string(),
     })),
