@@ -12,11 +12,46 @@ AgentDesk 是一个以 MCP 和 CLI 为中心的项目编排工具，用来在任
 AgentDesk 不再提供 GUI、Electron 外壳或本地 Web 应用。当前支持的主要入口是
 MCP stdio server 和 `ralphctl`。
 
+![AgentDesk MCP flow](docs/assets/agentdesk-mcp-flow.png)
+
 ## MCP 使用方式
 
 AgentDesk 提供 `agent-desk-mcp` stdio server，可以被 Codex、Claude Desktop 或其他
 MCP 客户端从任意项目目录启动。默认项目根目录是 MCP server 的启动目录，也可以
 通过 `--project` 或 `AGENT_DESK_PROJECT_ROOT` 覆盖。
+
+### 推荐安装到 Codex
+
+在本仓库执行一次依赖安装，然后把 MCP server 注册到 Codex：
+
+```sh
+npm install
+codex mcp add agent-desk -- node "$(pwd)/bin/agent-desk-mcp.mjs"
+```
+
+这个方式适合多项目使用：调用 MCP tools 时显式传入 `projectRoot`，每个项目都会使用
+自己的 `<project>/task/` 和 `<project>/.agent-desk/` 状态目录。
+
+如果希望某个 MCP server 默认绑定到一个固定项目，可以注册时加上环境变量：
+
+```sh
+codex mcp add agent-desk-my-project \
+  --env AGENT_DESK_PROJECT_ROOT=/absolute/path/to/your/project \
+  -- node "$(pwd)/bin/agent-desk-mcp.mjs"
+```
+
+验证安装：
+
+```sh
+codex mcp get agent-desk
+npm test
+```
+
+如果想让本机 shell 也能直接运行 `ralphctl` 和 `agent-desk-mcp`，可以在本仓库执行：
+
+```sh
+npm link
+```
 
 ```json
 {
