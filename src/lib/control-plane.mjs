@@ -1466,6 +1466,8 @@ async function integrateBranchIntoMaster(context, worktreePath, baseCommit, head
 
 export function buildCodexExecArgs(options = {}) {
   const args = [
+    "-a",
+    "never",
     "exec",
     "-m",
     options.model || DEFAULT_SUBAGENT_MODEL,
@@ -1475,8 +1477,6 @@ export function buildCodexExecArgs(options = {}) {
     `service_tier="${options.serviceTier || DEFAULT_SERVICE_TIER}"`,
     "-s",
     options.sandboxMode || "danger-full-access",
-    "-a",
-    "never",
     "-C",
     options.cwd,
     "-o",

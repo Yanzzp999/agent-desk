@@ -317,18 +317,20 @@ if (args.includes("--version")) {
   process.exit(0);
 }
 
-if (args[0] !== "exec") {
+const execIndex = args.indexOf("exec");
+if (execIndex === -1) {
   console.error("unsupported fake codex command: " + args.join(" "));
   process.exit(2);
 }
 
-const outputFile = argAfter("-o");
-const outputSchemaFile = argAfter("--output-schema");
+const execArgs = args.slice(execIndex);
+const outputFile = argAfter("-o", execArgs);
+const outputSchemaFile = argAfter("--output-schema", execArgs);
 const prompt = await readStdin();
 await appendInvocation({
   args,
   cwd: process.cwd(),
-  model: argAfter("-m"),
+  model: argAfter("-m", execArgs),
   outputFile,
   hasOutputSchema: Boolean(outputSchemaFile),
 });
@@ -347,9 +349,9 @@ try {
   await decrementActive();
 }
 
-function argAfter(flag) {
-  const index = args.indexOf(flag);
-  return index === -1 ? "" : String(args[index + 1] || "");
+function argAfter(flag, sourceArgs = args) {
+  const index = sourceArgs.indexOf(flag);
+  return index === -1 ? "" : String(sourceArgs[index + 1] || "");
 }
 
 async function readStdin() {

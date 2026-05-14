@@ -309,19 +309,21 @@ if (args[0] === "debug" && args[1] === "models") {
   process.exit(0);
 }
 
-if (args[0] !== "exec") {
+const execIndex = args.indexOf("exec");
+if (execIndex === -1) {
   console.error("unsupported fake codex command: " + args.join(" "));
   process.exit(2);
 }
 
-const outputFile = argAfter("-o");
-const outputSchemaFile = argAfter("--output-schema");
+const execArgs = args.slice(execIndex);
+const outputFile = argAfter("-o", execArgs);
+const outputSchemaFile = argAfter("--output-schema", execArgs);
 const prompt = await readStdin();
 await appendInvocation({
   args,
   cwd: process.cwd(),
-  model: argAfter("-m"),
-  configs: valuesAfter("-c"),
+  model: argAfter("-m", execArgs),
+  configs: valuesAfter("-c", execArgs),
   outputFile,
   hasOutputSchema: Boolean(outputSchemaFile),
 });
@@ -363,16 +365,16 @@ try {
   await decrementActive();
 }
 
-function argAfter(flag) {
-  const index = args.indexOf(flag);
-  return index === -1 ? "" : String(args[index + 1] || "");
+function argAfter(flag, sourceArgs = args) {
+  const index = sourceArgs.indexOf(flag);
+  return index === -1 ? "" : String(sourceArgs[index + 1] || "");
 }
 
-function valuesAfter(flag) {
+function valuesAfter(flag, sourceArgs = args) {
   const values = [];
-  for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === flag) {
-      values.push(String(args[index + 1] || ""));
+  for (let index = 0; index < sourceArgs.length; index += 1) {
+    if (sourceArgs[index] === flag) {
+      values.push(String(sourceArgs[index + 1] || ""));
       index += 1;
     }
   }

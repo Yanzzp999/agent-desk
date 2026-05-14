@@ -334,6 +334,8 @@ test("builds Codex exec args with selected model, reasoning, service tier, and o
     outputFile: "/tmp/report.json",
     outputSchemaFile: "/tmp/schema.json",
   }), [
+    "-a",
+    "never",
     "exec",
     "-m",
     "gpt-5.5",
@@ -343,8 +345,6 @@ test("builds Codex exec args with selected model, reasoning, service tier, and o
     "service_tier=\"fast\"",
     "-s",
     "danger-full-access",
-    "-a",
-    "never",
     "-C",
     "/tmp/project-worktree",
     "-o",
