@@ -554,15 +554,18 @@ export async function getCodexAppLaunchPlan(context, sessionId) {
   const session = await getSession(context, sessionId);
   const requiresHostLaunch = getSessionSubagentLauncher(session) === "codex-app";
   const subagents = requiresHostLaunch
-    ? await Promise.all((session.agents || []).map(async (agent) => ({
-      agentId: agent.id,
-      title: agent.title,
-      status: agent.status,
-      taskSnapshotPath: agent.paths.taskSnapshotMd,
-      memorySnapshotPath: agent.paths.memorySnapshotMd,
-      promptPath: agent.paths.promptMd,
-      prompt: await readTextSafe(agent.paths.promptMd),
-    })))
+    ? await Promise.all((session.agents || []).map(async (agent) => {
+      const paths = agent.paths || {};
+      return {
+        agentId: agent.id,
+        title: agent.title,
+        status: agent.status,
+        taskSnapshotPath: paths.taskSnapshotMd || "",
+        memorySnapshotPath: paths.memorySnapshotMd || "",
+        promptPath: paths.promptMd || "",
+        prompt: paths.promptMd ? await readTextSafe(paths.promptMd) : "",
+      };
+    }))
     : [];
   return {
     sessionId,

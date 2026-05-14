@@ -253,6 +253,31 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
     });
     assert.equal(read.structuredContent.status, "waiting_for_app");
     assert.equal(read.structuredContent.appLaunchPlan.subagents.length, 3);
+
+    const sessionMetaPath = path.join(
+      projectRoot,
+      ".agent-desk",
+      "sessions",
+      started.structuredContent.sessionId,
+      "meta.json",
+    );
+    const legacyMeta = JSON.parse(await fs.readFile(sessionMetaPath, "utf8"));
+    for (const agent of legacyMeta.agents) {
+      delete agent.paths.taskSnapshotMd;
+      delete agent.paths.memorySnapshotMd;
+    }
+    await fs.writeFile(sessionMetaPath, JSON.stringify(legacyMeta, null, 2), "utf8");
+
+    const legacyRead = await client.callTool({
+      name: "read_subagent_session",
+      arguments: {
+        projectRoot,
+        sessionId: started.structuredContent.sessionId,
+      },
+    });
+    assert.equal(legacyRead.structuredContent.status, "waiting_for_app");
+    assert.equal(legacyRead.structuredContent.appLaunchPlan.subagents[0].taskSnapshotPath, "");
+    assert.equal(legacyRead.structuredContent.appLaunchPlan.subagents[0].memorySnapshotPath, "");
   } finally {
     await client.close();
   }
