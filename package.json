@@ -1,13 +1,32 @@
 {
-  "name": "agent-desk",
+  "name": "@pavee/agent-desk",
   "version": "0.1.0",
   "description": "Project task and subagent orchestrator for Codex",
-  "private": true,
+  "license": "MIT",
   "type": "module",
   "main": "bin/ralphctl.mjs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yanzzp999/agent-desk.git"
+  },
+  "homepage": "https://github.com/Yanzzp999/agent-desk#readme",
+  "bugs": {
+    "url": "https://github.com/Yanzzp999/agent-desk/issues"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "scripts/install-mcp.sh",
+    "scripts/ralphctl.sh",
+    "README.md",
+    "docs/assets/agentdesk-mcp-flow.png"
+  ],
   "bin": {
-    "ralphctl": "./bin/ralphctl.mjs",
-    "agent-desk-mcp": "./bin/agent-desk-mcp.mjs"
+    "ralphctl": "bin/ralphctl.mjs",
+    "agent-desk-mcp": "bin/agent-desk-mcp.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

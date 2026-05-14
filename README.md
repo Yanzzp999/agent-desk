@@ -22,17 +22,43 @@ MCP 客户端从任意项目目录启动。默认项目根目录是 MCP server �
 
 ### 推荐安装到 Codex
 
-在本仓库执行一次依赖安装，然后把 MCP server 注册到 Codex：
+不需要 clone 本仓库时，可以直接通过 npm 包注册 MCP server：
 
 ```sh
-npm install
-codex mcp add agent-desk -- node "$(pwd)/bin/agent-desk-mcp.mjs"
+codex mcp add agent-desk -- npx -y --package @pavee/agent-desk agent-desk-mcp
 ```
 
 这个方式适合多项目使用：调用 MCP tools 时显式传入 `projectRoot`，每个项目都会使用
 自己的 `<project>/task/` 和 `<project>/.agent-desk/` 状态目录。
 
 如果希望某个 MCP server 默认绑定到一个固定项目，可以注册时加上环境变量：
+
+```sh
+codex mcp add agent-desk-my-project \
+  --env AGENT_DESK_PROJECT_ROOT=/absolute/path/to/your/project \
+  -- npx -y --package @pavee/agent-desk agent-desk-mcp
+```
+
+也可以用一键安装脚本：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Yanzzp999/agent-desk/master/scripts/install-mcp.sh | sh
+```
+
+固定项目：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Yanzzp999/agent-desk/master/scripts/install-mcp.sh | sh -s -- /absolute/path/to/your/project
+```
+
+本地开发时，在本仓库执行一次依赖安装，然后把本地 MCP server 注册到 Codex：
+
+```sh
+npm install
+codex mcp add agent-desk -- node "$(pwd)/bin/agent-desk-mcp.mjs"
+```
+
+本地开发固定项目：
 
 ```sh
 codex mcp add agent-desk-my-project \
