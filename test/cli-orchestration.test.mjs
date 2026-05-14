@@ -131,6 +131,145 @@ test("ralphctl creates a task and runs configured Codex CLI subagents", { timeou
   assert.equal(state.maxActive, 2);
 });
 
+test("ralphctl allocates unique task and session ids under concurrent starts", { timeout: 30000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-race-"));
+  const projectRoot = path.join(root, "project");
+  const worktreesRoot = path.join(root, "worktrees");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await writeFakeCodex(fakeCodex);
+  await initializeGitProject(projectRoot);
+
+  const env = {
+    ...process.env,
+    CODEX_CLI: fakeCodex,
+    FAKE_CODEX_DELAY_MS: "300",
+  };
+
+  const taskCreates = await Promise.all([
+    run(process.execPath, [
+      RALPHCTL,
+      "tasks",
+      "create",
+      "--project",
+      projectRoot,
+      "--worktrees-root",
+      worktreesRoot,
+      "--title",
+      "Concurrent task collision",
+      "--brief",
+      "Generate one concurrent task.",
+      "--json",
+    ], { cwd: REPO_ROOT, env }),
+    run(process.execPath, [
+      RALPHCTL,
+      "tasks",
+      "create",
+      "--project",
+      projectRoot,
+      "--worktrees-root",
+      worktreesRoot,
+      "--title",
+      "Concurrent task collision",
+      "--brief",
+      "Generate another concurrent task.",
+      "--json",
+    ], { cwd: REPO_ROOT, env }),
+  ]);
+  for (const result of taskCreates) {
+    assert.equal(result.exitCode, 0, result.stderr);
+  }
+  const taskIds = taskCreates.map((result) => JSON.parse(result.stdout).taskId);
+  assert.equal(new Set(taskIds).size, 2);
+  assert.deepEqual(
+    (await fs.readdir(path.join(projectRoot, ".agent-desk", "tasks"))).sort(),
+    taskIds.toSorted(),
+  );
+  await Promise.all(taskIds.map((taskId) => waitForJson(
+    path.join(projectRoot, ".agent-desk", "tasks", taskId, "meta.json"),
+    (meta) => meta.status === "ready" ? meta : null,
+  )));
+
+  const baseTaskCreate = await run(process.execPath, [
+    RALPHCTL,
+    "tasks",
+    "create",
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--title",
+    "Concurrent session collision",
+    "--brief",
+    "Generate a task for concurrent session starts.",
+    "--json",
+  ], { cwd: REPO_ROOT, env });
+  assert.equal(baseTaskCreate.exitCode, 0, baseTaskCreate.stderr);
+  const baseTaskId = JSON.parse(baseTaskCreate.stdout).taskId;
+  await waitForJson(
+    path.join(projectRoot, ".agent-desk", "tasks", baseTaskId, "meta.json"),
+    (meta) => meta.status === "ready" ? meta : null,
+  );
+
+  const sessionStarts = await Promise.all([
+    run(process.execPath, [
+      RALPHCTL,
+      "sessions",
+      "start",
+      baseTaskId,
+      "--project",
+      projectRoot,
+      "--worktrees-root",
+      worktreesRoot,
+      "--execution-mode",
+      "current-branch",
+      "--subagent-launcher",
+      "codex-cli",
+      "--parallel",
+      "3",
+      "--json",
+    ], { cwd: REPO_ROOT, env }),
+    run(process.execPath, [
+      RALPHCTL,
+      "sessions",
+      "start",
+      baseTaskId,
+      "--project",
+      projectRoot,
+      "--worktrees-root",
+      worktreesRoot,
+      "--execution-mode",
+      "current-branch",
+      "--subagent-launcher",
+      "codex-cli",
+      "--parallel",
+      "3",
+      "--json",
+    ], { cwd: REPO_ROOT, env }),
+  ]);
+  for (const result of sessionStarts) {
+    assert.equal(result.exitCode, 0, result.stderr);
+  }
+  const sessionIds = sessionStarts.map((result) => JSON.parse(result.stdout).sessionId);
+  assert.equal(new Set(sessionIds).size, 2);
+  assert.deepEqual(
+    (await fs.readdir(path.join(projectRoot, ".agent-desk", "sessions"))).sort(),
+    sessionIds.toSorted(),
+  );
+
+  const sessions = await Promise.all(sessionIds.map((sessionId) => waitForJson(
+    path.join(projectRoot, ".agent-desk", "sessions", sessionId, "meta.json"),
+    (meta) => ["succeeded", "failed"].includes(meta.status) ? meta : null,
+  )));
+  for (const session of sessions) {
+    assert.equal(session.status, "succeeded", session.lastError);
+    assert.equal(session.executionMode, "current-branch");
+    assert.equal(session.succeededAgents, 3);
+    assert.equal(session.failedAgents, 0);
+  }
+});
+
 async function initializeGitProject(projectRoot) {
   await run("git", ["init", "-b", "master"], { cwd: projectRoot, check: true });
   await run("git", ["config", "user.name", "AgentDesk Test"], { cwd: projectRoot, check: true });

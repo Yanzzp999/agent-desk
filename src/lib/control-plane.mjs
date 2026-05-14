@@ -260,8 +260,7 @@ export async function createTask(context, request = {}) {
   await assertExecutable(context.codexCli || "codex", "codex CLI");
   await fsp.mkdir(context.tasksRoot, { recursive: true });
 
-  const taskId = await uniqueTaskId(context, normalized);
-  const taskDir = taskDirPath(context, taskId);
+  const { taskId, taskDir } = await allocateTaskDir(context, normalized);
   const now = new Date().toISOString();
   const meta = {
     schemaVersion: SCHEMA_VERSION,
@@ -284,7 +283,6 @@ export async function createTask(context, request = {}) {
       stderrLog: path.join(taskDir, "stderr.log"),
     },
   };
-  await fsp.mkdir(taskDir, { recursive: true });
   await fsp.writeFile(meta.paths.briefMd, normalized.brief, "utf8");
   await fsp.writeFile(meta.paths.stdoutLog, "", "utf8");
   await fsp.writeFile(meta.paths.stderrLog, "", "utf8");
@@ -423,8 +421,7 @@ export async function createSession(context, taskId, request = {}) {
   if (sessionRequest.executionMode === "current-branch" && sessionRequest.subagentLauncher === "codex-app") {
     throw new Error("codex-app subagent launcher requires explicit Codex App orchestration and cannot be started by ralphctl yet; use --subagent-launcher codex-cli for automated CLI analysis");
   }
-  const sessionId = await uniqueSessionId(context, task);
-  const sessionDir = sessionDirPath(context, sessionId);
+  const { sessionId, sessionDir } = await allocateSessionDir(context, task);
   const now = new Date().toISOString();
   const meta = {
     schemaVersion: SCHEMA_VERSION,
@@ -458,7 +455,6 @@ export async function createSession(context, taskId, request = {}) {
       stderrLog: path.join(sessionDir, "stderr.log"),
     },
   };
-  await fsp.mkdir(sessionDir, { recursive: true });
   await fsp.writeFile(meta.paths.stdoutLog, "", "utf8");
   await fsp.writeFile(meta.paths.stderrLog, "", "utf8");
   await writeJsonAtomic(meta.paths.metaJson, meta);
@@ -1430,26 +1426,35 @@ async function mutateSessionMeta(context, sessionId, mutate) {
   }
 }
 
-async function uniqueTaskId(context, request) {
+async function allocateTaskDir(context, request) {
   const base = `task-${compactTimestamp(new Date())}-${slug(request.title)}`;
-  let candidate = base;
-  let suffix = 2;
-  while (fs.existsSync(taskDirPath(context, candidate))) {
-    candidate = `${base}-${suffix}`;
-    suffix += 1;
-  }
-  return candidate;
+  const { id, dir } = await allocateUniqueDir(base, (candidate) => taskDirPath(context, candidate));
+  return { taskId: id, taskDir: dir };
 }
 
-async function uniqueSessionId(context, task) {
+async function allocateSessionDir(context, task) {
   const base = `session-${compactTimestamp(new Date())}-${slug(task.title || task.taskId)}`;
+  const { id, dir } = await allocateUniqueDir(base, (candidate) => sessionDirPath(context, candidate));
+  return { sessionId: id, sessionDir: dir };
+}
+
+async function allocateUniqueDir(base, toDirPath) {
   let candidate = base;
   let suffix = 2;
-  while (fs.existsSync(sessionDirPath(context, candidate))) {
-    candidate = `${base}-${suffix}`;
-    suffix += 1;
+  while (true) {
+    const dir = toDirPath(candidate);
+    try {
+      await fsp.mkdir(path.dirname(dir), { recursive: true });
+      await fsp.mkdir(dir, { recursive: false });
+      return { id: candidate, dir };
+    } catch (error) {
+      if (error.code !== "EEXIST") {
+        throw error;
+      }
+      candidate = `${base}-${suffix}`;
+      suffix += 1;
+    }
   }
-  return candidate;
 }
 
 function taskDirPath(context, taskId) {

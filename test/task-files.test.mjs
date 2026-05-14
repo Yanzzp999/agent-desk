@@ -36,6 +36,41 @@ test("creates a named task markdown file in project task directory", async () =>
   assert.equal(listed.items[0].taskCount, 2);
 });
 
+test("creates unique task markdown files under concurrent same-name writes", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-"));
+  const [first, second] = await Promise.all([
+    createTaskMarkdownFile({
+      projectRoot,
+      title: "Race A",
+      tasks: ["Write first file"],
+      filename: "race.task.md",
+    }),
+    createTaskMarkdownFile({
+      projectRoot,
+      title: "Race B",
+      tasks: ["Write second file"],
+      filename: "race.task.md",
+    }),
+  ]);
+
+  assert.equal(new Set([first.filename, second.filename]).size, 2);
+  assert.deepEqual(
+    [first.filename, second.filename].sort(),
+    ["race.task-2.md", "race.task.md"],
+  );
+
+  const files = await fs.readdir(path.join(projectRoot, "task"));
+  assert.deepEqual(files.sort(), ["race.task-2.md", "race.task.md"]);
+
+  const markdownByTitle = new Map();
+  for (const file of files) {
+    const markdown = await fs.readFile(path.join(projectRoot, "task", file), "utf8");
+    markdownByTitle.set(markdown.match(/^#\s+(.+)$/m)?.[1], markdown);
+  }
+  assert.match(markdownByTitle.get("Race A"), /^- \[ \] Write first file/m);
+  assert.match(markdownByTitle.get("Race B"), /^- \[ \] Write second file/m);
+});
+
 test("renders fallback checklist item when tasks are omitted", () => {
   const markdown = renderTaskMarkdown({ title: "Small task" });
   assert.match(markdown, /^## Tasks/m);

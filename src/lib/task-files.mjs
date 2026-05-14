@@ -11,17 +11,19 @@ export async function createTaskMarkdownFile(options = {}) {
   const title = normalizeTitle(options.title || firstSentence(options.brief) || "Task");
   const tasks = normalizeTaskItems(options.tasks || extractTaskItems(options.brief));
   const filename = normalizeTaskFilename(options.filename || `${slug(title)}${DEFAULT_TASK_FILE_SUFFIX}`);
-  const filePath = options.overwrite
-    ? path.join(taskDir, filename)
-    : await uniqueTaskFilePath(taskDir, filename);
   const markdown = renderTaskMarkdown({
     title,
     brief: normalizeOptionalString(options.brief),
     tasks,
   });
+  const filePath = options.overwrite
+    ? path.join(taskDir, filename)
+    : await writeUniqueTaskFile(taskDir, filename, markdown);
 
   await fs.mkdir(taskDir, { recursive: true });
-  await fs.writeFile(filePath, markdown, "utf8");
+  if (options.overwrite) {
+    await fs.writeFile(filePath, markdown, "utf8");
+  }
   return {
     projectRoot,
     taskDir,
@@ -128,23 +130,26 @@ function extractTaskItems(text) {
     .filter(Boolean);
 }
 
-async function uniqueTaskFilePath(taskDir, filename) {
+async function writeUniqueTaskFile(taskDir, filename, markdown) {
+  await fs.mkdir(taskDir, { recursive: true });
   const parsed = path.parse(filename);
   let candidate = path.join(taskDir, filename);
   let suffix = 2;
-  while (await exists(candidate)) {
-    candidate = path.join(taskDir, `${parsed.name}-${suffix}${parsed.ext}`);
-    suffix += 1;
-  }
-  return candidate;
-}
-
-async function exists(filePath) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
+  while (true) {
+    let handle = null;
+    try {
+      handle = await fs.open(candidate, "wx");
+      await handle.writeFile(markdown, "utf8");
+      return candidate;
+    } catch (error) {
+      if (error.code !== "EEXIST") {
+        throw error;
+      }
+      candidate = path.join(taskDir, `${parsed.name}-${suffix}${parsed.ext}`);
+      suffix += 1;
+    } finally {
+      await handle?.close();
+    }
   }
 }
 
