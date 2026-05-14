@@ -104,6 +104,10 @@ async function handleTasks(context, parsed) {
         `Sessions: ${result.sessions?.length || 0}`,
         "",
         result.markdown || "(empty task.md)",
+        "",
+        "## Memory",
+        "",
+        result.memory || "(empty memory.md)",
       ].join("\n");
     });
   }
@@ -252,7 +256,7 @@ Global options:
 Session start options:
   --model MODEL          Codex model for subagents. Default: gpt-5.5.
   --reasoning EFFORT     Reasoning effort: low, medium, high, or xhigh. Default: xhigh.
-  --parallel N           Maximum concurrent Codex CLI subagents. Default: 6, max: 24.
+  --parallel N           Maximum concurrent subagents or app launch prompts. Default: 6, max: 24.
   --concurrency N        Alias for --parallel.
   --codex-count N        Alias for --parallel.
   --execution-mode MODE  worktree or current-branch. Default: worktree.

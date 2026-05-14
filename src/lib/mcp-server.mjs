@@ -2,6 +2,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
 import {
+  createContext,
+  createSession,
+  createTask,
+  getCodexAppLaunchPlan,
+  getSession,
+  getTask,
+  listSessions,
+  listTasks,
+} from "./control-plane.mjs";
+import {
   claimTaskMarkdownItems,
   createTaskMarkdownFile,
   listTaskMarkdownFiles,
@@ -136,6 +146,128 @@ export function createAgentDeskMcpServer(options = {}) {
     return toolResult(result, `Claimed ${result.claimed.length} item(s) in ${result.filePath}`);
   });
 
+  server.registerTool("create_agentdesk_task", {
+    title: "Create AgentDesk Task",
+    description: "Create an AgentDesk control-plane task under <project>/.agent-desk/tasks by asking Codex CLI to generate task.md.",
+    inputSchema: {
+      title: z.string().min(1).optional().describe("Task title hint."),
+      brief: z.string().min(1).describe("Task brief to turn into task.md."),
+      ...contextInputSchema(),
+    },
+    outputSchema: taskSummarySchema(),
+  }, async (args) => {
+    const context = createMcpContext(args, options);
+    const result = await createTask(context, {
+      title: args.title,
+      brief: args.brief,
+    });
+    return toolResult(result, `Started AgentDesk task generation: ${result.taskId}`);
+  });
+
+  server.registerTool("list_agentdesk_tasks", {
+    title: "List AgentDesk Tasks",
+    description: "List AgentDesk control-plane tasks from <project>/.agent-desk/tasks.",
+    inputSchema: contextInputSchema(),
+    outputSchema: {
+      items: z.array(taskSummarySchema()),
+    },
+  }, async (args) => {
+    const context = createMcpContext(args, options);
+    const result = await listTasks(context);
+    return toolResult(result, `Found ${result.items.length} AgentDesk task(s)`);
+  });
+
+  server.registerTool("read_agentdesk_task", {
+    title: "Read AgentDesk Task",
+    description: "Read an AgentDesk control-plane task, including generated task.md content and session summaries.",
+    inputSchema: {
+      taskId: z.string().min(1).describe("AgentDesk task id under <project>/.agent-desk/tasks."),
+      ...contextInputSchema(),
+    },
+    outputSchema: taskDetailSchema(),
+  }, async (args) => {
+    const context = createMcpContext(args, options);
+    const result = await getTask(context, args.taskId);
+    return toolResult(result, result.markdown || `Read AgentDesk task: ${result.taskId}`);
+  });
+
+  server.registerTool("start_subagent_session", {
+    title: "Start Subagent Session",
+    description: "Start an AgentDesk subagent session. codex-cli sessions are launched by AgentDesk. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
+    inputSchema: {
+      taskId: z.string().min(1).describe("Ready AgentDesk task id under <project>/.agent-desk/tasks."),
+      parallelism: z.number().optional().describe("Maximum concurrent subagents. Default 6, max 24."),
+      model: z.string().optional().describe("Codex model for subagents. Default: gpt-5.5."),
+      reasoning: z.enum(["low", "medium", "high", "xhigh"]).optional().describe("Codex reasoning effort. Default: xhigh."),
+      executionMode: z.enum(["worktree", "current-branch"]).optional().describe("Execution mode. codex-app uses current-branch."),
+      subagentLauncher: z.enum(["codex-cli", "codex-app"]).optional().describe("Subagent launcher. Default: codex-cli."),
+      launchPrompt: z.string().optional().describe("Optional extra launch context included in each subagent prompt."),
+      ...contextInputSchema(),
+    },
+    outputSchema: sessionStartSchema(),
+  }, async (args) => {
+    const context = createMcpContext(args, options);
+    const subagentLauncher = args.subagentLauncher || "codex-cli";
+    const result = await createSession(context, args.taskId, {
+      parallelism: args.parallelism,
+      model: args.model,
+      reasoning: args.reasoning,
+      executionMode: args.executionMode || (subagentLauncher === "codex-app" ? "current-branch" : undefined),
+      subagentLauncher,
+      launchPrompt: args.launchPrompt,
+    });
+    const appLaunchPlan = subagentLauncher === "codex-app"
+      ? await getCodexAppLaunchPlan(context, result.sessionId)
+      : emptyAppLaunchPlan(result.sessionId, result.parallelism);
+    const payload = {
+      ...result,
+      requiresHostLaunch: appLaunchPlan.requiresHostLaunch,
+      appLaunchPlan,
+    };
+    const text = appLaunchPlan.requiresHostLaunch
+      ? `Prepared ${appLaunchPlan.subagents.length} Codex App subagent prompt(s) for session ${result.sessionId}`
+      : `Started AgentDesk Codex CLI session: ${result.sessionId}`;
+    return toolResult(payload, text);
+  });
+
+  server.registerTool("list_subagent_sessions", {
+    title: "List Subagent Sessions",
+    description: "List AgentDesk subagent sessions from <project>/.agent-desk/sessions.",
+    inputSchema: {
+      taskId: z.string().optional().describe("Optional task id filter."),
+      ...contextInputSchema(),
+    },
+    outputSchema: {
+      items: z.array(sessionSummarySchema()),
+    },
+  }, async (args) => {
+    const context = createMcpContext(args, options);
+    const result = await listSessions(context, { taskId: args.taskId });
+    return toolResult(result, `Found ${result.items.length} AgentDesk session(s)`);
+  });
+
+  server.registerTool("read_subagent_session", {
+    title: "Read Subagent Session",
+    description: "Read an AgentDesk subagent session, including status, agents, docs, and Codex App launch plan when applicable.",
+    inputSchema: {
+      sessionId: z.string().min(1).describe("AgentDesk session id under <project>/.agent-desk/sessions."),
+      ...contextInputSchema(),
+    },
+    outputSchema: sessionDetailSchema(),
+  }, async (args) => {
+    const context = createMcpContext(args, options);
+    const result = await getSession(context, args.sessionId);
+    const appLaunchPlan = result.subagentLauncher === "codex-app"
+      ? await getCodexAppLaunchPlan(context, result.sessionId)
+      : emptyAppLaunchPlan(result.sessionId, result.parallelism);
+    const payload = {
+      ...result,
+      requiresHostLaunch: appLaunchPlan.requiresHostLaunch,
+      appLaunchPlan,
+    };
+    return toolResult(payload, result.docContent || `Read AgentDesk session: ${result.sessionId}`);
+  });
+
   return server;
 }
 
@@ -164,4 +296,104 @@ function taskItemSchema() {
     claimNote: z.string(),
     claimLine: z.number(),
   });
+}
+
+function createMcpContext(args = {}, options = {}) {
+  return createContext({
+    projectRoot: args.projectRoot || options.projectRoot,
+    deskRoot: args.deskRoot,
+    worktreesRoot: args.worktreesRoot,
+    configPath: args.configPath,
+    codexCli: args.codexCli,
+  });
+}
+
+function contextInputSchema() {
+  return {
+    projectRoot: z.string().optional().describe("Project root. Defaults to AGENT_DESK_PROJECT_ROOT, INIT_CWD, git root, or the MCP server working directory."),
+    deskRoot: z.string().optional().describe("Override <project>/.agent-desk."),
+    worktreesRoot: z.string().optional().describe("Override the persistent git worktrees root."),
+    configPath: z.string().optional().describe("Override the AgentDesk TOML config path."),
+    codexCli: z.string().optional().describe("Override the Codex CLI executable path."),
+  };
+}
+
+function taskSummarySchema() {
+  return z.object({
+    taskId: z.string(),
+    title: z.string(),
+    status: z.string(),
+    subtaskCount: z.number(),
+    updatedAt: z.string(),
+  }).passthrough();
+}
+
+function taskDetailSchema() {
+  return taskSummarySchema().extend({
+    markdown: z.string(),
+    memory: z.string(),
+    memoryPath: z.string(),
+    sessions: z.array(sessionSummarySchema()),
+  }).passthrough();
+}
+
+function sessionSummarySchema() {
+  return z.object({
+    sessionId: z.string(),
+    taskId: z.string(),
+    status: z.string(),
+    parallelism: z.number(),
+    executionMode: z.string(),
+    subagentLauncher: z.string(),
+  }).passthrough();
+}
+
+function sessionDetailSchema() {
+  return sessionSummarySchema().extend({
+    agents: z.array(agentSchema()),
+    docContent: z.string(),
+    requiresHostLaunch: z.boolean().optional(),
+    appLaunchPlan: appLaunchPlanSchema().optional(),
+  }).passthrough();
+}
+
+function sessionStartSchema() {
+  return sessionSummarySchema().extend({
+    requiresHostLaunch: z.boolean(),
+    appLaunchPlan: appLaunchPlanSchema(),
+  }).passthrough();
+}
+
+function agentSchema() {
+  return z.object({
+    id: z.string(),
+    title: z.string(),
+    status: z.string(),
+  }).passthrough();
+}
+
+function appLaunchPlanSchema() {
+  return z.object({
+    sessionId: z.string(),
+    requiresHostLaunch: z.boolean(),
+    launchTool: z.string(),
+    parallelism: z.number(),
+    subagents: z.array(z.object({
+      agentId: z.string(),
+      title: z.string(),
+      status: z.string(),
+      promptPath: z.string(),
+      prompt: z.string(),
+    })),
+  });
+}
+
+function emptyAppLaunchPlan(sessionId, parallelism) {
+  return {
+    sessionId,
+    requiresHostLaunch: false,
+    launchTool: "",
+    parallelism,
+    subagents: [],
+  };
 }

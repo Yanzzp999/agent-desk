@@ -17,6 +17,7 @@ import {
   parseTaskMarkdownItems,
   renderAgentDeskConfigToml,
   renderSessionDocument,
+  upsertTaskMemoryEntry,
 } from "../src/lib/control-plane.mjs";
 
 test("createContext uses project-scoped .agent-desk roots", async () => {
@@ -140,6 +141,7 @@ test("reads task, session, and agent log state from .agent-desk", async () => {
 
   await fs.writeFile(taskMeta.paths.metaJson, `${JSON.stringify(taskMeta, null, 2)}\n`);
   await fs.writeFile(taskMeta.paths.taskMd, "# Ship AgentDesk orchestration\n\n- [ ] Replace PRD JSON generation\n");
+  await fs.writeFile(path.join(taskDir, "memory.md"), "# Task Memory\n\nExisting shared context.\n");
   await fs.writeFile(sessionMeta.paths.metaJson, `${JSON.stringify(sessionMeta, null, 2)}\n`);
   await fs.writeFile(sessionMeta.paths.docMd, renderSessionDocument(sessionMeta, taskMeta));
   await fs.writeFile(sessionMeta.agents[0].paths.stdoutLog, "stdout line\n");
@@ -153,6 +155,8 @@ test("reads task, session, and agent log state from .agent-desk", async () => {
 
   const taskDetail = await getTask(context, "task-demo");
   assert.match(taskDetail.markdown, /Replace PRD JSON generation/);
+  assert.match(taskDetail.memory, /Existing shared context/);
+  assert.equal(taskDetail.memoryPath, path.join(taskDir, "memory.md"));
   assert.equal(taskDetail.sessions.length, 1);
 
   const sessions = await listSessions(context);
@@ -165,6 +169,52 @@ test("reads task, session, and agent log state from .agent-desk", async () => {
   const logs = await getAgentLogs(context, "session-demo", "agent-01");
   assert.match(logs.stdout, /stdout line/);
   assert.match(logs.stderr, /stderr line/);
+});
+
+test("upserts task memory entries by session and agent marker", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-memory-"));
+  const context = createContext({ projectRoot });
+  const taskDir = path.join(context.tasksRoot, "task-memory");
+  const task = {
+    taskId: "task-memory",
+    title: "Remember agent work",
+    createdAt: "2026-05-14T00:00:00.000Z",
+    paths: {
+      taskDir,
+      memoryMd: path.join(taskDir, "memory.md"),
+    },
+  };
+
+  await fs.mkdir(taskDir, { recursive: true });
+  const first = await upsertTaskMemoryEntry(context, task, "session-a", {
+    id: "agent-01",
+    title: "Implement memory",
+    status: "succeeded",
+    completedAt: "2026-05-14T01:00:00.000Z",
+    summary: "Initial summary",
+    changedFiles: ["src/lib/control-plane.mjs"],
+    testsRun: ["npm test"],
+    risks: [],
+    notes: ["First note"],
+    lastError: "",
+  });
+  const second = await upsertTaskMemoryEntry(context, task, "session-a", {
+    id: "agent-01",
+    title: "Implement memory",
+    status: "succeeded",
+    completedAt: "2026-05-14T01:05:00.000Z",
+    summary: "Updated summary",
+    changedFiles: ["src/lib/control-plane.mjs"],
+    testsRun: ["npm test"],
+    risks: ["Watch stale context"],
+    notes: ["Updated note"],
+    lastError: "",
+  });
+
+  assert.match(first.memory, /Initial summary/);
+  assert.match(second.memory, /Updated summary/);
+  assert.doesNotMatch(second.memory, /Initial summary/);
+  assert.equal(second.memory.match(/<!-- agentdesk-memory:session-a:agent-01 -->/g).length, 1);
 });
 
 test("normalizes configurable session defaults and overrides", () => {

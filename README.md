@@ -103,6 +103,15 @@ MCP tools：
 - `list_tasks`：列出 `<project>/task/` 下的 markdown task 文件
 - `read_task`：读取 `<project>/task/` 下的某个 markdown task 文件
 - `claim_task_items`：为 checklist item 写入可见的 AgentDesk claim 标记，便于多 agent 协作
+- `create_agentdesk_task`：通过 Codex CLI 生成 `.agent-desk/tasks/<taskId>/task.md`
+- `list_agentdesk_tasks` / `read_agentdesk_task`：查看 AgentDesk control-plane task、生成的 `task.md` 和共享 `memory.md`
+- `start_subagent_session`：启动或准备 AgentDesk subagent session
+- `list_subagent_sessions` / `read_subagent_session`：查看 session 状态、agent 摘要和日志索引
+
+`start_subagent_session` 支持两种 launcher：
+
+- `codex-cli`：由 AgentDesk 直接启动 Codex CLI subagents，遵守 `parallelism` 并发上限。
+- `codex-app`：生成可追踪的 Codex App launch plan，返回每个 app subagent 的 prompt。由于 MCP server 运行在 Node 进程内，不能直接调用 Codex App 宿主的 `spawn_agent` 工具；调用方需要按返回的 `appLaunchPlan.subagents` 并发启动 Codex App subagents。
 
 `create_task` 写出的任务始终使用 markdown 待办清单格式：
 
@@ -146,6 +155,7 @@ Implement the checkout flow end to end.
       brief.md
       prompt.md
       task.md
+      memory.md
       meta.json
       stdout.log
       stderr.log
@@ -251,6 +261,10 @@ Session 执行：
 - 为每个子代理创建独立 git branch 和 git worktree
 - 将完成的子代理分支 rebase 到 `master`
 - 通过 fast-forward 更新 `master` 集成完成的工作
+
+`current-branch` 模式也可以选择 `--subagent-launcher codex-app`，此时 AgentDesk 会创建 session 和每个 subagent 的 prompt 文件，并等待 Codex App 宿主按 launch plan 直接启动 app subagents。
+
+每个 control-plane task 都会维护一个 `memory.md`，用于记录跨 session 共享的上下文。AgentDesk 会在启动子代理时把该文件注入 prompt，并在每个 agent 完成或失败后用 `sessionId + agentId` 标记自动更新对应 memory 条目。
 
 `session.md` 会随着子代理完成不断重新生成，所以编排器会留下最新执行摘要。
 

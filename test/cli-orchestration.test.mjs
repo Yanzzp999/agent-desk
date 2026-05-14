@@ -24,7 +24,7 @@ test("ralphctl help exposes CLI-only task and session commands", async () => {
   assert.doesNotMatch(result.stdout, /electron/i);
 });
 
-test("ralphctl creates a task and runs configured Codex CLI subagents", { timeout: 30000 }, async () => {
+test("ralphctl creates a task and runs configured Codex CLI subagents", { timeout: 60000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-e2e-"));
   const projectRoot = path.join(root, "project");
   const worktreesRoot = path.join(root, "worktrees");
@@ -65,7 +65,9 @@ test("ralphctl creates a task and runs configured Codex CLI subagents", { timeou
     (meta) => meta.status === "ready" ? meta : null,
   );
   assert.equal(taskMeta.subtaskCount, 3);
+  assert.equal(taskMeta.paths.memoryMd, path.join(projectRoot, ".agent-desk", "tasks", taskSummary.taskId, "memory.md"));
   assert.match(await fs.readFile(taskMeta.paths.taskMd, "utf8"), /- \[ \] Implement CLI config plumbing/);
+  assert.match(await fs.readFile(taskMeta.paths.memoryMd, "utf8"), /# Task Memory/);
 
   const sessionStart = await run(process.execPath, [
     RALPHCTL,
@@ -89,6 +91,7 @@ test("ralphctl creates a task and runs configured Codex CLI subagents", { timeou
   const sessionMeta = await waitForJson(
     path.join(projectRoot, ".agent-desk", "sessions", sessionSummary.sessionId, "meta.json"),
     (meta) => ["succeeded", "failed"].includes(meta.status) ? meta : null,
+    45000,
   );
 
   assert.equal(sessionMeta.status, "succeeded", sessionMeta.lastError);
@@ -113,8 +116,15 @@ test("ralphctl creates a task and runs configured Codex CLI subagents", { timeou
     assert.match(prompt, /Execution model: gpt-5\.5/);
     assert.match(prompt, /Execution reasoning: high/);
     assert.match(prompt, new RegExp(`Assigned subtask: ${escapeRegExp(agent.title)}`));
+    assert.match(prompt, /Shared task memory:/);
+    assert.match(prompt, /# Task Memory/);
     assert.deepEqual(agent.testsRun, ["fake codex"]);
   }
+
+  const taskMemory = await fs.readFile(taskMeta.paths.memoryMd, "utf8");
+  assert.match(taskMemory, /agent-01 completed via fake Codex/);
+  assert.match(taskMemory, /Tests: fake codex/);
+  assert.match(taskMemory, /Notes: Prompt length/);
 
   const invocations = await readJsonLines(fakeLog);
   const subagentInvocations = invocations.filter((entry) => entry.hasOutputSchema);

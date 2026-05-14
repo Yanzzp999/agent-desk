@@ -25,9 +25,10 @@ export const DEFAULT_WORKTREE_SUBAGENT_LAUNCHER = "codex-cli";
 export const EXECUTION_MODES = Object.freeze(["worktree", "current-branch"]);
 export const CURRENT_BRANCH_SUBAGENT_LAUNCHERS = Object.freeze(["codex-cli", "codex-app"]);
 export const DEFAULT_CONFIG_FILENAME = "config.toml";
+export const DEFAULT_TASK_MEMORY_FILENAME = "memory.md";
 const SCHEMA_VERSION = 2;
 const TASK_STATUSES = new Set(["received", "generating", "ready", "running", "succeeded", "failed"]);
-const SESSION_STATUSES = new Set(["queued", "running", "succeeded", "failed"]);
+const SESSION_STATUSES = new Set(["queued", "waiting_for_app", "running", "succeeded", "failed"]);
 const AGENT_STATUSES = new Set(["queued", "running", "integrating", "succeeded", "failed"]);
 const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const BOOLEAN_FALSE_VALUES = new Set(["0", "false", "no", "off"]);
@@ -248,9 +249,12 @@ export async function listTasks(context) {
 export async function getTask(context, taskId) {
   const meta = await readTaskMeta(context, taskId);
   const sessions = await listSessions(context, { taskId });
+  const memoryPath = resolveTaskMemoryPath(context, meta);
   return {
     ...meta,
     markdown: await readTextSafe(meta.paths.taskMd),
+    memory: await readTaskMemory(context, meta),
+    memoryPath,
     sessions: sessions.items,
   };
 }
@@ -278,12 +282,14 @@ export async function createTask(context, request = {}) {
       briefMd: path.join(taskDir, "brief.md"),
       promptMd: path.join(taskDir, "prompt.md"),
       taskMd: path.join(taskDir, "task.md"),
+      memoryMd: path.join(taskDir, DEFAULT_TASK_MEMORY_FILENAME),
       metaJson: path.join(taskDir, "meta.json"),
       stdoutLog: path.join(taskDir, "stdout.log"),
       stderrLog: path.join(taskDir, "stderr.log"),
     },
   };
   await fsp.writeFile(meta.paths.briefMd, normalized.brief, "utf8");
+  await fsp.writeFile(meta.paths.memoryMd, renderInitialTaskMemory(meta), "utf8");
   await fsp.writeFile(meta.paths.stdoutLog, "", "utf8");
   await fsp.writeFile(meta.paths.stderrLog, "", "utf8");
   await writeJsonAtomic(meta.paths.metaJson, meta);
@@ -418,9 +424,6 @@ export async function createSession(context, taskId, request = {}) {
   if (sessionRequest.executionMode === "worktree") {
     await assertMasterBranch(context.projectRoot);
   }
-  if (sessionRequest.executionMode === "current-branch" && sessionRequest.subagentLauncher === "codex-app") {
-    throw new Error("codex-app subagent launcher requires explicit Codex App orchestration and cannot be started by ralphctl yet; use --subagent-launcher codex-cli for automated CLI analysis");
-  }
   const { sessionId, sessionDir } = await allocateSessionDir(context, task);
   const now = new Date().toISOString();
   const meta = {
@@ -459,6 +462,12 @@ export async function createSession(context, taskId, request = {}) {
   await fsp.writeFile(meta.paths.stderrLog, "", "utf8");
   await writeJsonAtomic(meta.paths.metaJson, meta);
 
+  if (sessionRequest.executionMode === "current-branch" && sessionRequest.subagentLauncher === "codex-app") {
+    await prepareCodexAppSession(context, task, sessionId);
+    await updateTaskMeta(context, taskId, { status: "running" });
+    return enrichSessionSummary(context, await readSessionMeta(context, sessionId));
+  }
+
   const workerPath = path.join(CONTROL_PLANE_ROOT, "src", "worker", "run-agent-desk-job.mjs");
   const child = spawn(process.execPath, [
     workerPath,
@@ -485,6 +494,100 @@ export async function createSession(context, taskId, request = {}) {
 
   await updateTaskMeta(context, taskId, { status: "running" });
   return enrichSessionSummary(context, meta);
+}
+
+export async function getCodexAppLaunchPlan(context, sessionId) {
+  const session = await getSession(context, sessionId);
+  const requiresHostLaunch = getSessionSubagentLauncher(session) === "codex-app";
+  const subagents = requiresHostLaunch
+    ? await Promise.all((session.agents || []).map(async (agent) => ({
+      agentId: agent.id,
+      title: agent.title,
+      status: agent.status,
+      promptPath: agent.paths.promptMd,
+      prompt: await readTextSafe(agent.paths.promptMd),
+    })))
+    : [];
+  return {
+    sessionId,
+    requiresHostLaunch,
+    launchTool: requiresHostLaunch ? "spawn_agent" : "",
+    parallelism: session.parallelism,
+    subagents,
+  };
+}
+
+async function prepareCodexAppSession(context, task, sessionId) {
+  const session = await readSessionMeta(context, sessionId);
+  const taskMarkdown = await readTextSafe(task.paths.taskMd);
+  const taskMemory = await readTaskMemory(context, task);
+  const parsedItems = parseTaskMarkdownItems(taskMarkdown);
+  if (parsedItems.length === 0) {
+    const error = "task.md does not contain any executable subtasks";
+    await updateSessionMeta(context, sessionId, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      lastError: error,
+    });
+    throw new Error(error);
+  }
+
+  const baseCommit = await gitRevParse(context.projectRoot, "HEAD");
+  const branchName = await gitCurrentBranch(context.projectRoot).catch(() => "current-branch");
+  const agents = parsedItems.map((item, index) => {
+    const agentId = `agent-${String(index + 1).padStart(2, "0")}`;
+    const agentDir = path.join(session.paths.sessionDir, "agents", agentId);
+    return {
+      id: agentId,
+      order: index + 1,
+      title: item.title,
+      detail: item.detail,
+      status: "queued",
+      branchName,
+      worktreePath: context.projectRoot,
+      baseCommit,
+      headCommit: "",
+      mergedCommit: "",
+      changedFiles: [],
+      testsRun: [],
+      risks: [],
+      notes: [],
+      summary: "",
+      startedAt: null,
+      updatedAt: null,
+      completedAt: null,
+      exitCode: null,
+      lastError: "",
+      paths: {
+        agentDir,
+        promptMd: path.join(agentDir, "prompt.md"),
+        reportJson: path.join(agentDir, "report.json"),
+        stdoutLog: path.join(agentDir, "stdout.log"),
+        stderrLog: path.join(agentDir, "stderr.log"),
+      },
+    };
+  });
+
+  for (const agent of agents) {
+    await fsp.mkdir(agent.paths.agentDir, { recursive: true });
+    await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
+    await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
+    await fsp.writeFile(
+      agent.paths.promptMd,
+      buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent),
+      "utf8",
+    );
+  }
+
+  await updateSessionMeta(context, sessionId, {
+    status: "waiting_for_app",
+    startedAt: new Date().toISOString(),
+    lastError: "",
+    totalAgents: agents.length,
+    agents,
+  });
+  await refreshSessionCounts(context, sessionId);
+  await writeSessionDocumentation(context, sessionId);
 }
 
 export async function runSessionJob(context, sessionId) {
@@ -610,12 +713,13 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
   let created = null;
   try {
     const taskMarkdown = await readTextSafe(task.paths.taskMd);
+    const taskMemory = await readTaskMemory(context, task);
     await fsp.mkdir(agent.paths.agentDir, { recursive: true });
     await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
     await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
 
     created = await prepareAgentWorktree(context, agent);
-    const prompt = buildSubagentPrompt(task, taskMarkdown, session, sessionId, {
+    const prompt = buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, {
       ...agent,
       worktreePath: created.worktreePath,
       branchName: created.branchName,
@@ -668,6 +772,8 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
       mergedCommit: integration.masterCommit,
       lastError: "",
     });
+    const updatedAgent = await getSessionAgent(context, sessionId, agent.id);
+    await persistAgentMemory(context, task, sessionId, updatedAgent, agent.paths.stderrLog);
     return {
       report: normalizedReport,
       changedFiles,
@@ -682,6 +788,8 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
       baseCommit: created?.baseCommit || agent.baseCommit,
       lastError: error.message,
     });
+    const failedAgent = await getSessionAgent(context, sessionId, agent.id);
+    await persistAgentMemory(context, task, sessionId, failedAgent, agent.paths.stderrLog);
     await updateSessionLastError(context, sessionId, error.message);
     throw error;
   }
@@ -690,13 +798,14 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
 async function runSingleAnalysisAgent(context, task, session, sessionId, agent) {
   try {
     const taskMarkdown = await readTextSafe(task.paths.taskMd);
+    const taskMemory = await readTaskMemory(context, task);
     await fsp.mkdir(agent.paths.agentDir, { recursive: true });
     await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
     await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
 
     const baseCommit = await gitRevParse(context.projectRoot, "HEAD");
     const branchName = await gitCurrentBranch(context.projectRoot).catch(() => "current-branch");
-    const prompt = buildAnalysisSubagentPrompt(task, taskMarkdown, session, sessionId, {
+    const prompt = buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, {
       ...agent,
       branchName,
       worktreePath: context.projectRoot,
@@ -746,6 +855,8 @@ async function runSingleAnalysisAgent(context, task, session, sessionId, agent) 
       mergedCommit: "",
       lastError: "",
     });
+    const updatedAgent = await getSessionAgent(context, sessionId, agent.id);
+    await persistAgentMemory(context, task, sessionId, updatedAgent, agent.paths.stderrLog);
     return {
       report: normalizedReport,
       changedFiles: [],
@@ -763,6 +874,8 @@ async function runSingleAnalysisAgent(context, task, session, sessionId, agent) 
       branchName: agent.branchName || "current-branch",
       lastError: error.message,
     });
+    const failedAgent = await getSessionAgent(context, sessionId, agent.id);
+    await persistAgentMemory(context, task, sessionId, failedAgent, agent.paths.stderrLog);
     await updateSessionLastError(context, sessionId, error.message);
     throw error;
   }
@@ -961,7 +1074,7 @@ function buildTaskGenerationPrompt(task) {
   ].join("\n");
 }
 
-function buildSubagentPrompt(task, taskMarkdown, session, sessionId, agent) {
+function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent) {
   return [
     "You are one AgentDesk execution subagent working in your own git worktree.",
     "",
@@ -994,12 +1107,15 @@ function buildSubagentPrompt(task, taskMarkdown, session, sessionId, agent) {
         "",
       ]
       : []),
+    "Shared task memory:",
+    taskMemory.trim() || "(empty)",
+    "",
     "Full task markdown:",
     taskMarkdown,
   ].join("\n");
 }
 
-function buildAnalysisSubagentPrompt(task, taskMarkdown, session, sessionId, agent) {
+function buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent) {
   return [
     "You are one AgentDesk analysis subagent running in current-branch mode.",
     "",
@@ -1032,6 +1148,9 @@ function buildAnalysisSubagentPrompt(task, taskMarkdown, session, sessionId, age
         "",
       ]
       : []),
+    "Shared task memory:",
+    taskMemory.trim() || "(empty)",
+    "",
     "Full task markdown:",
     taskMarkdown,
   ].join("\n");
@@ -1344,6 +1463,102 @@ async function updateSessionLastError(context, sessionId, message) {
   });
 }
 
+async function getSessionAgent(context, sessionId, agentId) {
+  const session = await readSessionMeta(context, sessionId);
+  return session.agents.find((agent) => agent.id === agentId) || null;
+}
+
+function resolveTaskMemoryPath(context, task) {
+  const configured = normalizeOptionalString(task?.paths?.memoryMd);
+  if (configured) {
+    return configured;
+  }
+  const taskDir = normalizeOptionalString(task?.paths?.taskDir)
+    || path.dirname(
+      normalizeOptionalString(task?.paths?.taskMd)
+        || normalizeOptionalString(task?.paths?.metaJson)
+        || taskDirPath(context, task.taskId),
+    );
+  return path.join(taskDir, DEFAULT_TASK_MEMORY_FILENAME);
+}
+
+async function readTaskMemory(context, task) {
+  return readTextSafe(resolveTaskMemoryPath(context, task));
+}
+
+function renderInitialTaskMemory(task) {
+  return [
+    "# Task Memory",
+    "",
+    `- Task: ${task.title || task.taskId}`,
+    `- Task ID: ${task.taskId}`,
+    `- Created: ${task.createdAt || "-"}`,
+    "",
+    "## Shared Context",
+    "",
+    "_No memory entries yet._",
+    "",
+  ].join("\n");
+}
+
+export async function upsertTaskMemoryEntry(context, task, sessionId, agent) {
+  if (!agent) {
+    return {
+      memoryPath: resolveTaskMemoryPath(context, task),
+      memory: await readTaskMemory(context, task),
+      updated: false,
+    };
+  }
+
+  const memoryPath = resolveTaskMemoryPath(context, task);
+  const lock = await acquireLock(path.join(context.locksRoot, `task-memory-${task.taskId}.lock`));
+  try {
+    const current = await readTextSafe(memoryPath) || renderInitialTaskMemory(task);
+    const markerId = `${sessionId}:${agent.id}`;
+    const startMarker = `<!-- agentdesk-memory:${markerId} -->`;
+    const endMarker = `<!-- /agentdesk-memory:${markerId} -->`;
+    const block = `${startMarker}\n${renderTaskMemoryEntry(sessionId, agent)}\n${endMarker}`;
+    const matcher = new RegExp(`${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}\\n*`);
+    const updated = matcher.test(current)
+      ? current.replace(matcher, `${block}\n\n`)
+      : `${current.trimEnd()}\n\n${block}\n`;
+    await writeTextAtomic(memoryPath, updated);
+    return { memoryPath, memory: updated, updated: true };
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
+async function persistAgentMemory(context, task, sessionId, agent, stderrLog) {
+  try {
+    await upsertTaskMemoryEntry(context, task, sessionId, agent);
+  } catch (error) {
+    appendFileSyncSafe(stderrLog, `memory update failed: ${error.message}\n`);
+  }
+}
+
+function renderTaskMemoryEntry(sessionId, agent) {
+  return [
+    `## ${agent.id} - ${agent.title || "Untitled subtask"}`,
+    "",
+    `- Session: ${sessionId}`,
+    `- Status: ${agent.status || "-"}`,
+    `- Completed: ${agent.completedAt || "-"}`,
+    `- Summary: ${agent.summary || "-"}`,
+    `- Changed files: ${formatMemoryList(agent.changedFiles)}`,
+    `- Tests: ${formatMemoryList(agent.testsRun)}`,
+    `- Risks: ${formatMemoryList(agent.risks)}`,
+    `- Notes: ${formatMemoryList(agent.notes)}`,
+    `- Error: ${agent.lastError || "-"}`,
+  ].join("\n");
+}
+
+function formatMemoryList(items) {
+  return Array.isArray(items) && items.length > 0
+    ? items.map((item) => String(item).trim()).filter(Boolean).join(" | ") || "-"
+    : "-";
+}
+
 async function readTaskMeta(context, taskId) {
   return readJsonRequired(path.join(taskDirPath(context, taskId), "meta.json"));
 }
@@ -1643,6 +1858,13 @@ async function writeJsonAtomic(filePath, value) {
   await fsp.rename(tmpPath, filePath);
 }
 
+async function writeTextAtomic(filePath, value) {
+  await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fsp.writeFile(tmpPath, value, "utf8");
+  await fsp.rename(tmpPath, filePath);
+}
+
 async function readdirSafe(dirPath, options) {
   try {
     return await fsp.readdir(dirPath, options);
@@ -1808,6 +2030,10 @@ function shortHash(value) {
 function firstSentence(text) {
   const line = String(text || "").split(/\r?\n/).find((entry) => entry.trim()) || "";
   return line.trim().slice(0, 96) || "Task";
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function describeCommandFailure(result, fallback) {
