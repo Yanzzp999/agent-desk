@@ -4,7 +4,7 @@
   "description": "Project task and subagent orchestrator for Codex",
   "license": "MIT",
   "type": "module",
-  "main": "bin/ralphctl.mjs",
+  "main": "bin/verunectl.mjs",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Yanzzp999/agent-desk.git"
@@ -18,12 +18,12 @@
     "src/",
     "skills/",
     "scripts/install-mcp.sh",
-    "scripts/ralphctl.sh",
+    "scripts/verunectl.sh",
     "README.md",
     "docs/assets/agentdesk-mcp-flow.png"
   ],
   "bin": {
-    "ralphctl": "bin/ralphctl.mjs",
+    "verunectl": "bin/verunectl.mjs",
     "agent-desk-mcp": "bin/agent-desk-mcp.mjs"
   },
   "publishConfig": {

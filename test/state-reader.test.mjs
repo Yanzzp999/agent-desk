@@ -66,7 +66,7 @@ test("reads task, session, and agent log state from .agent-desk", async () => {
     schemaVersion: 2,
     taskId: "task-demo",
     title: "Ship AgentDesk orchestration",
-    brief: "Replace the old Ralph workflow with task/session orchestration.",
+    brief: "Replace the old Verune workflow with task/session orchestration.",
     status: "ready",
     createdAt: "2026-05-13T10:00:00.000Z",
     updatedAt: "2026-05-13T10:05:00.000Z",

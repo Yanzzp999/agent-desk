@@ -33,8 +33,8 @@ Use this skill to execute an existing AgentDesk task with concurrent subagents.
 When MCP is unavailable, use:
 
 ```sh
-./scripts/ralphctl.sh sessions start <taskId> --project <projectRoot> --parallel <N> --json
-./scripts/ralphctl.sh sessions show <sessionId> --project <projectRoot> --json
+./scripts/verunectl.sh sessions start <taskId> --project <projectRoot> --parallel <N> --json
+./scripts/verunectl.sh sessions show <sessionId> --project <projectRoot> --json
 ```
 
 ## Guardrails

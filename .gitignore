@@ -1,5 +1,5 @@
 node_modules/
-.ralph/
-.ralph-ui/
+.verune/
+.verune-ui/
 .DS_Store
 *.py[cod]

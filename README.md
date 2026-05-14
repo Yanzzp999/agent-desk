@@ -10,7 +10,7 @@ AgentDesk 是一个以 MCP 和 CLI 为中心的项目编排工具，用来在任
 - `Session`：一次执行运行，会把 `task.md` 里的子任务分发给多个 Codex CLI 子代理
 
 AgentDesk 不再提供 GUI、Electron 外壳或本地 Web 应用。当前支持的主要入口是
-MCP stdio server 和 `ralphctl`。
+MCP stdio server 和 `verunectl`。
 
 ![AgentDesk MCP flow](docs/assets/agentdesk-mcp-flow.png)
 
@@ -73,7 +73,7 @@ codex mcp get agent-desk
 npm test
 ```
 
-如果想让本机 shell 也能直接运行 `ralphctl` 和 `agent-desk-mcp`，可以在本仓库执行：
+如果想让本机 shell 也能直接运行 `verunectl` 和 `agent-desk-mcp`，可以在本仓库执行：
 
 ```sh
 npm link
@@ -94,7 +94,7 @@ npm link
 也可以通过现有 CLI 启动同一个 MCP server：
 
 ```sh
-./scripts/ralphctl.sh mcp --project /absolute/path/to/your/project
+./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
 ```
 
 MCP tools：
@@ -187,7 +187,7 @@ AgentDesk 不会自动删除这些 worktree。
 
 ```sh
 npm install
-./scripts/ralphctl.sh tasks create \
+./scripts/verunectl.sh tasks create \
   --project /absolute/path/to/project \
   --title "Checkout flow" \
   --brief "Implement the checkout flow end to end"
@@ -202,14 +202,14 @@ npm install
 列出和查看任务：
 
 ```sh
-./scripts/ralphctl.sh tasks list --project /absolute/path/to/project
-./scripts/ralphctl.sh tasks show <taskId> --project /absolute/path/to/project
+./scripts/verunectl.sh tasks list --project /absolute/path/to/project
+./scripts/verunectl.sh tasks show <taskId> --project /absolute/path/to/project
 ```
 
 启动 Codex 子代理 session：
 
 ```sh
-./scripts/ralphctl.sh sessions start <taskId> \
+./scripts/verunectl.sh sessions start <taskId> \
   --project /absolute/path/to/project \
   --model gpt-5.5 \
   --reasoning xhigh \
@@ -219,14 +219,14 @@ npm install
 ## CLI 命令
 
 ```text
-ralphctl tasks list [--json]
-ralphctl tasks show <taskId> [--json]
-ralphctl tasks create [--title TEXT] [--brief TEXT] [--json]
-ralphctl mcp [--project DIR]
-ralphctl sessions list [--task <taskId>] [--json]
-ralphctl sessions show <sessionId> [--json]
-ralphctl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--json]
-ralphctl sessions logs <sessionId> <agentId> [--json]
+verunectl tasks list [--json]
+verunectl tasks show <taskId> [--json]
+verunectl tasks create [--title TEXT] [--brief TEXT] [--json]
+verunectl mcp [--project DIR]
+verunectl sessions list [--task <taskId>] [--json]
+verunectl sessions show <sessionId> [--json]
+verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--json]
+verunectl sessions logs <sessionId> <agentId> [--json]
 ```
 
 全局参数：
@@ -272,6 +272,6 @@ Session 执行：
 
 ```sh
 npm test
-./scripts/ralphctl.sh help
+./scripts/verunectl.sh help
 codex --version
 ```

@@ -43,6 +43,6 @@ Completed on 2026-05-14 with five parallel subagents plus main-session checks.
 - Negative path passed: unknown task names and ambiguous selectors fail clearly without mutating task files.
 - Repeated/near-concurrent claim calls passed: existing claim lines are replaced rather than duplicated, and task content remains intact.
 - Resource exposure verified: AgentDesk currently exposes no MCP resources or resource templates; this matches the tool-only server implementation.
-- Startup paths passed: both `agent-desk-mcp --project <dir>` and `ralphctl mcp --project <dir>` start and expose the same four tools.
+- Startup paths passed: both `agent-desk-mcp --project <dir>` and `verunectl mcp --project <dir>` start and expose the same four tools.
 - Automated verification passed: `npm test` completed with 23 passing tests.
 - Documentation follow-up completed: README MCP tools list now includes `claim_task_items`.

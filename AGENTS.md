@@ -23,4 +23,4 @@
 - Keep AgentDesk centered on project selection, `task.md` generation, session history, and Codex subagent orchestration.
 - Do not reintroduce `prd.json`, Gemini CLI, or Claude Code compatibility features.
 - Session execution defaults should remain explicit in user-facing docs: `gpt-5.5`, `xhigh`, `fast`, batched launches of 6, and integration into `master`.
-- Prefer the local GUI and `ralphctl` terminal commands as the primary interface.
+- Prefer the local GUI and `verunectl` terminal commands as the primary interface.

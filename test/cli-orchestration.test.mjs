@@ -8,14 +8,14 @@ import { fileURLToPath } from "node:url";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "..");
-const RALPHCTL = path.join(REPO_ROOT, "bin", "ralphctl.mjs");
+const VERUNECTL = path.join(REPO_ROOT, "bin", "verunectl.mjs");
 
-test("ralphctl help exposes CLI-only task and session commands", async () => {
-  const result = await run(process.execPath, [RALPHCTL, "help"], { cwd: REPO_ROOT });
+test("verunectl help exposes CLI-only task and session commands", async () => {
+  const result = await run(process.execPath, [VERUNECTL, "help"], { cwd: REPO_ROOT });
 
   assert.equal(result.exitCode, 0, result.stderr);
-  assert.match(result.stdout, /ralphctl tasks create/);
-  assert.match(result.stdout, /ralphctl sessions start/);
+  assert.match(result.stdout, /verunectl tasks create/);
+  assert.match(result.stdout, /verunectl sessions start/);
   assert.match(result.stdout, /--model MODEL/);
   assert.match(result.stdout, /--reasoning EFFORT/);
   assert.match(result.stdout, /--parallel N/);
@@ -24,7 +24,7 @@ test("ralphctl help exposes CLI-only task and session commands", async () => {
   assert.doesNotMatch(result.stdout, /electron/i);
 });
 
-test("ralphctl creates a task and runs configured Codex CLI subagents", { timeout: 60000 }, async () => {
+test("verunectl creates a task and runs configured Codex CLI subagents", { timeout: 60000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-e2e-"));
   const projectRoot = path.join(root, "project");
   const worktreesRoot = path.join(root, "worktrees");
@@ -45,7 +45,7 @@ test("ralphctl creates a task and runs configured Codex CLI subagents", { timeou
   };
 
   const taskCreate = await run(process.execPath, [
-    RALPHCTL,
+    VERUNECTL,
     "tasks",
     "create",
     "--project",
@@ -70,7 +70,7 @@ test("ralphctl creates a task and runs configured Codex CLI subagents", { timeou
   assert.match(await fs.readFile(taskMeta.paths.memoryMd, "utf8"), /# Task Memory/);
 
   const sessionStart = await run(process.execPath, [
-    RALPHCTL,
+    VERUNECTL,
     "sessions",
     "start",
     taskSummary.taskId,
@@ -141,7 +141,7 @@ test("ralphctl creates a task and runs configured Codex CLI subagents", { timeou
   assert.equal(state.maxActive, 2);
 });
 
-test("ralphctl allocates unique task and session ids under concurrent starts", { timeout: 30000 }, async () => {
+test("verunectl allocates unique task and session ids under concurrent starts", { timeout: 30000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-race-"));
   const projectRoot = path.join(root, "project");
   const worktreesRoot = path.join(root, "worktrees");
@@ -159,7 +159,7 @@ test("ralphctl allocates unique task and session ids under concurrent starts", {
 
   const taskCreates = await Promise.all([
     run(process.execPath, [
-      RALPHCTL,
+      VERUNECTL,
       "tasks",
       "create",
       "--project",
@@ -173,7 +173,7 @@ test("ralphctl allocates unique task and session ids under concurrent starts", {
       "--json",
     ], { cwd: REPO_ROOT, env }),
     run(process.execPath, [
-      RALPHCTL,
+      VERUNECTL,
       "tasks",
       "create",
       "--project",
@@ -202,7 +202,7 @@ test("ralphctl allocates unique task and session ids under concurrent starts", {
   )));
 
   const baseTaskCreate = await run(process.execPath, [
-    RALPHCTL,
+    VERUNECTL,
     "tasks",
     "create",
     "--project",
@@ -224,7 +224,7 @@ test("ralphctl allocates unique task and session ids under concurrent starts", {
 
   const sessionStarts = await Promise.all([
     run(process.execPath, [
-      RALPHCTL,
+      VERUNECTL,
       "sessions",
       "start",
       baseTaskId,
@@ -241,7 +241,7 @@ test("ralphctl allocates unique task and session ids under concurrent starts", {
       "--json",
     ], { cwd: REPO_ROOT, env }),
     run(process.execPath, [
-      RALPHCTL,
+      VERUNECTL,
       "sessions",
       "start",
       baseTaskId,

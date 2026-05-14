@@ -1,6 +1,6 @@
 ---
 name: generate-agentdesk-task
-description: Use when the user asks to create, generate, or prepare an AgentDesk task for a project, especially before running subagents. Prefer the AgentDesk MCP task-generation tool when available; otherwise use ralphctl task generation. Do not use for generic Markdown notes unrelated to AgentDesk execution.
+description: Use when the user asks to create, generate, or prepare an AgentDesk task for a project, especially before running subagents. Prefer the AgentDesk MCP task-generation tool when available; otherwise use verunectl task generation. Do not use for generic Markdown notes unrelated to AgentDesk execution.
 ---
 
 # Generate AgentDesk Task
@@ -14,8 +14,8 @@ Use this skill to turn a user request into an AgentDesk control-plane task.
    - Call `create_agentdesk_task` with `projectRoot`, `title` when known, and a concrete `brief`.
    - Then call `read_agentdesk_task` until the task reaches `ready` or `failed`.
 3. Fallback to CLI when the MCP tool is unavailable:
-   - Run `./scripts/ralphctl.sh tasks create --project <projectRoot> --title "<title>" --brief "<brief>" --json`.
-   - Use `./scripts/ralphctl.sh tasks show <taskId> --project <projectRoot> --json` to inspect the generated task.
+   - Run `./scripts/verunectl.sh tasks create --project <projectRoot> --title "<title>" --brief "<brief>" --json`.
+   - Use `./scripts/verunectl.sh tasks show <taskId> --project <projectRoot> --json` to inspect the generated task.
 4. Verify the generated task has executable checklist subtasks.
 5. Report the `taskId`, status, task file path, and any failure message.
 

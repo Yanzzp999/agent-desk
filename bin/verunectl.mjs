@@ -16,7 +16,7 @@ import {
 } from "../src/lib/control-plane.mjs";
 
 main().catch((error) => {
-  console.error(`ralphctl: ${error.message}`);
+  console.error(`verunectl: ${error.message}`);
   process.exit(1);
 });
 
@@ -66,7 +66,7 @@ async function handleConfig(context, parsed) {
     const result = await readAgentDeskConfig(context);
     return output(parsed, result, () => result.exists
       ? result.text.trimEnd()
-      : `${result.text.trimEnd()}\n\n# Not written yet. Run: ralphctl config init`);
+      : `${result.text.trimEnd()}\n\n# Not written yet. Run: verunectl config init`);
   }
   if (subcommand === "init") {
     const result = await writeDefaultAgentDeskConfig(context, { force: Boolean(parsed.force) });
@@ -235,16 +235,16 @@ function printHelp() {
   console.log(`AgentDesk control plane
 
 Usage:
-  ralphctl tasks list [--json]
-  ralphctl tasks show <taskId> [--json]
-  ralphctl tasks create [--title TEXT] [--brief TEXT] [--json]
-  ralphctl mcp [--project DIR]
-  ralphctl config show [--json]
-  ralphctl config init [--force] [--json]
-  ralphctl sessions list [--task <taskId>] [--json]
-  ralphctl sessions show <sessionId> [--json]
-  ralphctl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--subagent-launcher LAUNCHER] [--json]
-  ralphctl sessions logs <sessionId> <agentId> [--json]
+  verunectl tasks list [--json]
+  verunectl tasks show <taskId> [--json]
+  verunectl tasks create [--title TEXT] [--brief TEXT] [--json]
+  verunectl mcp [--project DIR]
+  verunectl config show [--json]
+  verunectl config init [--force] [--json]
+  verunectl sessions list [--task <taskId>] [--json]
+  verunectl sessions show <sessionId> [--json]
+  verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--subagent-launcher LAUNCHER] [--json]
+  verunectl sessions logs <sessionId> <agentId> [--json]
 
 Global options:
   --project DIR          Project root to inspect. Defaults to the current git root.
