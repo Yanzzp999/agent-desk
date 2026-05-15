@@ -233,8 +233,129 @@ test("MCP create_agentdesk_task requires confirmation for similar tasks", async 
     });
 
     assert.equal(result.structuredContent.requiresConfirmation, true);
+    assert.equal(result.structuredContent.requestedTitle, "MCP duplicate guard");
+    assert.equal(result.structuredContent.requestedBrief, "Exercise AgentDesk MCP session orchestration.");
+    assert.equal(result.structuredContent.similarTaskAction, "confirm");
+    assert.equal(result.structuredContent.message, "Similar AgentDesk task(s) were found. Confirm whether to continue an existing task or rebuild a fresh task.");
+    assert.deepEqual(result.structuredContent.confirmationChoices.map((choice) => choice.action), [
+      "continue",
+      "rebuild",
+    ]);
     assert.equal(result.structuredContent.similarTasks[0].taskId, "task-mcp-similar");
+    assert.equal(result.structuredContent.similarTasks[0].status, "ready");
+    assert.equal(result.structuredContent.similarTasks[0].sessionCount, 0);
+    assert.ok(result.structuredContent.similarTasks[0].similarityScore >= 0.98);
+    assert.match(result.structuredContent.similarTasks[0].similarityReason, /same or near-identical/);
     assert.match(result.content[0].text, /continue an existing task or rebuild a fresh task/);
+  } finally {
+    await client.close();
+  }
+});
+
+test("MCP list/read AgentDesk tasks returns structured task memory and session summaries", async () => {
+  const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-task-state-")));
+  await initializeGitProject(projectRoot);
+  await writeReadyAgentDeskTask(projectRoot, "task-mcp-structured", "MCP structured task output");
+
+  const taskDir = path.join(projectRoot, ".agent-desk", "tasks", "task-mcp-structured");
+  await fs.writeFile(path.join(taskDir, "memory.md"), [
+    "# Task Memory",
+    "",
+    "Shared structured context.",
+    "",
+    "<!-- agentdesk-memory:session-latest:agent-01 -->",
+    "## agent-01 - Summarize verification",
+    "",
+    "- Session: session-latest",
+    "- Status: succeeded",
+    "- Completed: 2026-05-15T08:05:00.000Z",
+    "- Summary: Structured output verified.",
+    "- Changed files: test/mcp-server.test.mjs",
+    "- Tests: node --test test/mcp-server.test.mjs",
+    "- Risks: none",
+    "- Notes: MCP task summaries remain structured.",
+    "- Error: -",
+    "<!-- /agentdesk-memory:session-latest:agent-01 -->",
+    "",
+  ].join("\n"), "utf8");
+
+  await writeAgentDeskSession(projectRoot, {
+    taskId: "task-mcp-structured",
+    sessionId: "session-older",
+    status: "failed",
+    updatedAt: "2026-05-15T07:30:00.000Z",
+    completedAt: "2026-05-15T07:30:00.000Z",
+    totalAgents: 1,
+    succeededAgents: 0,
+    failedAgents: 1,
+    agentStatus: "failed",
+    agentSummary: "Earlier attempt failed.",
+    lastError: "synthetic failure",
+  });
+  await writeAgentDeskSession(projectRoot, {
+    taskId: "task-mcp-structured",
+    sessionId: "session-latest",
+    status: "succeeded",
+    updatedAt: "2026-05-15T08:05:00.000Z",
+    completedAt: "2026-05-15T08:05:00.000Z",
+    totalAgents: 1,
+    succeededAgents: 1,
+    failedAgents: 0,
+    agentStatus: "succeeded",
+    agentSummary: "Structured output verified.",
+  });
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [MCP_BIN],
+    cwd: projectRoot,
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-desk-mcp-task-state-test", version: "0.0.0" });
+
+  try {
+    await client.connect(transport);
+    const listed = await client.callTool({
+      name: "list_agentdesk_tasks",
+      arguments: { projectRoot },
+    });
+
+    assert.equal(listed.structuredContent.items.length, 1);
+    const summary = listed.structuredContent.items[0];
+    assert.equal(summary.taskId, "task-mcp-structured");
+    assert.equal(summary.title, "MCP structured task output");
+    assert.equal(summary.status, "ready");
+    assert.equal(summary.sessionCount, 2);
+    assert.equal(summary.latestSessionId, "session-latest");
+    assert.equal(summary.latestSessionStatus, "succeeded");
+    assert.equal(summary.latestSessionAt, "2026-05-15T08:05:00.000Z");
+
+    const read = await client.callTool({
+      name: "read_agentdesk_task",
+      arguments: {
+        projectRoot,
+        taskId: "task-mcp-structured",
+      },
+    });
+
+    assert.equal(read.structuredContent.taskId, "task-mcp-structured");
+    assert.equal(read.structuredContent.status, "ready");
+    assert.match(read.structuredContent.markdown, /Summarize verification/);
+    assert.equal(read.structuredContent.memoryPath, path.join(taskDir, "memory.md"));
+    assert.match(read.structuredContent.memory, /Shared structured context/);
+    assert.match(read.structuredContent.memory, /Structured output verified/);
+    assert.equal(read.structuredContent.sessions.length, 2);
+    assert.deepEqual(read.structuredContent.sessions.map((session) => session.sessionId), [
+      "session-latest",
+      "session-older",
+    ]);
+    assert.equal(read.structuredContent.sessions[0].status, "succeeded");
+    assert.equal(read.structuredContent.sessions[0].taskTitle, "MCP structured task output");
+    assert.equal(read.structuredContent.sessions[0].totalAgents, 1);
+    assert.equal(read.structuredContent.sessions[0].succeededAgents, 1);
+    assert.equal(read.structuredContent.sessions[0].failedAgents, 0);
+    assert.equal(read.structuredContent.sessions[1].status, "failed");
+    assert.equal(read.structuredContent.sessions[1].lastError, "synthetic failure");
   } finally {
     await client.close();
   }
@@ -403,6 +524,87 @@ async function writeReadyAgentDeskTask(projectRoot, taskId, title) {
       stderrLog: path.join(taskDir, "stderr.log"),
     },
   }, null, 2)}\n`, "utf8");
+}
+
+async function writeAgentDeskSession(projectRoot, options) {
+  const sessionDir = path.join(projectRoot, ".agent-desk", "sessions", options.sessionId);
+  const agentDir = path.join(sessionDir, "agents", "agent-01");
+  const createdAt = options.createdAt || "2026-05-15T07:00:00.000Z";
+  const updatedAt = options.updatedAt || createdAt;
+  const agentStatus = options.agentStatus || options.status;
+  await fs.mkdir(agentDir, { recursive: true });
+  const metaJson = path.join(sessionDir, "meta.json");
+  const docMd = path.join(sessionDir, "session.md");
+  const stdoutLog = path.join(sessionDir, "stdout.log");
+  const stderrLog = path.join(sessionDir, "stderr.log");
+  const agent = {
+    id: "agent-01",
+    order: 1,
+    title: "Summarize verification",
+    detail: "",
+    status: agentStatus,
+    branchName: "current-branch",
+    worktreePath: projectRoot,
+    baseCommit: "abc123",
+    headCommit: "def456",
+    mergedCommit: "",
+    changedFiles: ["test/mcp-server.test.mjs"],
+    testsRun: ["node --test test/mcp-server.test.mjs"],
+    risks: [],
+    notes: ["MCP task summaries remain structured."],
+    summary: options.agentSummary || "",
+    startedAt: createdAt,
+    updatedAt,
+    completedAt: options.completedAt || updatedAt,
+    exitCode: agentStatus === "failed" ? 1 : 0,
+    lastError: options.lastError || "",
+    paths: {
+      agentDir,
+      promptMd: path.join(agentDir, "prompt.md"),
+      reportJson: path.join(agentDir, "report.json"),
+      stdoutLog: path.join(agentDir, "stdout.log"),
+      stderrLog: path.join(agentDir, "stderr.log"),
+    },
+  };
+  const meta = {
+    schemaVersion: 2,
+    sessionId: options.sessionId,
+    taskId: options.taskId,
+    title: "MCP structured task output",
+    status: options.status,
+    parallelism: options.parallelism || 1,
+    batchSize: 6,
+    model: "gpt-5.5",
+    reasoning: "xhigh",
+    serviceTier: "fast",
+    executionMode: "current-branch",
+    subagentLauncher: "codex-cli",
+    launchPrompt: "",
+    createdAt,
+    updatedAt,
+    startedAt: createdAt,
+    completedAt: options.completedAt || updatedAt,
+    lastError: options.lastError || "",
+    totalAgents: options.totalAgents ?? 1,
+    succeededAgents: options.succeededAgents ?? (options.status === "succeeded" ? 1 : 0),
+    failedAgents: options.failedAgents ?? (options.status === "failed" ? 1 : 0),
+    runningAgents: 0,
+    agents: [agent],
+    paths: {
+      sessionDir,
+      metaJson,
+      docMd,
+      stdoutLog,
+      stderrLog,
+    },
+  };
+  await fs.writeFile(metaJson, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
+  await fs.writeFile(docMd, `# Session ${options.sessionId}\n\n- Status: ${options.status}\n`);
+  await fs.writeFile(stdoutLog, "", "utf8");
+  await fs.writeFile(stderrLog, "", "utf8");
+  await fs.writeFile(agent.paths.promptMd, "# Prompt\n");
+  await fs.writeFile(agent.paths.stdoutLog, "", "utf8");
+  await fs.writeFile(agent.paths.stderrLog, "", "utf8");
 }
 
 async function writeFakeCodex(filePath) {
