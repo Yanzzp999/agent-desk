@@ -111,7 +111,7 @@ MCP tools：
 `start_subagent_session` 支持两种 launcher：
 
 - `codex-cli`：由 AgentDesk 直接启动 Codex CLI subagents，遵守 `parallelism` 并发上限；MCP 调用默认阻塞到 session 进入 `succeeded` 或 `failed`，可通过 `waitForCompletion: false` 保留后台启动行为。
-- `codex-app`：生成可追踪的 Codex App launch plan，返回每个 app subagent 的 prompt。由于 MCP server 运行在 Node 进程内，不能直接调用 Codex App 宿主的 `spawn_agent` 工具；调用方需要按返回的 `appLaunchPlan.subagents` 并发启动 Codex App subagents。
+- `codex-app`：生成可追踪的 Codex App launch plan，返回每个 app subagent 的 prompt，并立即把 AgentDesk session 结束为 `succeeded`。由于 MCP server 运行在 Node 进程内，不能直接调用 Codex App 宿主的 `spawn_agent` 工具；调用方需要按返回的 `appLaunchPlan.subagents` 并发启动 Codex App subagents，后续等待由 Codex App 宿主负责，AgentDesk 不会等待或回写 app subagent succeeded counts。
 
 `create_task` 写出的任务始终使用 markdown 待办清单格式：
 
@@ -267,7 +267,7 @@ Session 执行：
 - 将完成的子代理分支 rebase 到 `master`
 - 通过 fast-forward 更新 `master` 集成完成的工作
 
-`current-branch` 模式也可以选择 `--subagent-launcher codex-app`，此时 AgentDesk 会创建 session 和每个 subagent 的 prompt 文件，并等待 Codex App 宿主按 launch plan 直接启动 app subagents。
+`current-branch` 模式也可以选择 `--subagent-launcher codex-app`，此时 AgentDesk 会创建 session 和每个 subagent 的 prompt 文件，然后以 `succeeded` 状态结束这次 launch-plan 准备；Codex App 宿主按 launch plan 直接启动 app subagents，并负责后续等待。
 
 每个 control-plane task 都会维护一个 `memory.md`，用于记录跨 session 共享的上下文。AgentDesk 会在启动子代理时把该文件注入 prompt，并在每个 agent 完成或失败后用 `sessionId + agentId` 标记自动更新对应 memory 条目。
 

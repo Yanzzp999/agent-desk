@@ -31,7 +31,7 @@ export const AGENT_MEMORY_SNAPSHOT_FILENAME = "memory.snapshot.md";
 const SCHEMA_VERSION = 2;
 const TASK_STATUSES = new Set(["received", "generating", "ready", "running", "succeeded", "failed"]);
 const SESSION_STATUSES = new Set(["queued", "waiting_for_app", "running", "succeeded", "failed"]);
-const AGENT_STATUSES = new Set(["queued", "running", "integrating", "succeeded", "failed"]);
+const AGENT_STATUSES = new Set(["queued", "prepared_for_app", "running", "integrating", "succeeded", "failed"]);
 const SIMILAR_TASK_ACTIONS = new Set(["confirm", "continue", "rebuild"]);
 const SIMILAR_TASK_SCORE_THRESHOLD = 0.72;
 const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
@@ -419,14 +419,14 @@ export async function listSessions(context, options = {}) {
     if (options.taskId && meta.taskId !== options.taskId) {
       continue;
     }
-    items.push(await enrichSessionSummary(context, meta));
+    items.push(await enrichSessionSummary(context, await settleCodexAppLaunchPlanSession(context, meta)));
   }
   items.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
   return { items };
 }
 
 export async function getSession(context, sessionId) {
-  const meta = await readSessionMeta(context, sessionId);
+  const meta = await settleCodexAppLaunchPlanSession(context, await readSessionMeta(context, sessionId));
   const task = await readTaskMeta(context, meta.taskId).catch(() => null);
   return {
     ...meta,
@@ -495,7 +495,11 @@ export async function createSession(context, taskId, request = {}) {
 
   if (sessionRequest.executionMode === "current-branch" && sessionRequest.subagentLauncher === "codex-app") {
     await prepareCodexAppSession(context, task, sessionId);
-    await updateTaskMeta(context, taskId, { status: "running" });
+    await updateTaskMeta(context, taskId, {
+      status: "succeeded",
+      completedAt: new Date().toISOString(),
+      lastError: "",
+    });
     return enrichSessionSummary(context, await readSessionMeta(context, sessionId));
   }
 
@@ -601,7 +605,7 @@ async function prepareCodexAppSession(context, task, sessionId) {
       order: index + 1,
       title: item.title,
       detail: item.detail,
-      status: "queued",
+      status: "prepared_for_app",
       branchName,
       worktreePath: context.projectRoot,
       baseCommit,
@@ -631,14 +635,41 @@ async function prepareCodexAppSession(context, task, sessionId) {
   }
 
   await updateSessionMeta(context, sessionId, {
-    status: "waiting_for_app",
+    status: "succeeded",
     startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
     lastError: "",
     totalAgents: agents.length,
     agents,
   });
   await refreshSessionCounts(context, sessionId);
   await writeSessionDocumentation(context, sessionId);
+}
+
+async function settleCodexAppLaunchPlanSession(context, session) {
+  if (getSessionSubagentLauncher(session) !== "codex-app" || session.status !== "waiting_for_app") {
+    return session;
+  }
+  const now = new Date().toISOString();
+  const agents = (session.agents || []).map((agent) => {
+    if (agent.status !== "queued") {
+      return agent;
+    }
+    return {
+      ...agent,
+      status: "prepared_for_app",
+      updatedAt: agent.updatedAt || now,
+    };
+  });
+  await updateSessionMeta(context, session.sessionId, {
+    status: "succeeded",
+    completedAt: session.completedAt || now,
+    lastError: "",
+    agents,
+  });
+  await refreshSessionCounts(context, session.sessionId);
+  await writeSessionDocumentation(context, session.sessionId).catch(() => {});
+  return readSessionMeta(context, session.sessionId);
 }
 
 export async function runSessionJob(context, sessionId) {

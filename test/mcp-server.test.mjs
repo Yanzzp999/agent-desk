@@ -230,13 +230,16 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
       },
     });
 
-    assert.equal(started.structuredContent.status, "waiting_for_app");
+    assert.equal(started.structuredContent.status, "succeeded");
     assert.equal(started.structuredContent.executionMode, "current-branch");
     assert.equal(started.structuredContent.subagentLauncher, "codex-app");
     assert.equal(started.structuredContent.requiresHostLaunch, true);
+    assert.equal(started.structuredContent.waitedForCompletion, false);
+    assert.equal(started.structuredContent.succeededAgents, 0);
     assert.equal(started.structuredContent.appLaunchPlan.launchTool, "spawn_agent");
     assert.equal(started.structuredContent.appLaunchPlan.parallelism, 5);
     assert.equal(started.structuredContent.appLaunchPlan.subagents.length, 3);
+    assert.equal(started.structuredContent.appLaunchPlan.subagents[0].status, "prepared_for_app");
     assert.match(started.structuredContent.appLaunchPlan.subagents[0].taskSnapshotPath, /task\.snapshot\.md$/);
     assert.match(started.structuredContent.appLaunchPlan.subagents[0].memorySnapshotPath, /memory\.snapshot\.md$/);
     assert.match(started.structuredContent.appLaunchPlan.subagents[0].prompt, /Subagent launcher: codex-app/);
@@ -251,7 +254,7 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
         sessionId: started.structuredContent.sessionId,
       },
     });
-    assert.equal(read.structuredContent.status, "waiting_for_app");
+    assert.equal(read.structuredContent.status, "succeeded");
     assert.equal(read.structuredContent.appLaunchPlan.subagents.length, 3);
 
     const sessionMetaPath = path.join(
@@ -262,7 +265,10 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
       "meta.json",
     );
     const legacyMeta = JSON.parse(await fs.readFile(sessionMetaPath, "utf8"));
+    legacyMeta.status = "waiting_for_app";
+    legacyMeta.completedAt = null;
     for (const agent of legacyMeta.agents) {
+      agent.status = "queued";
       delete agent.paths.taskSnapshotMd;
       delete agent.paths.memorySnapshotMd;
     }
@@ -275,7 +281,8 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
         sessionId: started.structuredContent.sessionId,
       },
     });
-    assert.equal(legacyRead.structuredContent.status, "waiting_for_app");
+    assert.equal(legacyRead.structuredContent.status, "succeeded");
+    assert.equal(legacyRead.structuredContent.appLaunchPlan.subagents[0].status, "prepared_for_app");
     assert.equal(legacyRead.structuredContent.appLaunchPlan.subagents[0].taskSnapshotPath, "");
     assert.equal(legacyRead.structuredContent.appLaunchPlan.subagents[0].memorySnapshotPath, "");
   } finally {
