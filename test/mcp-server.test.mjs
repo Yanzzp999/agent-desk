@@ -12,7 +12,7 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "..");
 const MCP_BIN = path.join(REPO_ROOT, "bin", "agent-desk-mcp.mjs");
 
-test("MCP server creates task markdown in the launched project", async () => {
+test("MCP server runs markdown task tools against the launched project", async () => {
   const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-")));
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -55,6 +55,27 @@ test("MCP server creates task markdown in the launched project", async () => {
     assert.equal(created.structuredContent.taskDir, path.join(projectRoot, "task"));
     assert.match(created.structuredContent.markdown, /^- \[ \] Expose MCP entrypoint/m);
 
+    const generatedText = await fs.readFile(
+      path.join(projectRoot, "task", "mcp-task-generation.task.md"),
+      "utf8",
+    );
+    assert.equal(generatedText, created.structuredContent.markdown);
+
+    const listedBeforeClaim = await client.callTool({
+      name: "list_tasks",
+      arguments: {},
+    });
+
+    assert.equal(listedBeforeClaim.structuredContent.projectRoot, projectRoot);
+    assert.equal(listedBeforeClaim.structuredContent.taskDir, path.join(projectRoot, "task"));
+    assert.equal(listedBeforeClaim.structuredContent.items.length, 1);
+    assert.equal(listedBeforeClaim.structuredContent.items[0].filename, "mcp-task-generation.task.md");
+    assert.equal(listedBeforeClaim.structuredContent.items[0].title, "MCP task generation");
+    assert.equal(listedBeforeClaim.structuredContent.items[0].taskCount, 2);
+    assert.equal(listedBeforeClaim.structuredContent.items[0].openCount, 2);
+    assert.equal(listedBeforeClaim.structuredContent.items[0].claimedCount, 0);
+    assert.equal(listedBeforeClaim.structuredContent.items[0].items[1].title, "Write task markdown");
+
     const claimed = await client.callTool({
       name: "claim_task_items",
       arguments: {
@@ -69,6 +90,19 @@ test("MCP server creates task markdown in the launched project", async () => {
     assert.equal(claimed.structuredContent.claimedCount, 2);
     assert.equal(claimed.structuredContent.items[0].claimedBy, "mcp-agent");
     assert.match(claimed.structuredContent.markdown, /AgentDesk claim: `mcp-agent`/);
+    assert.match(claimed.structuredContent.markdown, /note: manual session/);
+
+    const listedAfterClaim = await client.callTool({
+      name: "list_tasks",
+      arguments: {
+        projectRoot,
+      },
+    });
+
+    assert.equal(listedAfterClaim.structuredContent.items.length, 1);
+    assert.equal(listedAfterClaim.structuredContent.items[0].claimedCount, 2);
+    assert.equal(listedAfterClaim.structuredContent.items[0].items[0].claimedBy, "mcp-agent");
+    assert.equal(listedAfterClaim.structuredContent.items[0].items[1].claimNote, "manual session");
 
     const read = await client.callTool({
       name: "read_task",
@@ -79,6 +113,7 @@ test("MCP server creates task markdown in the launched project", async () => {
 
     assert.equal(read.structuredContent.claimedCount, 2);
     assert.equal(read.structuredContent.items[1].claimNote, "manual session");
+    assert.equal(read.structuredContent.markdown, claimed.structuredContent.markdown);
 
     const fileText = await fs.readFile(
       path.join(projectRoot, "task", "mcp-task-generation.task.md"),
