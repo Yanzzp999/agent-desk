@@ -242,6 +242,62 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
   }
 });
 
+test("MCP server reports actionable Codex CLI session failures", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-session-fail-")));
+  const projectRoot = path.join(root, "project");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await initializeGitProject(projectRoot);
+  await writeReadyAgentDeskTask(projectRoot, "task-mcp-failure", "MCP failed fanout", ["Trigger fake Codex failure"]);
+  await writeFakeCodex(fakeCodex);
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [MCP_BIN],
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      FAKE_CODEX_FAIL_MESSAGE: "synthetic fake Codex failure",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-desk-mcp-session-failure-test", version: "0.0.0" });
+
+  try {
+    await client.connect(transport);
+    const started = await client.callTool({
+      name: "start_subagent_session",
+      arguments: {
+        projectRoot,
+        taskId: "task-mcp-failure",
+        codexCli: fakeCodex,
+        executionMode: "current-branch",
+        subagentLauncher: "codex-cli",
+      },
+    });
+
+    assert.equal(started.structuredContent.status, "failed");
+    assert.equal(started.structuredContent.requiresHostLaunch, false);
+    assert.equal(started.structuredContent.waitedForCompletion, true);
+    assert.equal(started.structuredContent.totalAgents, 1);
+    assert.equal(started.structuredContent.failedAgents, 1);
+    assert.match(started.structuredContent.lastError, /synthetic fake Codex failure/);
+
+    const read = await client.callTool({
+      name: "read_subagent_session",
+      arguments: {
+        projectRoot,
+        sessionId: started.structuredContent.sessionId,
+      },
+    });
+    assert.equal(read.structuredContent.status, "failed");
+    assert.match(read.structuredContent.lastError, /synthetic fake Codex failure/);
+    assert.match(read.content[0].text, /synthetic fake Codex failure/);
+  } finally {
+    await client.close();
+  }
+});
+
 test("MCP create_agentdesk_task requires confirmation for similar tasks", async () => {
   const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-confirm-")));
   await initializeGitProject(projectRoot);
@@ -500,6 +556,19 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
     assert.equal(legacyRead.structuredContent.appLaunchPlan.subagents[0].status, "prepared_for_app");
     assert.equal(legacyRead.structuredContent.appLaunchPlan.subagents[0].taskSnapshotPath, "");
     assert.equal(legacyRead.structuredContent.appLaunchPlan.subagents[0].memorySnapshotPath, "");
+
+    const legacyList = await client.callTool({
+      name: "list_subagent_sessions",
+      arguments: {
+        projectRoot,
+        taskId: "task-mcp-app",
+      },
+    });
+    assert.equal(legacyList.structuredContent.items.length, 1);
+    assert.equal(legacyList.structuredContent.items[0].sessionId, started.structuredContent.sessionId);
+    assert.equal(legacyList.structuredContent.items[0].status, "succeeded");
+    assert.equal(legacyList.structuredContent.items[0].subagentLauncher, "codex-app");
+    assert.equal(legacyList.structuredContent.items[0].succeededAgents, 0);
   } finally {
     await client.close();
   }
@@ -679,6 +748,9 @@ await appendInvocation({
 await incrementActive();
 try {
   await sleep(Number(process.env.FAKE_CODEX_DELAY_MS || 200));
+  if (process.env.FAKE_CODEX_FAIL_MESSAGE) {
+    throw new Error(process.env.FAKE_CODEX_FAIL_MESSAGE);
+  }
   await fs.mkdir(path.dirname(outputFile), { recursive: true });
   await fs.writeFile(outputFile, JSON.stringify({
     summary: "completed via fake Codex",
