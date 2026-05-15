@@ -20,9 +20,10 @@ export const DEFAULT_SERVICE_TIER = "fast";
 export const DEFAULT_PARALLELISM = 6;
 export const DEFAULT_LAUNCH_BATCH_SIZE = 6;
 export const MAX_PARALLELISM = 24;
-export const DEFAULT_EXECUTION_MODE = "worktree";
+export const DEFAULT_EXECUTION_MODE = "auto";
 export const DEFAULT_WORKTREE_SUBAGENT_LAUNCHER = "codex-cli";
-export const EXECUTION_MODES = Object.freeze(["worktree", "current-branch"]);
+export const CONCRETE_EXECUTION_MODES = Object.freeze(["worktree", "current-branch"]);
+export const EXECUTION_MODES = Object.freeze([DEFAULT_EXECUTION_MODE, ...CONCRETE_EXECUTION_MODES]);
 export const CURRENT_BRANCH_SUBAGENT_LAUNCHERS = Object.freeze(["codex-cli", "codex-app"]);
 export const DEFAULT_CONFIG_FILENAME = "config.toml";
 export const DEFAULT_TASK_MEMORY_FILENAME = "memory.md";
@@ -133,8 +134,8 @@ export function renderAgentDeskConfigToml(config = {}) {
     `execution_mode = ${tomlString(session.executionMode)}`,
     `subagent_launcher = ${tomlString(session.subagentLauncher)}`,
     "",
-    "# current-branch mode is analysis-only. Choose subagent_launcher = \"codex-cli\"",
-    "# for automated CLI analysis, or \"codex-app\" when the main agent will start app subagents.",
+    "# execution_mode = \"auto\" lets the main agent avoid worktrees for simple or non-conflicting work.",
+    "# Use execution_mode = \"worktree\" when parallel branch isolation is required.",
   ].join("\n");
 }
 
@@ -227,6 +228,7 @@ export async function getRuntimeCapabilities(context) {
         fixedServiceTier: DEFAULT_SERVICE_TIER,
         defaultExecutionMode: DEFAULT_EXECUTION_MODE,
         executionModes: EXECUTION_MODES,
+        concreteExecutionModes: CONCRETE_EXECUTION_MODES,
         currentBranchSubagentLaunchers: CURRENT_BRANCH_SUBAGENT_LAUNCHERS,
       },
     },
@@ -447,7 +449,7 @@ export async function createSession(context, taskId, request = {}) {
   }
   await assertGitRepository(context.projectRoot);
 
-  const sessionRequest = await resolveSessionRequest(context, request);
+  const sessionRequest = await resolveSessionRequest(context, task, request);
   const waitForCompletion = normalizeBoolean(
     request.waitForCompletion ?? request.wait_for_completion,
     "waitForCompletion",
@@ -469,8 +471,10 @@ export async function createSession(context, taskId, request = {}) {
     reasoning: sessionRequest.reasoning,
     serviceTier: sessionRequest.serviceTier,
     executionMode: sessionRequest.executionMode,
+    requestedExecutionMode: sessionRequest.requestedExecutionMode,
     subagentLauncher: sessionRequest.subagentLauncher,
     launchPrompt: sessionRequest.launchPrompt,
+    worktreeDecision: sessionRequest.worktreeDecision,
     createdAt: now,
     updatedAt: now,
     startedAt: null,
@@ -629,9 +633,7 @@ async function prepareCodexAppSession(context, task, sessionId) {
 
   for (const agent of agents) {
     await writeAgentContextSnapshots(agent, taskMarkdown, taskMemory);
-    await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, agent, {
-      analysis: true,
-    });
+    await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, agent);
   }
 
   await updateSessionMeta(context, sessionId, {
@@ -790,7 +792,7 @@ export async function runSessionJob(context, sessionId) {
 
 async function runSingleAgent(context, task, session, sessionId, agent) {
   if (getSessionExecutionMode(session) === "current-branch") {
-    return runSingleAnalysisAgent(context, task, session, sessionId, agent);
+    return runSingleCurrentBranchAgent(context, task, session, sessionId, agent);
   }
 
   let created = null;
@@ -877,7 +879,7 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
   }
 }
 
-async function runSingleAnalysisAgent(context, task, session, sessionId, agent) {
+async function runSingleCurrentBranchAgent(context, task, session, sessionId, agent) {
   try {
     await fsp.mkdir(agent.paths.agentDir, { recursive: true });
     await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
@@ -885,14 +887,13 @@ async function runSingleAnalysisAgent(context, task, session, sessionId, agent) 
 
     const baseCommit = await gitRevParse(context.projectRoot, "HEAD");
     const branchName = await gitCurrentBranch(context.projectRoot).catch(() => "current-branch");
+    const filesBefore = await listCurrentBranchChangedFiles(context.projectRoot);
     const { taskMarkdown, taskMemory } = await readAgentContextSnapshots(context, task, agent);
     await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, {
       ...agent,
       branchName,
       worktreePath: context.projectRoot,
       baseCommit,
-    }, {
-      analysis: true,
     });
     const prompt = await readTextSafe(agent.paths.promptMd);
 
@@ -912,7 +913,6 @@ async function runSingleAnalysisAgent(context, task, session, sessionId, agent) 
       model: session.model || DEFAULT_SUBAGENT_MODEL,
       reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
       serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
-      sandboxMode: "read-only",
       prompt,
       outputFile: agent.paths.reportJson,
       stdoutLog: agent.paths.stdoutLog,
@@ -920,11 +920,14 @@ async function runSingleAnalysisAgent(context, task, session, sessionId, agent) 
       outputSchemaFile: SUBAGENT_REPORT_SCHEMA_PATH,
     });
     if (result.exitCode !== 0) {
-      throw new Error(describeCommandFailure(result, `analysis subagent ${agent.id} failed`));
+      throw new Error(describeCommandFailure(result, `current-branch subagent ${agent.id} failed`));
     }
 
     const report = await readJsonSafe(agent.paths.reportJson);
     const normalizedReport = normalizeSubagentReport(report);
+    const filesAfter = await listCurrentBranchChangedFiles(context.projectRoot);
+    const changedFiles = diffChangedFiles(filesBefore, filesAfter);
+    const headCommit = await gitRevParse(context.projectRoot, "HEAD");
     await patchSessionAgent(context, sessionId, agent.id, {
       status: "succeeded",
       completedAt: new Date().toISOString(),
@@ -933,8 +936,8 @@ async function runSingleAnalysisAgent(context, task, session, sessionId, agent) 
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
       notes: normalizedReport.notes,
-      changedFiles: [],
-      headCommit: baseCommit,
+      changedFiles,
+      headCommit,
       mergedCommit: "",
       lastError: "",
     });
@@ -942,7 +945,7 @@ async function runSingleAnalysisAgent(context, task, session, sessionId, agent) 
     await persistAgentMemory(context, task, sessionId, updatedAgent, agent.paths.stderrLog);
     return {
       report: normalizedReport,
-      changedFiles: [],
+      changedFiles,
       integration: {
         masterBefore: "",
         masterCommit: "",
@@ -1098,15 +1101,197 @@ export function normalizeSessionRequest(request = {}) {
   };
 }
 
-async function resolveSessionRequest(context, request = {}) {
+async function resolveSessionRequest(context, task, request = {}) {
   const config = await readAgentDeskConfig(context);
   const configRequest = config.exists
     ? normalizeSessionRequestInput(config.raw.session || {})
     : {};
-  return normalizeSessionRequest({
+  const normalized = normalizeSessionRequest({
     ...configRequest,
     ...normalizeSessionRequestInput(request),
   });
+  const taskMarkdown = task?.paths?.taskMd ? await readTextSafe(task.paths.taskMd) : "";
+  const worktreeDecision = chooseExecutionModeForTask(taskMarkdown, normalized);
+  return {
+    ...normalized,
+    requestedExecutionMode: normalized.executionMode,
+    executionMode: worktreeDecision.executionMode,
+    worktreeDecision,
+  };
+}
+
+export function chooseExecutionModeForTask(taskMarkdown, request = {}) {
+  const requestedExecutionMode = normalizeExecutionMode(request.executionMode || request.mode);
+  const subagentLauncher = normalizeSubagentLauncher(request.subagentLauncher, requestedExecutionMode);
+  const parallelism = normalizeParallelism(request.parallelism);
+  const items = parseTaskMarkdownItems(taskMarkdown);
+
+  if (requestedExecutionMode !== DEFAULT_EXECUTION_MODE) {
+    return {
+      executionMode: requestedExecutionMode,
+      requestedExecutionMode,
+      requiresWorktree: requestedExecutionMode === "worktree",
+      reason: `explicit ${requestedExecutionMode} execution mode`,
+      signals: {
+        subtaskCount: items.length,
+        parallelism,
+        subagentLauncher,
+      },
+    };
+  }
+
+  if (subagentLauncher === "codex-app") {
+    return {
+      executionMode: "current-branch",
+      requestedExecutionMode,
+      requiresWorktree: false,
+      reason: "codex-app launches are coordinated by the main agent in the current checkout",
+      signals: {
+        subtaskCount: items.length,
+        parallelism,
+        subagentLauncher,
+      },
+    };
+  }
+
+  if (items.length <= 1) {
+    return {
+      executionMode: "current-branch",
+      requestedExecutionMode,
+      requiresWorktree: false,
+      reason: "single executable subtask, so branch isolation is unnecessary",
+      signals: {
+        subtaskCount: items.length,
+        parallelism,
+        subagentLauncher,
+      },
+    };
+  }
+
+  if (parallelism <= 1) {
+    return {
+      executionMode: "current-branch",
+      requestedExecutionMode,
+      requiresWorktree: false,
+      reason: "parallelism is 1, so no concurrent branch isolation is needed",
+      signals: {
+        subtaskCount: items.length,
+        parallelism,
+        subagentLauncher,
+      },
+    };
+  }
+
+  const conflictAnalysis = analyzeSubtaskConflicts(items);
+  if (!conflictAnalysis.hasConflict && conflictAnalysis.hasEvidence) {
+    return {
+      executionMode: "current-branch",
+      requestedExecutionMode,
+      requiresWorktree: false,
+      reason: "subtasks mention disjoint implementation paths, so worktree isolation is not required",
+      signals: {
+        subtaskCount: items.length,
+        parallelism,
+        subagentLauncher,
+        ...conflictAnalysis.signals,
+      },
+    };
+  }
+
+  return {
+    executionMode: "worktree",
+    requestedExecutionMode,
+    requiresWorktree: true,
+    reason: conflictAnalysis.reason || "multiple parallel subtasks lack enough non-conflict evidence",
+    signals: {
+      subtaskCount: items.length,
+      parallelism,
+      subagentLauncher,
+      ...conflictAnalysis.signals,
+    },
+  };
+}
+
+function analyzeSubtaskConflicts(items) {
+  const pathsByItem = items.map((item) => extractMentionedPaths(`${item.title}\n${item.detail || ""}`));
+  const allPaths = pathsByItem.flatMap((paths) => [...paths]);
+  const repeatedPaths = repeatedValues(allPaths);
+  if (repeatedPaths.length > 0) {
+    return {
+      hasConflict: true,
+      hasEvidence: true,
+      reason: `multiple subtasks mention the same path: ${repeatedPaths.slice(0, 3).join(", ")}`,
+      signals: {
+        mentionedPaths: uniqueSorted(allPaths),
+        repeatedPaths,
+      },
+    };
+  }
+
+  const broadItems = items
+    .map((item, index) => ({ index: index + 1, text: `${item.title}\n${item.detail || ""}` }))
+    .filter((item) => hasBroadConflictTerms(item.text))
+    .map((item) => item.index);
+  if (broadItems.length > 0) {
+    return {
+      hasConflict: true,
+      hasEvidence: true,
+      reason: `broad or shared-scope wording appears in subtask(s): ${broadItems.join(", ")}`,
+      signals: {
+        mentionedPaths: uniqueSorted(allPaths),
+        broadSubtasks: broadItems,
+      },
+    };
+  }
+
+  const itemsWithPaths = pathsByItem.filter((paths) => paths.size > 0).length;
+  return {
+    hasConflict: false,
+    hasEvidence: itemsWithPaths === items.length && allPaths.length > 0,
+    reason: itemsWithPaths === items.length
+      ? ""
+      : "multiple parallel subtasks do not all name concrete implementation paths",
+    signals: {
+      mentionedPaths: uniqueSorted(allPaths),
+      subtasksWithMentionedPaths: itemsWithPaths,
+    },
+  };
+}
+
+function extractMentionedPaths(text) {
+  const matches = String(text || "").match(
+    /[A-Za-z0-9_.@-]+(?:\/[A-Za-z0-9_.@-]+)+|[A-Za-z0-9_.@-]+\.(?:cjs|css|go|html|java|js|json|jsx|lock|md|mjs|py|rs|scss|toml|ts|tsx|yaml|yml)\b/g,
+  ) || [];
+  return new Set(matches.map(normalizeMentionedPath).filter(Boolean));
+}
+
+function normalizeMentionedPath(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^`+|`+$/g, "")
+    .replace(/^[./]+/, "")
+    .replace(/[),.;:]+$/g, "");
+}
+
+function hasBroadConflictTerms(text) {
+  return /\b(api|common|config|database|dependency|deps|global|layout|lockfile|migration|package|refactor|rename|routing|schema|shared|state|style|styles|theme|types?)\b/i.test(text);
+}
+
+function repeatedValues(values) {
+  const seen = new Set();
+  const repeated = new Set();
+  for (const value of values) {
+    if (seen.has(value)) {
+      repeated.add(value);
+      continue;
+    }
+    seen.add(value);
+  }
+  return uniqueSorted([...repeated]);
+}
+
+function uniqueSorted(values) {
+  return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
 }
 
 function normalizeSessionRequestInput(input = {}) {
@@ -1157,6 +1342,15 @@ function normalizeExecutionMode(value) {
 
 function normalizeSubagentLauncher(value, executionMode) {
   const launcher = normalizeOptionalString(value);
+  if (executionMode === DEFAULT_EXECUTION_MODE) {
+    if (!launcher) {
+      return DEFAULT_WORKTREE_SUBAGENT_LAUNCHER;
+    }
+    if (![DEFAULT_WORKTREE_SUBAGENT_LAUNCHER, ...CURRENT_BRANCH_SUBAGENT_LAUNCHERS].includes(launcher)) {
+      throw new Error(`unsupported subagent launcher: ${launcher}`);
+    }
+    return launcher;
+  }
   if (executionMode === "worktree") {
     const selected = launcher || DEFAULT_WORKTREE_SUBAGENT_LAUNCHER;
     if (selected !== DEFAULT_WORKTREE_SUBAGENT_LAUNCHER) {
@@ -1164,19 +1358,17 @@ function normalizeSubagentLauncher(value, executionMode) {
     }
     return selected;
   }
-  if (!launcher) {
-    throw new Error("current-branch execution mode requires --subagent-launcher codex-cli or codex-app");
+  const selected = launcher || DEFAULT_WORKTREE_SUBAGENT_LAUNCHER;
+  if (!CURRENT_BRANCH_SUBAGENT_LAUNCHERS.includes(selected)) {
+    throw new Error(`unsupported current-branch subagent launcher: ${selected}`);
   }
-  if (!CURRENT_BRANCH_SUBAGENT_LAUNCHERS.includes(launcher)) {
-    throw new Error(`unsupported current-branch subagent launcher: ${launcher}`);
-  }
-  return launcher;
+  return selected;
 }
 
 function getSessionExecutionMode(session) {
-  return EXECUTION_MODES.includes(session?.executionMode)
+  return CONCRETE_EXECUTION_MODES.includes(session?.executionMode)
     ? session.executionMode
-    : DEFAULT_EXECUTION_MODE;
+    : "worktree";
 }
 
 function getSessionSubagentLauncher(session) {
@@ -1218,7 +1410,8 @@ function buildTaskGenerationPrompt(task) {
     "",
     "Subtask rules:",
     "- Use markdown checkboxes like `- [ ] ...`.",
-    "- Each subtask should be implementable by one Codex subagent in its own git worktree.",
+    "- Each subtask should be implementable by one Codex subagent, but do not assume a git worktree is required.",
+    "- Mention concrete file or module paths in subtasks when that helps the main agent detect non-conflicting work.",
     "- Prefer 4 to 12 subtasks.",
     "- Keep subtasks concrete and code-oriented.",
     "- Avoid PRD phrasing and do not mention prd.json.",
@@ -1264,8 +1457,8 @@ async function readAgentContextSnapshots(context, task, agent) {
 }
 
 async function writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, agent, options = {}) {
-  const prompt = options.analysis
-    ? buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent)
+  const prompt = (options.analysis || getSessionExecutionMode(session) === "current-branch")
+    ? buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent)
     : buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent);
   await fsp.writeFile(agent.paths.promptMd, prompt, "utf8");
   return prompt;
@@ -1318,9 +1511,9 @@ function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId,
   ].join("\n");
 }
 
-function buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent) {
+function buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent) {
   return [
-    "You are one AgentDesk analysis subagent running in current-branch mode.",
+    "You are one AgentDesk implementation subagent running in the shared current checkout.",
     "",
     `Task ID: ${task.taskId}`,
     `Session ID: ${sessionId}`,
@@ -1338,17 +1531,19 @@ function buildAnalysisSubagentPrompt(task, taskMarkdown, taskMemory, session, se
     `- Prompt snapshot: ${agent.paths.promptMd}`,
     "",
     "Rules:",
-    "- Analyze only. Do not create, edit, delete, move, stage, commit, rebase, merge, or format files.",
-    "- Inspect the codebase and explain exactly how the main agent should implement this subtask on the current branch.",
-    "- Keep the plan scoped to the assigned subtask.",
+    "- Work only on the assigned subtask in the current checkout.",
+    "- No separate git worktree was created because the main agent judged worktree isolation unnecessary for this session.",
+    "- Do not create or switch branches, stage files, commit, rebase, merge, or delete worktrees.",
+    "- Avoid files outside the assigned subtask scope, especially when other subagents may be running in the same checkout.",
+    "- Do not edit .agent-desk state files; AgentDesk owns snapshots, logs, and report output.",
     "- Treat the context snapshots in this prompt as the complete launch context; do not resume a parent Codex conversation.",
-    "- Prefer concrete file paths, functions, tests, and risk notes over broad advice.",
-    "- If the subtask needs user confirmation, state the decision clearly.",
+    "- Run the narrowest meaningful self-tests before finishing.",
+    "- Keep your changes scoped and production-oriented.",
+    "- If you are blocked, explain the blocker clearly in the final response.",
     "",
     "Before you finish:",
-    "- Put the implementation plan in the notes array.",
-    "- Use tests_run for analysis commands or checks you actually ran.",
-    "- Leave changed files empty by not changing files.",
+    "- Leave current-branch changes unstaged for the main agent or caller to review.",
+    "- Include concise notes about tests, changed areas, and remaining risks in the final response.",
     "",
     ...(session.launchPrompt
       ? [
@@ -1434,6 +1629,8 @@ export function renderSessionDocument(session, task) {
     `- Reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
     `- Service tier: ${session.serviceTier || DEFAULT_SERVICE_TIER}`,
     `- Execution mode: ${getSessionExecutionMode(session)}`,
+    `- Requested execution mode: ${session.requestedExecutionMode || session.executionMode || "-"}`,
+    ...(session.worktreeDecision?.reason ? [`- Worktree decision: ${session.worktreeDecision.reason}`] : []),
     `- Subagent launcher: ${getSessionSubagentLauncher(session) || "-"}`,
     `- Parallelism: ${session.parallelism}`,
     `- Batch size: ${session.batchSize}`,
@@ -1958,6 +2155,23 @@ async function listBranchFiles(cwd, baseCommit) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+async function listCurrentBranchChangedFiles(cwd) {
+  const [tracked, untracked] = await Promise.all([
+    spawnCapture("git", ["diff", "--name-only", "HEAD"], { cwd }),
+    spawnCapture("git", ["ls-files", "--others", "--exclude-standard"], { cwd }),
+  ]);
+  return uniqueSorted([
+    ...(tracked.exitCode === 0 ? tracked.stdout.split(/\r?\n/) : []),
+    ...(untracked.exitCode === 0 ? untracked.stdout.split(/\r?\n/) : []),
+  ].map((line) => line.trim()).filter((file) => file && !file.startsWith(`${AGENT_DESK_STATE_DIRNAME}/`)));
+}
+
+function diffChangedFiles(before, after) {
+  const beforeSet = new Set(before || []);
+  const added = (after || []).filter((file) => !beforeSet.has(file));
+  return added.length > 0 ? uniqueSorted(added) : uniqueSorted(after || []);
 }
 
 async function acquireLock(lockPath) {

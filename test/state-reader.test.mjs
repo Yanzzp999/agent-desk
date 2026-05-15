@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   AGENT_DESK_STATE_DIRNAME,
   buildCodexExecArgs,
+  chooseExecutionModeForTask,
   createContext,
   createTask,
   getAgentLogs,
@@ -268,7 +269,7 @@ test("normalizes configurable session defaults and overrides", () => {
     model: "gpt-5.5",
     reasoning: "xhigh",
     serviceTier: "fast",
-    executionMode: "worktree",
+    executionMode: "auto",
     subagentLauncher: "codex-cli",
     launchPrompt: "",
   });
@@ -294,8 +295,48 @@ test("normalizes configurable session defaults and overrides", () => {
   assert.throws(() => normalizeSessionRequest({ parallelism: "0" }), /positive number/);
   assert.throws(() => normalizeSessionRequest({ model: "bad model" }), /single Codex CLI model id/);
   assert.throws(() => normalizeSessionRequest({ reasoning: "extreme" }), /unsupported reasoning effort/);
-  assert.throws(() => normalizeSessionRequest({ executionMode: "current-branch" }), /requires --subagent-launcher/);
+  assert.equal(normalizeSessionRequest({ executionMode: "current-branch" }).subagentLauncher, "codex-cli");
   assert.throws(() => normalizeSessionRequest({ executionMode: "sidecar" }), /unsupported execution mode/);
+});
+
+test("chooses worktrees only when auto mode sees useful isolation", () => {
+  const single = chooseExecutionModeForTask(`
+# Small docs fix
+
+## Subtasks
+- [ ] Update README.md copy
+`, normalizeSessionRequest());
+  assert.equal(single.executionMode, "current-branch");
+  assert.equal(single.requiresWorktree, false);
+
+  const disjoint = chooseExecutionModeForTask(`
+# Split UI and CLI edits
+
+## Subtasks
+- [ ] Update src/cli/help.mjs
+- [ ] Update src/ui/session-panel.tsx
+`, normalizeSessionRequest({ parallelism: 2 }));
+  assert.equal(disjoint.executionMode, "current-branch");
+  assert.equal(disjoint.requiresWorktree, false);
+
+  const overlapping = chooseExecutionModeForTask(`
+# Shared config update
+
+## Subtasks
+- [ ] Update src/lib/control-plane.mjs request parsing
+- [ ] Update src/lib/control-plane.mjs session docs
+`, normalizeSessionRequest({ parallelism: 2 }));
+  assert.equal(overlapping.executionMode, "worktree");
+  assert.equal(overlapping.requiresWorktree, true);
+
+  const explicit = chooseExecutionModeForTask(`
+# Explicit isolation
+
+## Subtasks
+- [ ] Update README.md
+`, normalizeSessionRequest({ executionMode: "worktree" }));
+  assert.equal(explicit.executionMode, "worktree");
+  assert.equal(explicit.requiresWorktree, true);
 });
 
 test("parses and renders TOML session config", () => {

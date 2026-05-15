@@ -302,7 +302,7 @@ Session start options:
   --parallel N           Maximum concurrent subagents or app launch prompts. Default: 6, max: 24.
   --concurrency N        Alias for --parallel.
   --codex-count N        Alias for --parallel.
-  --execution-mode MODE  worktree or current-branch. Default: worktree.
+  --execution-mode MODE  auto, worktree, or current-branch. Default: auto.
   --subagent-launcher L  codex-cli or codex-app for current-branch mode.
 `);
 }

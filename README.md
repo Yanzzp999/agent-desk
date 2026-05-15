@@ -108,6 +108,11 @@ MCP tools：
 - `start_subagent_session`：启动或准备 AgentDesk subagent session
 - `list_subagent_sessions` / `read_subagent_session`：查看 session 状态、agent 摘要和日志索引
 
+`start_subagent_session` 由主 agent 先判断是否需要 worktree 隔离。默认
+`executionMode: "auto"`：单个子任务、串行执行，或子任务明确落在互不重叠的文件/模块时，
+AgentDesk 会使用当前 checkout；只有并发任务缺少无冲突证据、或显式选择 `worktree` 时，
+才会创建独立 worktree。
+
 `start_subagent_session` 支持两种 launcher：
 
 - `codex-cli`：由 AgentDesk 直接启动 Codex CLI subagents，遵守 `parallelism` 并发上限；MCP 调用默认阻塞到 session 进入 `succeeded` 或 `failed`，可通过 `waitForCompletion: false` 保留后台启动行为。
@@ -136,6 +141,7 @@ Implement the checkout flow end to end.
 - 思考深度：`xhigh`
 - 服务层级：`fast`
 - 并发 Codex CLI 子代理数量：`6`
+- 执行模式：`auto`，由主 agent/AgentDesk 判断是否需要 worktree
 - 启动批次大小：`6`
 - 集成分支：`master`
 
@@ -229,7 +235,7 @@ verunectl tasks create [--title TEXT] [--brief TEXT] [--rebuild|--continue-simil
 verunectl mcp [--project DIR]
 verunectl sessions list [--task <taskId>] [--json]
 verunectl sessions show <sessionId> [--json]
-verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--json]
+verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--json]
 verunectl sessions logs <sessionId> <agentId> [--json]
 ```
 
@@ -247,6 +253,8 @@ verunectl sessions logs <sessionId> <agentId> [--json]
 - `--parallel N`：限制并发 Codex CLI 子代理数量，默认 `6`，最大 `24`
 - `--concurrency N`：`--parallel` 的别名
 - `--codex-count N`：`--parallel` 的别名
+- `--execution-mode MODE`：`auto`、`worktree` 或 `current-branch`，默认 `auto`
+- `--subagent-launcher L`：`current-branch` 下可选 `codex-cli` 或 `codex-app`
 
 ## 运行行为
 
@@ -263,11 +271,12 @@ Session 执行：
 - 每个子代理使用独立的 `task.snapshot.md`、`memory.snapshot.md` 和 `prompt.md` 作为启动上下文
 - 每批最多启动 6 个新的子代理
 - 遵守 session 选择的并发 Codex CLI 上限
-- 为每个子代理创建独立 git branch 和 git worktree
-- 将完成的子代理分支 rebase 到 `master`
-- 通过 fast-forward 更新 `master` 集成完成的工作
+- 默认 `auto` 会先判断是否需要 worktree；简单任务、串行任务或明确无冲突的分文件/分模块任务会直接在当前 checkout 实现
+- `worktree` 模式会为每个子代理创建独立 git branch 和 git worktree
+- `worktree` 模式会将完成的子代理分支 rebase 到 `master`
+- `worktree` 模式会通过 fast-forward 更新 `master` 集成完成的工作
 
-`current-branch` 模式也可以选择 `--subagent-launcher codex-app`，此时 AgentDesk 会创建 session 和每个 subagent 的 prompt 文件，然后以 `succeeded` 状态结束这次 launch-plan 准备；Codex App 宿主按 launch plan 直接启动 app subagents，并负责后续等待。
+`current-branch` 模式不创建 worktree；Codex CLI 子代理会在当前 checkout 内留下未暂存改动，供主 agent 或调用方复核。它也可以选择 `--subagent-launcher codex-app`，此时 AgentDesk 会创建 session 和每个 subagent 的 prompt 文件，然后以 `succeeded` 状态结束这次 launch-plan 准备；Codex App 宿主按 launch plan 直接启动 app subagents，并负责后续等待。
 
 每个 control-plane task 都会维护一个 `memory.md`，用于记录跨 session 共享的上下文。AgentDesk 会在启动子代理时把该文件注入 prompt，并在每个 agent 完成或失败后用 `sessionId + agentId` 标记自动更新对应 memory 条目。
 

@@ -195,13 +195,13 @@ export function createAgentDeskMcpServer(options = {}) {
 
   server.registerTool("start_subagent_session", {
     title: "Start Subagent Session",
-    description: "Start an AgentDesk subagent session. codex-cli sessions are launched by AgentDesk and block until completion by default. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
+    description: "Start an AgentDesk subagent session. The main agent should use auto/current-branch when worktree isolation is unnecessary, and worktree only for parallel work that needs branch isolation. codex-cli sessions are launched by AgentDesk and block until completion by default. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
     inputSchema: {
       taskId: z.string().min(1).describe("Ready AgentDesk task id under <project>/.agent-desk/tasks."),
       parallelism: z.number().optional().describe("Maximum concurrent subagents. Default 6, max 24."),
       model: z.string().optional().describe("Codex model for subagents. Default: gpt-5.5."),
       reasoning: z.enum(["low", "medium", "high", "xhigh"]).optional().describe("Codex reasoning effort. Default: xhigh."),
-      executionMode: z.enum(["worktree", "current-branch"]).optional().describe("Execution mode. codex-app uses current-branch."),
+      executionMode: z.enum(["auto", "worktree", "current-branch"]).optional().describe("Execution mode. Default auto lets the main agent avoid worktrees for simple or non-conflicting tasks. codex-app uses current-branch."),
       subagentLauncher: z.enum(["codex-cli", "codex-app"]).optional().describe("Subagent launcher. Default: codex-cli."),
       launchPrompt: z.string().optional().describe("Optional extra launch context included in each subagent prompt."),
       waitForCompletion: z.boolean().optional().describe("For codex-cli sessions, wait for all subagents to finish before returning. Default: true."),
