@@ -154,6 +154,188 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.equal(state.maxActive, 2);
 });
 
+test("verunectl sessions start/show/list distinguish Codex App handoff from Codex CLI execution", { timeout: 30000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-fallback-"));
+  const projectRoot = path.join(root, "project");
+  const worktreesRoot = path.join(root, "worktrees");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const fakeLog = path.join(root, "fake-log.jsonl");
+  const taskId = "task-cli-fallback";
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await writeFakeCodex(fakeCodex);
+  await initializeGitProject(projectRoot);
+  await writeReadyAgentDeskTask(projectRoot, taskId, "CLI fallback launchers");
+
+  const env = {
+    ...process.env,
+    CODEX_CLI: fakeCodex,
+    FAKE_CODEX_LOG: fakeLog,
+    FAKE_CODEX_DELAY_MS: "100",
+  };
+  const commandOptions = { cwd: REPO_ROOT, env };
+  const realProjectRoot = await fs.realpath(projectRoot);
+
+  const appStartResult = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "start",
+    taskId,
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--execution-mode",
+    "current-branch",
+    "--subagent-launcher",
+    "codex-app",
+    "--parallel",
+    "2",
+    "--json",
+  ], commandOptions);
+  assert.equal(appStartResult.exitCode, 0, appStartResult.stderr);
+  const appStart = JSON.parse(appStartResult.stdout);
+  assert.equal(appStart.status, "succeeded");
+  assert.equal(appStart.executionMode, "current-branch");
+  assert.equal(appStart.subagentLauncher, "codex-app");
+  assert.equal(appStart.parallelism, 2);
+  assert.equal(appStart.totalAgents, 3);
+  assert.equal(appStart.succeededAgents, 0);
+  assert.equal(appStart.failedAgents, 0);
+  assert.deepEqual(
+    appStart.agents.map((agent) => agent.status),
+    ["prepared_for_app", "prepared_for_app", "prepared_for_app"],
+  );
+
+  for (const agent of appStart.agents) {
+    assert.equal(agent.worktreePath, projectRoot);
+    assert.match(agent.paths.taskSnapshotMd, /task\.snapshot\.md$/);
+    assert.match(agent.paths.memorySnapshotMd, /memory\.snapshot\.md$/);
+    assert.match(agent.paths.promptMd, /prompt\.md$/);
+    const prompt = await fs.readFile(agent.paths.promptMd, "utf8");
+    assert.match(prompt, /You are one AgentDesk analysis subagent running in current-branch mode\./);
+    assert.match(prompt, /Subagent launcher: codex-app/);
+    assert.match(prompt, new RegExp(`Assigned subtask: ${escapeRegExp(agent.title)}`));
+  }
+  assert.deepEqual(await readJsonLinesIfExists(fakeLog), []);
+
+  const appShowResult = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "show",
+    appStart.sessionId,
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--json",
+  ], commandOptions);
+  assert.equal(appShowResult.exitCode, 0, appShowResult.stderr);
+  const appShow = JSON.parse(appShowResult.stdout);
+  assert.equal(appShow.status, "succeeded");
+  assert.equal(appShow.subagentLauncher, "codex-app");
+  assert.equal(appShow.succeededAgents, 0);
+  assert.match(appShow.docContent, /Subagent launcher: codex-app/);
+  assert.match(appShow.docContent, /Status: prepared_for_app/);
+
+  const appListResult = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "list",
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--task",
+    taskId,
+    "--json",
+  ], commandOptions);
+  assert.equal(appListResult.exitCode, 0, appListResult.stderr);
+  const appList = JSON.parse(appListResult.stdout);
+  assert.equal(appList.items.length, 1);
+  assert.equal(appList.items[0].sessionId, appStart.sessionId);
+  assert.equal(appList.items[0].status, "succeeded");
+  assert.equal(appList.items[0].subagentLauncher, "codex-app");
+  assert.equal(appList.items[0].succeededAgents, 0);
+
+  const cliStartResult = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "start",
+    taskId,
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--execution-mode",
+    "current-branch",
+    "--subagent-launcher",
+    "codex-cli",
+    "--parallel",
+    "2",
+    "--json",
+  ], commandOptions);
+  assert.equal(cliStartResult.exitCode, 0, cliStartResult.stderr);
+  const cliStart = JSON.parse(cliStartResult.stdout);
+  assert.equal(cliStart.executionMode, "current-branch");
+  assert.equal(cliStart.subagentLauncher, "codex-cli");
+  assert.equal(cliStart.parallelism, 2);
+  assert.equal(cliStart.succeededAgents, 0);
+
+  const cliShow = await waitForCliJson([
+    "sessions",
+    "show",
+    cliStart.sessionId,
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--json",
+  ], commandOptions, (payload) => payload.status === "succeeded" ? payload : null);
+  assert.equal(cliShow.subagentLauncher, "codex-cli");
+  assert.equal(cliShow.totalAgents, 3);
+  assert.equal(cliShow.succeededAgents, 3);
+  assert.equal(cliShow.failedAgents, 0);
+  assert.deepEqual(
+    cliShow.agents.map((agent) => agent.status),
+    ["succeeded", "succeeded", "succeeded"],
+  );
+  assert.match(cliShow.docContent, /Subagent launcher: codex-cli/);
+  assert.match(cliShow.docContent, /Status: succeeded/);
+
+  const finalListResult = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "list",
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--task",
+    taskId,
+    "--json",
+  ], commandOptions);
+  assert.equal(finalListResult.exitCode, 0, finalListResult.stderr);
+  const finalList = JSON.parse(finalListResult.stdout);
+  assert.equal(finalList.items.length, 2);
+  const byLauncher = new Map(finalList.items.map((item) => [item.subagentLauncher, item]));
+  assert.equal(byLauncher.get("codex-app").succeededAgents, 0);
+  assert.equal(byLauncher.get("codex-cli").succeededAgents, 3);
+
+  const invocations = await readJsonLines(fakeLog);
+  const subagentInvocations = invocations.filter((entry) => entry.hasOutputSchema);
+  assert.equal(subagentInvocations.length, 3);
+  assert.deepEqual(
+    subagentInvocations.map((entry) => entry.cwd),
+    [realProjectRoot, realProjectRoot, realProjectRoot],
+  );
+  for (const entry of subagentInvocations) {
+    assert.equal(entry.model, "gpt-5.5");
+    assert.match(entry.prompt, /Subagent launcher: codex-cli/);
+    assert.match(entry.prompt, /You are one AgentDesk analysis subagent running in current-branch mode\./);
+  }
+});
+
 test("verunectl allocates unique task and session ids under concurrent starts", { timeout: 30000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-race-"));
   const projectRoot = path.join(root, "project");
@@ -302,6 +484,52 @@ async function initializeGitProject(projectRoot) {
   await fs.writeFile(path.join(projectRoot, "README.md"), "# Fixture\n");
   await run("git", ["add", "README.md"], { cwd: projectRoot, check: true });
   await run("git", ["commit", "-m", "Initial fixture"], { cwd: projectRoot, check: true });
+}
+
+async function writeReadyAgentDeskTask(projectRoot, taskId, title) {
+  const taskDir = path.join(projectRoot, ".agent-desk", "tasks", taskId);
+  const taskMd = path.join(taskDir, "task.md");
+  const memoryMd = path.join(taskDir, "memory.md");
+  const metaJson = path.join(taskDir, "meta.json");
+  await fs.mkdir(taskDir, { recursive: true });
+  await fs.writeFile(taskMd, [
+    `# ${title}`,
+    "",
+    "## Goal",
+    "Exercise verunectl session fallback behavior.",
+    "",
+    "## Subtasks",
+    "- [ ] Prepare handoff prompt",
+    "- [ ] Run CLI analysis",
+    "- [ ] Summarize session state",
+    "",
+  ].join("\n"), "utf8");
+  await fs.writeFile(path.join(taskDir, "brief.md"), "Exercise verunectl session fallback behavior.\n", "utf8");
+  await fs.writeFile(memoryMd, "# Task Memory\n\nExisting CLI fallback memory.\n", "utf8");
+  await fs.writeFile(path.join(taskDir, "stdout.log"), "", "utf8");
+  await fs.writeFile(path.join(taskDir, "stderr.log"), "", "utf8");
+  await fs.writeFile(metaJson, `${JSON.stringify({
+    schemaVersion: 2,
+    taskId,
+    title,
+    brief: "Exercise verunectl session fallback behavior.",
+    status: "ready",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    lastError: "",
+    subtaskCount: 3,
+    paths: {
+      taskDir,
+      briefMd: path.join(taskDir, "brief.md"),
+      promptMd: path.join(taskDir, "prompt.md"),
+      taskMd,
+      memoryMd,
+      metaJson,
+      stdoutLog: path.join(taskDir, "stdout.log"),
+      stderrLog: path.join(taskDir, "stderr.log"),
+    },
+  }, null, 2)}\n`, "utf8");
 }
 
 async function writeFakeCodex(filePath) {
@@ -493,6 +721,41 @@ async function waitForJson(filePath, predicate, timeoutMs = 15000) {
 async function readJsonLines(filePath) {
   const text = await fs.readFile(filePath, "utf8");
   return text.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+}
+
+async function readJsonLinesIfExists(filePath) {
+  try {
+    return await readJsonLines(filePath);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function waitForCliJson(args, options, predicate, timeoutMs = 15000) {
+  const started = Date.now();
+  let lastError = null;
+  while (Date.now() - started < timeoutMs) {
+    const result = await run(process.execPath, [VERUNECTL, ...args], options);
+    if (result.exitCode === 0) {
+      try {
+        const payload = JSON.parse(result.stdout);
+        const matched = predicate(payload);
+        if (matched) {
+          return matched;
+        }
+        lastError = payload.lastError || payload.status || null;
+      } catch (error) {
+        lastError = error;
+      }
+    } else {
+      lastError = result.stderr || result.stdout;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`timed out waiting for verunectl ${args.join(" ")}: ${lastError?.message || lastError || "no matching state"}`);
 }
 
 function run(command, args, options = {}) {
