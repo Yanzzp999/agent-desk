@@ -213,7 +213,8 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
     assert.match(agent.paths.memorySnapshotMd, /memory\.snapshot\.md$/);
     assert.match(agent.paths.promptMd, /prompt\.md$/);
     const prompt = await fs.readFile(agent.paths.promptMd, "utf8");
-    assert.match(prompt, /You are one AgentDesk analysis subagent running in current-branch mode\./);
+    assert.match(prompt, /You are one AgentDesk implementation subagent running in the shared current checkout\./);
+    assert.match(prompt, /No separate git worktree was created/);
     assert.match(prompt, /Subagent launcher: codex-app/);
     assert.match(prompt, new RegExp(`Assigned subtask: ${escapeRegExp(agent.title)}`));
   }
@@ -332,7 +333,8 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   for (const entry of subagentInvocations) {
     assert.equal(entry.model, "gpt-5.5");
     assert.match(entry.prompt, /Subagent launcher: codex-cli/);
-    assert.match(entry.prompt, /You are one AgentDesk analysis subagent running in current-branch mode\./);
+    assert.match(entry.prompt, /You are one AgentDesk implementation subagent running in the shared current checkout\./);
+    assert.match(entry.prompt, /No separate git worktree was created/);
   }
 });
 

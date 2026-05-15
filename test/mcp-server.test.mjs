@@ -500,7 +500,8 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
       assert.match(subagent.memorySnapshotPath, /memory\.snapshot\.md$/);
       assert.match(subagent.promptPath, /prompt\.md$/);
       assert.equal(subagent.prompt, await fs.readFile(subagent.promptPath, "utf8"));
-      assert.match(subagent.prompt, /You are one AgentDesk analysis subagent running in current-branch mode\./);
+      assert.match(subagent.prompt, /You are one AgentDesk implementation subagent running in the shared current checkout\./);
+      assert.match(subagent.prompt, /No separate git worktree was created/);
       assert.match(subagent.prompt, /Subagent launcher: codex-app/);
       assert.match(subagent.prompt, new RegExp(`Assigned subtask: ${escapeRegExp(subagent.title)}`));
       assert.match(subagent.prompt, /Shared task memory snapshot:/);
