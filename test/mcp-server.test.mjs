@@ -271,16 +271,30 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
     assert.equal(started.structuredContent.requiresHostLaunch, true);
     assert.equal(started.structuredContent.waitedForCompletion, false);
     assert.equal(started.structuredContent.succeededAgents, 0);
-    assert.equal(started.structuredContent.appLaunchPlan.launchTool, "spawn_agent");
-    assert.equal(started.structuredContent.appLaunchPlan.parallelism, 5);
-    assert.equal(started.structuredContent.appLaunchPlan.subagents.length, 3);
-    assert.equal(started.structuredContent.appLaunchPlan.subagents[0].status, "prepared_for_app");
-    assert.match(started.structuredContent.appLaunchPlan.subagents[0].taskSnapshotPath, /task\.snapshot\.md$/);
-    assert.match(started.structuredContent.appLaunchPlan.subagents[0].memorySnapshotPath, /memory\.snapshot\.md$/);
-    assert.match(started.structuredContent.appLaunchPlan.subagents[0].prompt, /Subagent launcher: codex-app/);
-    assert.match(started.structuredContent.appLaunchPlan.subagents[0].prompt, /Assigned subtask: Inspect API surface/);
-    assert.match(started.structuredContent.appLaunchPlan.subagents[0].prompt, /Shared task memory snapshot:/);
-    assert.match(started.structuredContent.appLaunchPlan.subagents[0].prompt, /Existing MCP memory/);
+    const launchPlan = started.structuredContent.appLaunchPlan;
+    assert.equal(launchPlan.requiresHostLaunch, true);
+    assert.equal(launchPlan.launchTool, "spawn_agent");
+    assert.equal(launchPlan.parallelism, 5);
+    assert.equal(launchPlan.subagents.length, 3);
+    assert.deepEqual(
+      launchPlan.subagents.map((subagent) => subagent.status),
+      ["prepared_for_app", "prepared_for_app", "prepared_for_app"],
+    );
+    assert.deepEqual(
+      launchPlan.subagents.map((subagent) => subagent.title),
+      ["Inspect API surface", "Validate session launcher", "Summarize verification"],
+    );
+    for (const subagent of launchPlan.subagents) {
+      assert.match(subagent.taskSnapshotPath, /task\.snapshot\.md$/);
+      assert.match(subagent.memorySnapshotPath, /memory\.snapshot\.md$/);
+      assert.match(subagent.promptPath, /prompt\.md$/);
+      assert.equal(subagent.prompt, await fs.readFile(subagent.promptPath, "utf8"));
+      assert.match(subagent.prompt, /You are one AgentDesk analysis subagent running in current-branch mode\./);
+      assert.match(subagent.prompt, /Subagent launcher: codex-app/);
+      assert.match(subagent.prompt, new RegExp(`Assigned subtask: ${escapeRegExp(subagent.title)}`));
+      assert.match(subagent.prompt, /Shared task memory snapshot:/);
+      assert.match(subagent.prompt, /Existing MCP memory/);
+    }
 
     const read = await client.callTool({
       name: "read_subagent_session",
@@ -291,6 +305,11 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
     });
     assert.equal(read.structuredContent.status, "succeeded");
     assert.equal(read.structuredContent.appLaunchPlan.subagents.length, 3);
+    assert.deepEqual(
+      read.structuredContent.agents.map((agent) => agent.status),
+      ["prepared_for_app", "prepared_for_app", "prepared_for_app"],
+    );
+    assert.equal(read.structuredContent.succeededAgents, 0);
 
     const sessionMetaPath = path.join(
       projectRoot,
@@ -300,6 +319,12 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
       "meta.json",
     );
     const legacyMeta = JSON.parse(await fs.readFile(sessionMetaPath, "utf8"));
+    assert.equal(legacyMeta.status, "succeeded");
+    assert.equal(legacyMeta.succeededAgents, 0);
+    assert.deepEqual(
+      legacyMeta.agents.map((agent) => agent.status),
+      ["prepared_for_app", "prepared_for_app", "prepared_for_app"],
+    );
     legacyMeta.status = "waiting_for_app";
     legacyMeta.completedAt = null;
     for (const agent of legacyMeta.agents) {
@@ -523,6 +548,10 @@ async function waitForJson(filePath, predicate, timeoutMs = 15000) {
 async function readJsonLines(filePath) {
   const text = await fs.readFile(filePath, "utf8");
   return text.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function run(command, args, options = {}) {
