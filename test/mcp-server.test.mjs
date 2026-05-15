@@ -133,7 +133,15 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
   const fakeLog = path.join(root, "fake-log.jsonl");
   await fs.mkdir(projectRoot, { recursive: true });
   await initializeGitProject(projectRoot);
-  await writeReadyAgentDeskTask(projectRoot, "task-mcp-cli", "MCP CLI fanout");
+  await writeReadyAgentDeskTask(projectRoot, "task-mcp-cli", "MCP CLI fanout", [
+    "Inspect API surface",
+    "Validate session launcher",
+    "Summarize verification",
+    "Check prompt snapshots",
+    "Verify memory injection",
+    "Assert session counts",
+    "Confirm parallelism cap",
+  ]);
   await writeFakeCodex(fakeCodex);
 
   const transport = new StdioClientTransport({
@@ -144,7 +152,7 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
       ...process.env,
       FAKE_CODEX_STATE: fakeState,
       FAKE_CODEX_LOG: fakeLog,
-      FAKE_CODEX_DELAY_MS: "200",
+      FAKE_CODEX_DELAY_MS: "700",
     },
     stderr: "pipe",
   });
@@ -170,17 +178,22 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
         codexCli: fakeCodex,
         executionMode: "current-branch",
         subagentLauncher: "codex-cli",
-        parallelism: 2,
+        parallelism: 5,
       },
     });
 
     assert.equal(started.structuredContent.subagentLauncher, "codex-cli");
     assert.equal(started.structuredContent.requiresHostLaunch, false);
     assert.equal(started.structuredContent.waitedForCompletion, true);
-    assert.equal(started.structuredContent.parallelism, 2);
+    assert.equal(started.structuredContent.parallelism, 5);
     assert.equal(started.structuredContent.status, "succeeded", started.structuredContent.lastError);
-    assert.equal(started.structuredContent.totalAgents, 3);
-    assert.equal(started.structuredContent.succeededAgents, 3);
+    assert.equal(started.structuredContent.model, "gpt-5.5");
+    assert.equal(started.structuredContent.reasoning, "xhigh");
+    assert.equal(started.structuredContent.serviceTier, "fast");
+    assert.equal(started.structuredContent.totalAgents, 7);
+    assert.equal(started.structuredContent.succeededAgents, 7);
+    assert.equal(started.structuredContent.failedAgents, 0);
+    assert.equal(started.structuredContent.runningAgents, 0);
     assert.equal(started.structuredContent.executionMode, "current-branch");
 
     const sessionId = started.structuredContent.sessionId;
@@ -189,20 +202,41 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
       "utf8",
     ));
     assert.equal(meta.status, "succeeded", meta.lastError);
-    assert.equal(meta.totalAgents, 3);
-    assert.equal(meta.succeededAgents, 3);
+    assert.equal(meta.totalAgents, 7);
+    assert.equal(meta.succeededAgents, 7);
+    assert.equal(meta.failedAgents, 0);
+    assert.equal(meta.runningAgents, 0);
     assert.equal(meta.executionMode, "current-branch");
     assert.equal(meta.subagentLauncher, "codex-cli");
     assert.match(await fs.readFile(meta.agents[0].paths.taskSnapshotMd, "utf8"), /Inspect API surface/);
     assert.match(await fs.readFile(meta.agents[0].paths.memorySnapshotMd, "utf8"), /Existing MCP memory/);
     const firstPrompt = await fs.readFile(meta.agents[0].paths.promptMd, "utf8");
+    assert.match(firstPrompt, /Execution model: gpt-5\.5/);
+    assert.match(firstPrompt, /Execution reasoning: xhigh/);
+    assert.match(firstPrompt, /Execution mode: current-branch/);
+    assert.match(firstPrompt, /Subagent launcher: codex-cli/);
+    assert.match(firstPrompt, /Assigned subtask: Inspect API surface/);
     assert.match(firstPrompt, /Shared task memory snapshot:/);
     assert.match(firstPrompt, /Existing MCP memory/);
 
     const state = JSON.parse(await fs.readFile(fakeState, "utf8"));
-    assert.equal(state.maxActive, 2);
+    assert.equal(state.maxActive <= 5, true);
+    assert.equal(state.maxActive > 1, true);
     const invocations = await readJsonLines(fakeLog);
-    assert.equal(invocations.filter((entry) => entry.hasOutputSchema).length, 3);
+    const subagentInvocations = invocations.filter((entry) => entry.hasOutputSchema);
+    assert.equal(subagentInvocations.length, 7);
+    const invocationsByOutput = new Map(subagentInvocations.map((entry) => [entry.outputFile, entry]));
+    for (const agent of meta.agents) {
+      const prompt = await fs.readFile(agent.paths.promptMd, "utf8");
+      assert.equal(invocationsByOutput.get(agent.paths.reportJson)?.prompt, `${prompt}\n`);
+    }
+    for (const entry of subagentInvocations) {
+      assert.equal(entry.model, "gpt-5.5");
+      assert.deepEqual(entry.configs, [
+        "model_reasoning_effort=\"xhigh\"",
+        "service_tier=\"fast\"",
+      ]);
+    }
   } finally {
     await client.close();
   }
@@ -480,7 +514,11 @@ async function initializeGitProject(projectRoot) {
   await run("git", ["commit", "-m", "Initial fixture"], { cwd: projectRoot, check: true });
 }
 
-async function writeReadyAgentDeskTask(projectRoot, taskId, title) {
+async function writeReadyAgentDeskTask(projectRoot, taskId, title, subtasks = [
+  "Inspect API surface",
+  "Validate session launcher",
+  "Summarize verification",
+]) {
   const taskDir = path.join(projectRoot, ".agent-desk", "tasks", taskId);
   const taskMd = path.join(taskDir, "task.md");
   const memoryMd = path.join(taskDir, "memory.md");
@@ -493,9 +531,7 @@ async function writeReadyAgentDeskTask(projectRoot, taskId, title) {
     "Exercise AgentDesk MCP session orchestration.",
     "",
     "## Subtasks",
-    "- [ ] Inspect API surface",
-    "- [ ] Validate session launcher",
-    "- [ ] Summarize verification",
+    ...subtasks.map((subtask) => `- [ ] ${subtask}`),
     "",
   ].join("\n"), "utf8");
   await fs.writeFile(path.join(taskDir, "brief.md"), "Exercise AgentDesk MCP session orchestration.\n", "utf8");
@@ -512,7 +548,7 @@ async function writeReadyAgentDeskTask(projectRoot, taskId, title) {
     updatedAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
     lastError: "",
-    subtaskCount: 3,
+    subtaskCount: subtasks.length,
     paths: {
       taskDir,
       briefMd: path.join(taskDir, "brief.md"),
@@ -634,6 +670,7 @@ await appendInvocation({
   args,
   cwd: process.cwd(),
   model: argAfter("-m", execArgs),
+  configs: valuesAfter("-c", execArgs),
   outputFile,
   hasOutputSchema: Boolean(outputSchemaFile),
   prompt,
@@ -656,6 +693,17 @@ try {
 function argAfter(flag, sourceArgs = args) {
   const index = sourceArgs.indexOf(flag);
   return index === -1 ? "" : String(sourceArgs[index + 1] || "");
+}
+
+function valuesAfter(flag, sourceArgs = args) {
+  const values = [];
+  for (let index = 0; index < sourceArgs.length; index += 1) {
+    if (sourceArgs[index] === flag) {
+      values.push(String(sourceArgs[index + 1] || ""));
+      index += 1;
+    }
+  }
+  return values;
 }
 
 async function readStdin() {
