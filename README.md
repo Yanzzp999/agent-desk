@@ -1,37 +1,47 @@
 # AgentDesk
 
-AgentDesk 是一个以 MCP 和 CLI 为中心的项目编排工具，用来在任意本地项目里
-生成 markdown checklist 任务文件，并通过 Codex CLI 子代理执行这些任务。
+[中文说明](docs/README.zh-CN.md)
 
-它围绕三个概念工作：
+AgentDesk is an MCP and CLI centered project orchestrator. It turns an engineering goal into a markdown checklist task, lets agents claim work before they start, runs Codex subagents, and records the result as an auditable project session.
 
-- `Project`：任意一个本地 git 仓库
-- `Task`：存放在 `<project>/.agent-desk/tasks` 下的 `task.md`
-- `Session`：一次执行运行，会把 `task.md` 里的子任务分发给多个 Codex CLI 子代理
+```mermaid
+flowchart LR
+    goal["Engineering goal"] --> entry{"MCP / CLI entry"}
+    entry --> task["Markdown checklist<br/>task.md"]
 
-AgentDesk 不再提供 GUI、Electron 外壳或本地 Web 应用。当前支持的主要入口是
-MCP stdio server 和 `verunectl`。
+    task -. "Need help?" .-> tools["list / read / claim<br/>task items"]
+    tools -. "Write claim marker" .-> task
 
-![AgentDesk MCP flow](docs/assets/agentdesk-mcp-flow.png)
+    task --> executable{"Executable<br/>checkbox tasks?"}
+    executable -- "No" --> stop["Stop execution<br/>report why fanout is unavailable"]
+    executable -- "Yes" --> session["Start session<br/>dispatch Codex workers"]
+    session --> done{"Agent succeeded?"}
+    done -- "Failed" --> error["Record lastError<br/>in session metadata"]
+    done -- "Succeeded" --> finalize["Finalize<br/>integrate to master"]
+    error --> summary["Regenerate session.md<br/>latest execution summary"]
+    finalize --> summary
+    summary --> user["User reviews<br/>auditable status"]
+```
 
-## MCP 使用方式
+AgentDesk is built around three concepts:
 
-AgentDesk 提供 `agent-desk-mcp` stdio server，可以被 Codex、Claude Desktop 或其他
-MCP 客户端从任意项目目录启动。默认项目根目录是 MCP server 的启动目录，也可以
-通过 `--project` 或 `AGENT_DESK_PROJECT_ROOT` 覆盖。
+- `Project`: any local git repository.
+- `Task`: a markdown task file generated for the project.
+- `Session`: one execution run that fans out checklist items to Codex subagents and tracks their outcomes.
 
-### 推荐安装到 Codex
+## Quick Start
 
-不需要 clone 本仓库时，可以直接通过 npm 包注册 MCP server：
+AgentDesk requires Node.js 22.12 or newer and a working Codex CLI.
+
+Install the MCP server in Codex without cloning this repository:
 
 ```sh
 codex mcp add agent-desk -- npx -y --package @pavee/agent-desk agent-desk-mcp
 ```
 
-这个方式适合多项目使用：调用 MCP tools 时显式传入 `projectRoot`，每个项目都会使用
-自己的 `<project>/task/` 和 `<project>/.agent-desk/` 状态目录。
+This setup is useful across many projects. Pass `projectRoot` when calling MCP tools, and each project gets its own `task/` and `.agent-desk/` state directories.
 
-如果希望某个 MCP server 默认绑定到一个固定项目，可以注册时加上环境变量：
+Bind one MCP server to a fixed project:
 
 ```sh
 codex mcp add agent-desk-my-project \
@@ -39,26 +49,26 @@ codex mcp add agent-desk-my-project \
   -- npx -y --package @pavee/agent-desk agent-desk-mcp
 ```
 
-也可以用一键安装脚本：
+Install with the helper script:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Yanzzp999/agent-desk/master/scripts/install-mcp.sh | sh
 ```
 
-固定项目：
+Install for a fixed project:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Yanzzp999/agent-desk/master/scripts/install-mcp.sh | sh -s -- /absolute/path/to/your/project
 ```
 
-本地开发时，在本仓库执行一次依赖安装，然后把本地 MCP server 注册到 Codex：
+For local development:
 
 ```sh
 npm install
 codex mcp add agent-desk -- node "$(pwd)/bin/agent-desk-mcp.mjs"
 ```
 
-本地开发固定项目：
+For local development with a fixed project:
 
 ```sh
 codex mcp add agent-desk-my-project \
@@ -66,59 +76,46 @@ codex mcp add agent-desk-my-project \
   -- node "$(pwd)/bin/agent-desk-mcp.mjs"
 ```
 
-验证安装：
+Verify the setup:
 
 ```sh
 codex mcp get agent-desk
 npm test
 ```
 
-如果想让本机 shell 也能直接运行 `verunectl` 和 `agent-desk-mcp`，可以在本仓库执行：
+To expose `verunectl` and `agent-desk-mcp` directly in your shell from a local checkout:
 
 ```sh
 npm link
 ```
 
-```json
-{
-  "mcpServers": {
-    "agent-desk": {
-      "command": "node",
-      "args": ["/absolute/path/to/agent-desk/bin/agent-desk-mcp.mjs"],
-      "cwd": "/absolute/path/to/your/project"
-    }
-  }
-}
-```
-
-也可以通过现有 CLI 启动同一个 MCP server：
+You can also start the same MCP server through the local CLI:
 
 ```sh
 ./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
 ```
 
-MCP tools：
+## MCP Tools
 
-- `create_task`：默认在 `<project>/task/` 下创建 `<title-slug>.task.md`
-- `list_tasks`：列出 `<project>/task/` 下的 markdown task 文件
-- `read_task`：读取 `<project>/task/` 下的某个 markdown task 文件
-- `claim_task_items`：为 checklist item 写入可见的 AgentDesk claim 标记，便于多 agent 协作
-- `create_agentdesk_task`：通过 Codex CLI 生成 `.agent-desk/tasks/<taskId>/task.md`；若发现相似 task，默认返回候选项并要求用户确认继续已有 task 还是 `rebuild` 新 task
-- `list_agentdesk_tasks` / `read_agentdesk_task`：查看 AgentDesk control-plane task、生成的 `task.md` 和共享 `memory.md`
-- `start_subagent_session`：启动或准备 AgentDesk subagent session
-- `list_subagent_sessions` / `read_subagent_session`：查看 session 状态、agent 摘要和日志索引
+- `create_task`: creates a markdown task file under `<project>/task/`.
+- `list_tasks`: lists markdown task files under `<project>/task/`.
+- `read_task`: reads a markdown task file under `<project>/task/`.
+- `claim_task_items`: writes visible AgentDesk claim markers onto checklist items so multiple agents can coordinate.
+- `create_agentdesk_task`: uses Codex CLI to generate `.agent-desk/tasks/<taskId>/task.md`; if a similar task already exists, it returns candidates and asks the caller to continue or rebuild.
+- `list_agentdesk_tasks` / `read_agentdesk_task`: inspect control-plane tasks, generated `task.md`, and shared `memory.md`.
+- `start_subagent_session`: starts or prepares an AgentDesk subagent session.
+- `list_subagent_sessions` / `read_subagent_session`: inspect session status, agent summaries, and log indexes.
 
-`start_subagent_session` 由主 agent 先判断是否需要 worktree 隔离。默认
-`executionMode: "auto"`：单个子任务、串行执行，或子任务明确落在互不重叠的文件/模块时，
-AgentDesk 会使用当前 checkout；只有并发任务缺少无冲突证据、或显式选择 `worktree` 时，
-才会创建独立 worktree。
+`start_subagent_session` lets the main agent decide whether worktree isolation is needed. The default `executionMode: "auto"` uses the current checkout for single tasks, serial tasks, or clearly non-overlapping work. AgentDesk creates isolated worktrees only when parallel work lacks conflict evidence or when `worktree` is explicitly requested.
 
-`start_subagent_session` 支持两种 launcher：
+Supported launchers:
 
-- `codex-cli`：由 AgentDesk 直接启动 Codex CLI subagents，遵守 `parallelism` 并发上限；MCP 调用默认阻塞到 session 进入 `succeeded` 或 `failed`，可通过 `waitForCompletion: false` 保留后台启动行为。
-- `codex-app`：生成可追踪的 Codex App launch plan，返回每个 app subagent 的 prompt，并立即把 AgentDesk session 结束为 `succeeded`。由于 MCP server 运行在 Node 进程内，不能直接调用 Codex App 宿主的 `spawn_agent` 工具；调用方需要按返回的 `appLaunchPlan.subagents` 并发启动 Codex App subagents，后续等待由 Codex App 宿主负责，AgentDesk 不会等待或回写 app subagent succeeded counts。
+- `codex-cli`: AgentDesk starts Codex CLI subagents directly, respects the configured `parallelism`, and blocks until the session reaches `succeeded` or `failed` by default. Set `waitForCompletion: false` for a background launch.
+- `codex-app`: AgentDesk writes a tracked Codex App launch plan and returns each app subagent prompt. The Codex App host launches the subagents and waits for them; AgentDesk records the launch plan without pretending to own the host-side execution.
 
-`create_task` 写出的任务始终使用 markdown 待办清单格式：
+## Task Format
+
+`create_task` writes markdown checklist tasks:
 
 ```md
 # Checkout flow
@@ -133,23 +130,23 @@ Implement the checkout flow end to end.
 - [ ] Wire confirmation screen
 ```
 
-## 默认配置
+## Defaults
 
-每次执行 session 默认使用：
+Every session defaults to:
 
-- 模型：`gpt-5.5`
-- 思考深度：`xhigh`
-- 服务层级：`fast`
-- 并发 Codex CLI 子代理数量：`6`
-- 执行模式：`auto`，由主 agent/AgentDesk 判断是否需要 worktree
-- 启动批次大小：`6`
-- 集成分支：`master`
+- Model: `gpt-5.5`
+- Reasoning effort: `xhigh`
+- Service tier: `fast`
+- Codex CLI subagent parallelism: `6`
+- Execution mode: `auto`
+- Launch batch size: `6`
+- Integration branch: `master`
 
-启动 session 时可以配置模型、思考深度和并发 Codex CLI 数量。
+The model, reasoning effort, execution mode, and Codex CLI parallelism can be changed when a session starts.
 
-## 状态目录
+## State Layout
 
-每个项目会把编排状态保存在：
+Each project stores orchestration state in:
 
 ```text
 <project>/task/
@@ -181,42 +178,35 @@ Implement the checkout flow end to end.
           stderr.log
 ```
 
-持久化 git worktree 默认存放在项目目录之外：
+Persistent git worktrees are stored outside the project by default:
 
 ```text
 ~/.agent-desk/worktrees/<project-key>/<sessionId>/<agentId>
 ```
 
-AgentDesk 不会自动删除这些 worktree。
+AgentDesk does not automatically delete those worktrees.
 
-## 快速开始
+## CLI Usage
 
-需要 Node.js 22.12 或更新版本，并且本机可以执行 Codex CLI。
+Create a task:
 
 ```sh
-npm install
 ./scripts/verunectl.sh tasks create \
   --project /absolute/path/to/project \
   --title "Checkout flow" \
   --brief "Implement the checkout flow end to end"
 ```
 
-如果已有 task 与本次需求相似或一致，创建命令会先返回候选 task，不会直接生成新 task。确认要重新生成时加 `--rebuild`；确认继续已有 task 时用候选 `taskId` 启动 session，或加 `--continue-similar` 让命令返回最佳匹配 task。
+If a similar task already exists, the create command returns candidate tasks instead of immediately generating a new one. Use `--rebuild` to force a fresh task, start a session with the returned `taskId`, or use `--continue-similar` to continue the best match.
 
-任务生成会通过 `codex exec` 执行，并把 markdown 写入：
-
-```text
-<project>/.agent-desk/tasks/<taskId>/task.md
-```
-
-列出和查看任务：
+List and inspect tasks:
 
 ```sh
 ./scripts/verunectl.sh tasks list --project /absolute/path/to/project
 ./scripts/verunectl.sh tasks show <taskId> --project /absolute/path/to/project
 ```
 
-启动 Codex 子代理 session：
+Start a Codex subagent session:
 
 ```sh
 ./scripts/verunectl.sh sessions start <taskId> \
@@ -226,7 +216,7 @@ npm install
   --parallel 6
 ```
 
-## CLI 命令
+Available commands:
 
 ```text
 verunectl tasks list [--json]
@@ -239,50 +229,50 @@ verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parall
 verunectl sessions logs <sessionId> <agentId> [--json]
 ```
 
-全局参数：
+Global options:
 
-- `--project DIR`：选择项目根目录
-- `--desk-root DIR`：覆盖 `<project>/.agent-desk`
-- `--worktrees-root DIR`：覆盖持久化 git worktree 根目录
-- `--codex-cli PATH`：覆盖 Codex CLI 可执行文件路径
+- `--project DIR`: choose the project root.
+- `--desk-root DIR`: override `<project>/.agent-desk`.
+- `--worktrees-root DIR`: override the persistent git worktree root.
+- `--codex-cli PATH`: override the Codex CLI executable.
 
-启动 session 的参数：
+Session options:
 
-- `--model MODEL`：选择 Codex 模型，默认 `gpt-5.5`
-- `--reasoning EFFORT`：选择 `low`、`medium`、`high` 或 `xhigh`，默认 `xhigh`
-- `--parallel N`：限制并发 Codex CLI 子代理数量，默认 `6`，最大 `24`
-- `--concurrency N`：`--parallel` 的别名
-- `--codex-count N`：`--parallel` 的别名
-- `--execution-mode MODE`：`auto`、`worktree` 或 `current-branch`，默认 `auto`
-- `--subagent-launcher L`：`current-branch` 下可选 `codex-cli` 或 `codex-app`
+- `--model MODEL`: choose the Codex model. Default: `gpt-5.5`.
+- `--reasoning EFFORT`: choose `low`, `medium`, `high`, or `xhigh`. Default: `xhigh`.
+- `--parallel N`: limit Codex CLI subagent concurrency. Default: `6`, maximum: `24`.
+- `--concurrency N`: alias for `--parallel`.
+- `--codex-count N`: alias for `--parallel`.
+- `--execution-mode MODE`: choose `auto`, `worktree`, or `current-branch`. Default: `auto`.
+- `--subagent-launcher L`: choose `codex-cli` or `codex-app` in `current-branch` mode.
 
-## 运行行为
+## Runtime Behavior
 
-任务生成：
+Task generation:
 
-- 通过 `codex exec` 运行
-- 只把 markdown 写入 `task.md`
-- 生成适合子代理执行的 markdown checkbox 子任务
+- Runs through `codex exec`.
+- Writes markdown only to `task.md`.
+- Produces checkbox subtasks designed for subagent execution.
 
-Session 执行：
+Session execution:
 
-- 从 `task.md` 解析子任务
-- 每个子任务启动一个 Codex CLI 子代理
-- 每个子代理使用独立的 `task.snapshot.md`、`memory.snapshot.md` 和 `prompt.md` 作为启动上下文
-- 每批最多启动 6 个新的子代理
-- 遵守 session 选择的并发 Codex CLI 上限
-- 默认 `auto` 会先判断是否需要 worktree；简单任务、串行任务或明确无冲突的分文件/分模块任务会直接在当前 checkout 实现
-- `worktree` 模式会为每个子代理创建独立 git branch 和 git worktree
-- `worktree` 模式会将完成的子代理分支 rebase 到 `master`
-- `worktree` 模式会通过 fast-forward 更新 `master` 集成完成的工作
+- Parses subtasks from `task.md`.
+- Starts one Codex CLI subagent per subtask.
+- Gives each subagent its own `task.snapshot.md`, `memory.snapshot.md`, and `prompt.md`.
+- Launches at most 6 new subagents per batch.
+- Respects the configured Codex CLI concurrency limit.
+- Uses `auto` mode to avoid worktrees for simple, serial, or clearly non-conflicting work.
+- Creates isolated git branches and worktrees in `worktree` mode.
+- Rebases completed subagent branches onto `master` in `worktree` mode.
+- Fast-forwards `master` to integrate completed work in `worktree` mode.
 
-`current-branch` 模式不创建 worktree；Codex CLI 子代理会在当前 checkout 内留下未暂存改动，供主 agent 或调用方复核。它也可以选择 `--subagent-launcher codex-app`，此时 AgentDesk 会创建 session 和每个 subagent 的 prompt 文件，然后以 `succeeded` 状态结束这次 launch-plan 准备；Codex App 宿主按 launch plan 直接启动 app subagents，并负责后续等待。
+`current-branch` mode does not create worktrees. Codex CLI subagents leave unstaged changes in the current checkout for the main agent or caller to review. With `--subagent-launcher codex-app`, AgentDesk writes the session and subagent prompt files, ends the launch-plan preparation as `succeeded`, and lets the Codex App host launch and wait for app subagents.
 
-每个 control-plane task 都会维护一个 `memory.md`，用于记录跨 session 共享的上下文。AgentDesk 会在启动子代理时把该文件注入 prompt，并在每个 agent 完成或失败后用 `sessionId + agentId` 标记自动更新对应 memory 条目。
+Each control-plane task maintains a `memory.md` file for context shared across sessions. AgentDesk injects it into subagent prompts and updates matching memory entries after each agent succeeds or fails.
 
-`session.md` 会随着子代理完成不断重新生成，所以编排器会留下最新执行摘要。
+`session.md` is regenerated as subagents finish, leaving a current execution summary.
 
-## 验证
+## Verification
 
 ```sh
 npm test

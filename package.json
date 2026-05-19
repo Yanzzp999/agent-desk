@@ -20,7 +20,7 @@
     "scripts/install-mcp.sh",
     "scripts/verunectl.sh",
     "README.md",
-    "docs/assets/agentdesk-mcp-flow.png"
+    "docs/README.zh-CN.md"
   ],
   "bin": {
     "verunectl": "bin/verunectl.mjs",
