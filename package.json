@@ -2,7 +2,7 @@
   "name": "@pavee/agent-desk",
   "version": "0.1.0",
   "description": "Project task and subagent orchestrator for Codex",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "bin/verunectl.mjs",
   "repository": {

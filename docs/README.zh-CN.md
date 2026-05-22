@@ -319,3 +319,7 @@ npm test
 ./scripts/verunectl.sh help
 codex --version
 ```
+
+## 开源协议
+
+AgentDesk 使用 GNU General Public License v3.0 or later（`GPL-3.0-or-later`）发布。详情见 [LICENSE](../LICENSE)。
