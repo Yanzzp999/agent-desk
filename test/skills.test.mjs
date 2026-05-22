@@ -39,6 +39,29 @@ test("run-agentdesk-subagents skill documents bounded concurrency and app handof
   );
 
   assert.match(skill, /maximum concurrency limit/);
+  assert.match(skill, /review the task's complexity/);
+  assert.match(skill, /concurrent-edit conflicts/);
+  assert.match(skill, /Notify the user of the chosen recommendation/);
+  assert.match(skill, /user-selected value/);
   assert.match(skill, /Never launch more subagents at once than `parallelism`/);
   assert.match(skill, /only the Codex App host can actually start them/);
+});
+
+test("project docs describe model-reviewed concurrency recommendations", async () => {
+  const readme = await fs.readFile(path.join(REPO_ROOT, "README.md"), "utf8");
+  const zhReadme = await fs.readFile(path.join(REPO_ROOT, "docs", "README.zh-CN.md"), "utf8");
+  const generateSkill = await fs.readFile(
+    path.join(REPO_ROOT, "skills", "generate-agentdesk-task", "SKILL.md"),
+    "utf8",
+  );
+
+  assert.match(readme, /review task complexity and concurrent-edit conflict risk/);
+  assert.match(readme, /recommended per-batch subagent count/);
+  assert.match(readme, /user can still choose a different concurrency value/);
+  assert.match(zhReadme, /评审 task 复杂度和并发编辑冲突风险/);
+  assert.match(zhReadme, /推荐的每批 subagent 数量/);
+  assert.match(zhReadme, /用户仍可在配置上限内自行选择不同的并发量/);
+  assert.match(generateSkill, /review task complexity and concurrency-conflict risk/);
+  assert.match(generateSkill, /recommended per-batch subagent count/);
+  assert.match(generateSkill, /later user-selected concurrency/);
 });

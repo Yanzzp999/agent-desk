@@ -123,7 +123,8 @@ npm link
 - `skills/generate-agentdesk-task/SKILL.md`：把显式用户需求转成 AgentDesk control-plane task。它会先审查需求是否足以生成可执行的 `task.md`；如果目标、范围、验收或关键约束等阻塞信息缺失，会先反问用户补充，再创建 task。
 - `skills/run-agentdesk-subagents/SKILL.md`：基于已有 AgentDesk task 启动或协调 Codex CLI / Codex App 子代理，并把配置的 parallelism 视为最大并发上限。
 
-两个 skill 都只在显式点名时使用。它们会让 AgentDesk 保持聚焦在 `task.md`、MCP/CLI 工作流、`gpt-5.5`、`xhigh`、`fast`、每批 6 个子代理，以及集成到 `master`。
+两个 skill 都只在显式点名时使用。它们会让 AgentDesk 保持聚焦在 `task.md`、MCP/CLI 工作流、`gpt-5.5`、`xhigh`、`fast`、每批最多 6 个子代理，以及集成到 `master`。
+在执行子代理前，协调模型应先评审 task 复杂度和并发编辑冲突风险，决定并告知用户推荐的每批 subagent 数量；之后用户仍可在配置上限内自行选择不同的并发量。
 
 MCP tools：
 
@@ -139,7 +140,8 @@ MCP tools：
 `start_subagent_session` 由主 agent 先判断是否需要 worktree 隔离。默认
 `executionMode: "auto"`：单个子任务、串行执行，或子任务明确落在互不重叠的文件/模块时，
 AgentDesk 会使用当前 checkout；只有并发任务缺少无冲突证据、或显式选择 `worktree` 时，
-才会创建独立 worktree。
+才会创建独立 worktree。协调模型也应先评审 task 复杂度与并发冲突风险，再决定每批启动多少
+subagent；模型会把这个推荐通知用户，用户后续仍可在配置上限内自行指定并发量。
 
 `start_subagent_session` 支持两种 launcher：
 

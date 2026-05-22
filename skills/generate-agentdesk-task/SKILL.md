@@ -31,18 +31,20 @@ Do not ask for extra detail when the missing information is non-blocking or the 
 
 1. Confirm the project root from the current workspace unless the user provides one.
 2. Review task brief completeness using the checklist above; ask the user for missing blocking details before generating the task.
-3. Prefer MCP:
+3. When the task is intended for subagent execution, include enough structure in the generated brief/task notes for the coordinating model to assess task complexity, file ownership, and likely concurrent-edit conflicts before choosing a per-batch subagent count.
+4. Prefer MCP:
    - Call `create_agentdesk_task` with `projectRoot`, `title` when known, and a concrete Chinese `brief`.
    - Then call `read_agentdesk_task` until the task reaches `ready` or `failed`.
-4. Fallback to CLI when the MCP tool is unavailable:
+5. Fallback to CLI when the MCP tool is unavailable:
    - Run `./scripts/verunectl.sh tasks create --project <projectRoot> --title "<title>" --brief "<brief>" --json`, using a Chinese title and brief by default.
    - Use `./scripts/verunectl.sh tasks show <taskId> --project <projectRoot> --json` to inspect the generated task.
-5. Verify the generated task has executable checklist subtasks.
-6. Report the `taskId`, status, task file path, and any failure message.
+6. Verify the generated task has executable checklist subtasks.
+7. Report the `taskId`, status, task file path, and any failure message.
 
 ## Guardrails
 
 - Keep AgentDesk centered on `task.md`; do not reintroduce PRD JSON, Gemini CLI, or Claude Code compatibility flows.
 - Generate user-facing task content in Chinese by default, including titles, briefs, checklist items, task notes, and final summaries.
-- Prefer explicit session defaults in user-facing notes: `gpt-5.5`, `xhigh`, `fast`, batches of 6, integration into `master`.
+- Prefer explicit session defaults in user-facing notes: `gpt-5.5`, `xhigh`, `fast`, batches of up to 6, integration into `master`.
+- Make clear that before subagent execution, the coordinating model should review task complexity and concurrency-conflict risk, decide a recommended per-batch subagent count within the configured cap, notify the user of that recommendation, and respect any later user-selected concurrency.
 - If task generation fails, preserve the task directory and summarize `stdout.log` / `stderr.log` rather than deleting artifacts.

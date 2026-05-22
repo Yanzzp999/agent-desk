@@ -12,6 +12,13 @@ Do not use this skill unless the user explicitly names `$run-agentdesk-subagents
 Use this skill to execute an existing AgentDesk task with concurrent subagents.
 Treat configured parallelism as the maximum concurrency limit, not as a required number of subagents to launch. The model may decide how many subagents are useful for the task, and the user may request any concurrency from 1 through the configured maximum.
 
+## Concurrency Planning
+
+Before starting a session, review the task's complexity, subtask count, file/module ownership, and likely concurrent-edit conflicts.
+Use that review to choose a recommended per-batch subagent count and `parallelism` value within the configured cap instead of always filling every available slot.
+Notify the user of the chosen recommendation and the reason for it before or as the session starts.
+If the user later chooses a different concurrency value, respect the user-selected value as long as it is within `1..maxParallelism`.
+
 ## Choose Launcher
 
 - `codex-cli`: AgentDesk starts Codex CLI subagents itself. Use for automated execution, worktree mode, branch integration, and persistent session logs.
@@ -23,7 +30,7 @@ Treat configured parallelism as the maximum concurrency limit, not as a required
 2. Call `start_subagent_session` with:
    - `taskId`
    - `subagentLauncher`: `codex-cli` or `codex-app`
-   - `parallelism`: the requested maximum concurrency, defaulting to 6
+   - `parallelism`: the recommended or user-selected maximum concurrency, defaulting to 6
    - `model`: default `gpt-5.5`
    - `reasoning`: default `xhigh`
 3. Never launch more subagents at once than `parallelism`. Let the model/task plan decide the useful number of subagents and batches within that cap; if the user specifies a concurrency value, it must be between 1 and the configured maximum.

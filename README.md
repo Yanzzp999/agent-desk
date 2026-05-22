@@ -102,7 +102,8 @@ The package ships optional Codex skill definitions under `skills/`:
 - `skills/generate-agentdesk-task/SKILL.md`: turns an explicit user request into an AgentDesk control-plane task. It reviews whether the request is complete enough for an executable `task.md` and asks a follow-up question before task creation when blocking details are missing.
 - `skills/run-agentdesk-subagents/SKILL.md`: runs or coordinates an existing AgentDesk task with Codex CLI or Codex App subagents, treating configured parallelism as a maximum concurrency cap.
 
-Both skills are explicit-invocation only. They keep AgentDesk focused on `task.md`, the MCP/CLI workflow, `gpt-5.5`, `xhigh`, `fast`, batches of 6, and integration into `master`.
+Both skills are explicit-invocation only. They keep AgentDesk focused on `task.md`, the MCP/CLI workflow, `gpt-5.5`, `xhigh`, `fast`, batches of up to 6, and integration into `master`.
+Before subagent execution, the coordinating model should review task complexity and concurrent-edit conflict risk, choose and tell the user a recommended per-batch subagent count, and still let the user override the concurrency later within the configured maximum.
 
 ## MCP Tools
 
@@ -115,7 +116,7 @@ Both skills are explicit-invocation only. They keep AgentDesk focused on `task.m
 - `start_subagent_session`: starts or prepares an AgentDesk subagent session.
 - `list_subagent_sessions` / `read_subagent_session`: inspect session status, agent summaries, and log indexes.
 
-`start_subagent_session` lets the main agent decide whether worktree isolation is needed. The default `executionMode: "auto"` uses the current checkout for single tasks, serial tasks, or clearly non-overlapping work. AgentDesk creates isolated worktrees only when parallel work lacks conflict evidence or when `worktree` is explicitly requested.
+`start_subagent_session` lets the main agent decide whether worktree isolation is needed. The default `executionMode: "auto"` uses the current checkout for single tasks, serial tasks, or clearly non-overlapping work. AgentDesk creates isolated worktrees only when parallel work lacks conflict evidence or when `worktree` is explicitly requested. The coordinating model should also assess task complexity and conflict risk before choosing how many subagents to launch per batch; after it announces that recommendation, the user can still choose a different concurrency value within the configured maximum.
 
 Supported launchers:
 
