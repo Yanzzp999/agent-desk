@@ -30,7 +30,8 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "secret-scan": "gitleaks git --redact --verbose ."
   },
   "engines": {
     "node": ">=22.12.0"
