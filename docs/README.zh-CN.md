@@ -116,6 +116,15 @@ npm link
 ./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
 ```
 
+## 内置 Codex Skills
+
+这个包会随 npm 发布两个可选 Codex skill 定义，位于 `skills/`：
+
+- `skills/generate-agentdesk-task/SKILL.md`：把显式用户需求转成 AgentDesk control-plane task。它会先审查需求是否足以生成可执行的 `task.md`；如果目标、范围、验收或关键约束等阻塞信息缺失，会先反问用户补充，再创建 task。
+- `skills/run-agentdesk-subagents/SKILL.md`：基于已有 AgentDesk task 启动或协调 Codex CLI / Codex App 子代理，并把配置的 parallelism 视为最大并发上限。
+
+两个 skill 都只在显式点名时使用。它们会让 AgentDesk 保持聚焦在 `task.md`、MCP/CLI 工作流、`gpt-5.5`、`xhigh`、`fast`、每批 6 个子代理，以及集成到 `master`。
+
 MCP tools：
 
 - `create_task`：默认在 `<project>/task/` 下创建 `<title-slug>.task.md`

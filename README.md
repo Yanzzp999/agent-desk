@@ -95,6 +95,15 @@ You can also start the same MCP server through the local CLI:
 ./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
 ```
 
+## Bundled Codex Skills
+
+The package ships optional Codex skill definitions under `skills/`:
+
+- `skills/generate-agentdesk-task/SKILL.md`: turns an explicit user request into an AgentDesk control-plane task. It reviews whether the request is complete enough for an executable `task.md` and asks a follow-up question before task creation when blocking details are missing.
+- `skills/run-agentdesk-subagents/SKILL.md`: runs or coordinates an existing AgentDesk task with Codex CLI or Codex App subagents, treating configured parallelism as a maximum concurrency cap.
+
+Both skills are explicit-invocation only. They keep AgentDesk focused on `task.md`, the MCP/CLI workflow, `gpt-5.5`, `xhigh`, `fast`, batches of 6, and integration into `master`.
+
 ## MCP Tools
 
 - `create_task`: creates a markdown task file under `<project>/task/`.
