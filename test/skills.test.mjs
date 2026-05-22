@@ -11,13 +11,27 @@ test("npm package includes bundled Codex skills", async () => {
   const pkg = JSON.parse(await fs.readFile(path.join(REPO_ROOT, "package.json"), "utf8"));
   assert.ok(pkg.files.includes("skills/"));
 
-  for (const skillName of ["generate-agentdesk-task", "run-agentdesk-subagents"]) {
+  for (const skillName of ["claim-agentdesk-task", "generate-agentdesk-task", "run-agentdesk-subagents"]) {
     const skillPath = path.join(REPO_ROOT, "skills", skillName, "SKILL.md");
     const text = await fs.readFile(skillPath, "utf8");
     assert.match(text, new RegExp(`name: ${skillName}`));
     assert.match(text, /Explicit Invocation Only/);
     assert.match(text, /Do not trigger it from task content alone/);
   }
+});
+
+test("claim-agentdesk-task skill documents atomic claim and completion workflow", async () => {
+  const skill = await fs.readFile(
+    path.join(REPO_ROOT, "skills", "claim-agentdesk-task", "SKILL.md"),
+    "utf8",
+  );
+
+  assert.match(skill, /claim_next_task_item/);
+  assert.match(skill, /complete_task_items/);
+  assert.match(skill, /assignee/);
+  assert.match(skill, /sessionId/);
+  assert.match(skill, /implement only that item/);
+  assert.match(skill, /Never start implementation before `claim_next_task_item` succeeds/);
 });
 
 test("generate-agentdesk-task skill requires task brief completeness review", async () => {
@@ -58,9 +72,13 @@ test("project docs describe model-reviewed concurrency recommendations", async (
   assert.match(readme, /review task complexity and concurrent-edit conflict risk/);
   assert.match(readme, /recommended per-batch subagent count/);
   assert.match(readme, /user can still choose a different concurrency value/);
+  assert.match(readme, /claim_next_task_item/);
+  assert.match(readme, /agent -> sessionId/);
   assert.match(zhReadme, /评审 task 复杂度和并发编辑冲突风险/);
   assert.match(zhReadme, /推荐的每批 subagent 数量/);
   assert.match(zhReadme, /用户仍可在配置上限内自行选择不同的并发量/);
+  assert.match(zhReadme, /claim_next_task_item/);
+  assert.match(zhReadme, /agent -> sessionId/);
   assert.match(generateSkill, /review task complexity and concurrency-conflict risk/);
   assert.match(generateSkill, /recommended per-batch subagent count/);
   assert.match(generateSkill, /later user-selected concurrency/);

@@ -338,7 +338,7 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   }
 });
 
-test("verunectl allocates unique task and session ids under concurrent starts", { timeout: 30000 }, async () => {
+test("verunectl allocates unique task ids and blocks duplicate active sessions", { timeout: 30000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-race-"));
   const projectRoot = path.join(root, "project");
   const worktreesRoot = path.join(root, "worktrees");
@@ -457,11 +457,13 @@ test("verunectl allocates unique task and session ids under concurrent starts", 
       "--json",
     ], { cwd: REPO_ROOT, env }),
   ]);
-  for (const result of sessionStarts) {
-    assert.equal(result.exitCode, 0, result.stderr);
-  }
-  const sessionIds = sessionStarts.map((result) => JSON.parse(result.stdout).sessionId);
-  assert.equal(new Set(sessionIds).size, 2);
+  const successfulStarts = sessionStarts.filter((result) => result.exitCode === 0);
+  const blockedStarts = sessionStarts.filter((result) => result.exitCode !== 0);
+  assert.equal(successfulStarts.length, 1);
+  assert.equal(blockedStarts.length, 1);
+  assert.match(blockedStarts[0].stderr, /active session/);
+
+  const sessionIds = successfulStarts.map((result) => JSON.parse(result.stdout).sessionId);
   assert.deepEqual(
     (await fs.readdir(path.join(projectRoot, ".agent-desk", "sessions"))).sort(),
     sessionIds.toSorted(),
@@ -471,12 +473,19 @@ test("verunectl allocates unique task and session ids under concurrent starts", 
     path.join(projectRoot, ".agent-desk", "sessions", sessionId, "meta.json"),
     (meta) => ["succeeded", "failed"].includes(meta.status) ? meta : null,
   )));
-  for (const session of sessions) {
-    assert.equal(session.status, "succeeded", session.lastError);
-    assert.equal(session.executionMode, "current-branch");
-    assert.equal(session.succeededAgents, 3);
-    assert.equal(session.failedAgents, 0);
-  }
+  const session = sessions[0];
+  assert.equal(session.status, "succeeded", session.lastError);
+  assert.equal(session.executionMode, "current-branch");
+  assert.equal(session.succeededAgents, 3);
+  assert.equal(session.failedAgents, 0);
+
+  const finalTaskMeta = JSON.parse(await fs.readFile(
+    path.join(projectRoot, ".agent-desk", "tasks", baseTaskId, "meta.json"),
+    "utf8",
+  ));
+  assert.equal(finalTaskMeta.status, "succeeded");
+  assert.equal(finalTaskMeta.activeSessionId, "");
+  assert.equal(finalTaskMeta.activeSessionStatus, "");
 });
 
 async function initializeGitProject(projectRoot) {

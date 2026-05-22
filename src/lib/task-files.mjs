@@ -1,10 +1,11 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
 export const DEFAULT_TASK_DIRNAME = "task";
 export const DEFAULT_TASK_FILE_SUFFIX = ".task.md";
-const CLAIM_LINE_RE = /^\s*[-*+]\s+AgentDesk claim:\s+`([^`]+)`\s+at\s+([^;]+?)(?:;\s+note:\s+(.+?))?\s*$/;
+const CLAIM_LINE_RE = /^\s*[-*+]\s+AgentDesk claim:\s+`([^`]+)`\s+at\s+([^;]+?)(.*)$/;
 
 export async function createTaskMarkdownFile(options = {}) {
   const projectRoot = resolveProjectRoot(options.projectRoot);
@@ -92,38 +93,143 @@ export async function claimTaskMarkdownItems(options = {}) {
       || "agent",
   );
   const claimedAt = normalizeClaimedAt(options.claimedAt);
+  const sessionId = normalizeClaimSessionId(options.sessionId || options.session);
   const note = normalizeClaimNote(options.note);
   const force = Boolean(options.force);
   const resolved = await resolveTaskMarkdownFile(taskDir, taskName);
-  const markdown = await fs.readFile(resolved.filePath, "utf8");
-  const summary = summarizeTaskMarkdown(markdown, resolved.filename);
-  if (summary.items.length === 0) {
-    throw new Error(`task has no checklist items: ${resolved.filename}`);
-  }
 
-  const selected = selectTaskItems(summary.items, selectors);
-  const completed = selected.filter((item) => item.checked);
-  if (completed.length > 0) {
-    throw new Error(`cannot claim completed item(s): ${completed.map((item) => item.index).join(", ")}`);
-  }
-  const conflicts = selected.filter((item) => item.claimedBy && item.claimedBy !== assignee);
-  if (conflicts.length > 0 && !force) {
-    throw new Error(`item(s) already claimed: ${conflicts.map((item) => `${item.index} by ${item.claimedBy}`).join(", ")}`);
-  }
+  return withTaskMarkdownLock(projectRoot, resolved.filePath, async () => {
+    const markdown = await fs.readFile(resolved.filePath, "utf8");
+    const summary = summarizeTaskMarkdown(markdown, resolved.filename);
+    if (summary.items.length === 0) {
+      throw new Error(`task has no checklist items: ${resolved.filename}`);
+    }
 
-  const updatedMarkdown = applyTaskItemClaims(markdown, selected, { assignee, claimedAt, note });
-  await fs.writeFile(resolved.filePath, updatedMarkdown, "utf8");
-  const updatedSummary = summarizeTaskMarkdown(updatedMarkdown, resolved.filename);
-  const claimed = selected.map((item) => updatedSummary.items[item.index - 1]).filter(Boolean);
-  return {
-    projectRoot,
-    taskDir,
-    filePath: resolved.filePath,
-    filename: resolved.filename,
-    ...updatedSummary,
-    markdown: updatedMarkdown,
-    claimed,
-  };
+    const selected = selectTaskItems(summary.items, selectors);
+    const completed = selected.filter((item) => item.checked);
+    if (completed.length > 0) {
+      throw new Error(`cannot claim completed item(s): ${completed.map((item) => item.index).join(", ")}`);
+    }
+    const conflicts = selected.filter((item) => isClaimConflict(item, assignee, sessionId));
+    if (conflicts.length > 0 && !force) {
+      throw new Error(`item(s) already claimed: ${conflicts.map(formatClaimConflict).join(", ")}`);
+    }
+
+    const updatedMarkdown = applyTaskItemClaims(markdown, selected, {
+      assignee,
+      claimedAt,
+      sessionId,
+      note,
+    });
+    await fs.writeFile(resolved.filePath, updatedMarkdown, "utf8");
+    const updatedSummary = summarizeTaskMarkdown(updatedMarkdown, resolved.filename);
+    const claimed = selected.map((item) => updatedSummary.items[item.index - 1]).filter(Boolean);
+    return {
+      projectRoot,
+      taskDir,
+      filePath: resolved.filePath,
+      filename: resolved.filename,
+      ...updatedSummary,
+      markdown: updatedMarkdown,
+      claimed,
+    };
+  });
+}
+
+export async function claimNextTaskMarkdownItem(options = {}) {
+  const projectRoot = resolveProjectRoot(options.projectRoot);
+  const taskDir = path.resolve(projectRoot, options.taskDir || DEFAULT_TASK_DIRNAME);
+  const taskName = requiredString(options.taskName || options.filename || options.file, "taskName");
+  const assignee = normalizeAssignee(
+    options.assignee
+      || options.agent
+      || process.env.AGENT_DESK_AGENT_NAME
+      || process.env.CODEX_SESSION_ID,
+  );
+  const sessionId = requiredClaimSessionId(options.sessionId || options.session || process.env.CODEX_SESSION_ID);
+  const claimedAt = normalizeClaimedAt(options.claimedAt);
+  const note = normalizeClaimNote(options.note || "implementing");
+  const resolved = await resolveTaskMarkdownFile(taskDir, taskName);
+
+  return withTaskMarkdownLock(projectRoot, resolved.filePath, async () => {
+    const markdown = await fs.readFile(resolved.filePath, "utf8");
+    const summary = summarizeTaskMarkdown(markdown, resolved.filename);
+    if (summary.items.length === 0) {
+      throw new Error(`task has no checklist items: ${resolved.filename}`);
+    }
+
+    const next = summary.items.find((item) => !item.checked && !item.claimedBy);
+    if (!next) {
+      return {
+        projectRoot,
+        taskDir,
+        filePath: resolved.filePath,
+        filename: resolved.filename,
+        ...summary,
+        markdown,
+        hasWork: false,
+        claimed: [],
+      };
+    }
+
+    const updatedMarkdown = applyTaskItemClaims(markdown, [next], {
+      assignee,
+      claimedAt,
+      sessionId,
+      note,
+    });
+    await fs.writeFile(resolved.filePath, updatedMarkdown, "utf8");
+    const updatedSummary = summarizeTaskMarkdown(updatedMarkdown, resolved.filename);
+    const claimed = [updatedSummary.items[next.index - 1]].filter(Boolean);
+    return {
+      projectRoot,
+      taskDir,
+      filePath: resolved.filePath,
+      filename: resolved.filename,
+      ...updatedSummary,
+      markdown: updatedMarkdown,
+      hasWork: true,
+      claimed,
+    };
+  });
+}
+
+export async function completeTaskMarkdownItems(options = {}) {
+  const projectRoot = resolveProjectRoot(options.projectRoot);
+  const taskDir = path.resolve(projectRoot, options.taskDir || DEFAULT_TASK_DIRNAME);
+  const taskName = requiredString(options.taskName || options.filename || options.file, "taskName");
+  const selectors = normalizeClaimSelectors(options.items || options.item || options.taskItems);
+  const assignee = normalizeAssignee(options.assignee || options.agent || process.env.AGENT_DESK_AGENT_NAME);
+  const sessionId = requiredClaimSessionId(options.sessionId || options.session || process.env.CODEX_SESSION_ID);
+  const resolved = await resolveTaskMarkdownFile(taskDir, taskName);
+
+  return withTaskMarkdownLock(projectRoot, resolved.filePath, async () => {
+    const markdown = await fs.readFile(resolved.filePath, "utf8");
+    const summary = summarizeTaskMarkdown(markdown, resolved.filename);
+    if (summary.items.length === 0) {
+      throw new Error(`task has no checklist items: ${resolved.filename}`);
+    }
+
+    const selected = selectTaskItems(summary.items, selectors);
+    const unauthorized = selected.filter((item) => !isClaimOwnedBy(item, assignee, sessionId));
+    if (unauthorized.length > 0) {
+      throw new Error(`item(s) not claimed by ${assignee}/${sessionId}: ${unauthorized.map(formatClaimConflict).join(", ")}`);
+    }
+
+    const updatedMarkdown = applyTaskItemCompletion(markdown, selected);
+    await fs.writeFile(resolved.filePath, updatedMarkdown, "utf8");
+    const updatedSummary = summarizeTaskMarkdown(updatedMarkdown, resolved.filename);
+    const completed = selected.map((item) => updatedSummary.items[item.index - 1]).filter(Boolean);
+    return {
+      projectRoot,
+      taskDir,
+      filePath: resolved.filePath,
+      filename: resolved.filename,
+      ...updatedSummary,
+      markdown: updatedMarkdown,
+      completed,
+    };
+  });
 }
 
 export function renderTaskMarkdown(options = {}) {
@@ -293,6 +399,7 @@ function extractChecklistItems(markdown) {
         checked: itemMatch[2].toLowerCase() === "x",
         claimedBy: "",
         claimedAt: "",
+        claimSessionId: "",
         claimNote: "",
         claimLine: 0,
         claimLineIndex: -1,
@@ -307,6 +414,7 @@ function extractChecklistItems(markdown) {
     if (claim && !current.claimedBy) {
       current.claimedBy = claim.assignee;
       current.claimedAt = claim.claimedAt;
+      current.claimSessionId = claim.sessionId;
       current.claimNote = claim.note;
       current.claimLine = index + 1;
       current.claimLineIndex = index;
@@ -330,6 +438,7 @@ function extractChecklistItemsForEditing(markdown) {
         title: itemMatch[3].trim(),
         checked: itemMatch[2].toLowerCase() === "x",
         claimedBy: "",
+        claimSessionId: "",
         claimLineIndex: -1,
       };
       items.push(current);
@@ -341,6 +450,7 @@ function extractChecklistItemsForEditing(markdown) {
     const claim = parseClaimLine(line);
     if (claim && !current.claimedBy) {
       current.claimedBy = claim.assignee;
+      current.claimSessionId = claim.sessionId;
       current.claimLineIndex = index;
     }
   }
@@ -352,10 +462,14 @@ function parseClaimLine(line) {
   if (!match) {
     return null;
   }
+  const suffix = match[3] || "";
+  const sessionMatch = suffix.match(/;\s*session:\s*`([^`]+)`/);
+  const noteMatch = suffix.match(/;\s*note:\s*(.+?)(?=;\s*[A-Za-z]+:|$)/);
   return {
     assignee: match[1],
     claimedAt: match[2].trim(),
-    note: (match[3] || "").trim(),
+    sessionId: (sessionMatch?.[1] || "").trim(),
+    note: (noteMatch?.[1] || "").trim(),
   };
 }
 
@@ -425,9 +539,43 @@ function applyTaskItemClaims(markdown, selectedItems, claim) {
   return lines.join("\n");
 }
 
+function applyTaskItemCompletion(markdown, selectedItems) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const editableItems = extractChecklistItemsForEditing(markdown);
+  const selectedIndexes = new Set(selectedItems.map((item) => item.index));
+  for (const item of editableItems.filter((candidate) => selectedIndexes.has(candidate.index))) {
+    lines[item.lineIndex] = lines[item.lineIndex].replace(
+      /^(\s*(?:[-*+]|\d+[.)])\s+)\[[ xX]\](\s+.+?)\s*$/,
+      "$1[x]$2",
+    );
+  }
+  return lines.join("\n");
+}
+
 function renderClaimLine(indent, claim) {
+  const session = claim.sessionId ? `; session: \`${claim.sessionId}\`` : "";
   const note = claim.note ? `; note: ${claim.note}` : "";
-  return `${indent}  - AgentDesk claim: \`${claim.assignee}\` at ${claim.claimedAt}${note}`;
+  return `${indent}  - AgentDesk claim: \`${claim.assignee}\` at ${claim.claimedAt}${session}${note}`;
+}
+
+function isClaimConflict(item, assignee, sessionId) {
+  if (!item.claimedBy) {
+    return false;
+  }
+  if (item.claimedBy !== assignee) {
+    return true;
+  }
+  return Boolean(sessionId && item.claimSessionId && item.claimSessionId !== sessionId);
+}
+
+function isClaimOwnedBy(item, assignee, sessionId) {
+  return item.claimedBy === assignee && item.claimSessionId === sessionId;
+}
+
+function formatClaimConflict(item) {
+  const owner = item.claimedBy || "unclaimed";
+  const session = item.claimSessionId ? `/${item.claimSessionId}` : "";
+  return `${item.index} by ${owner}${session}`;
 }
 
 function normalizeAssignee(value) {
@@ -459,6 +607,21 @@ function normalizeClaimNote(value) {
     .replace(/\s+/g, " ");
 }
 
+function normalizeClaimSessionId(value) {
+  return normalizeOptionalString(value)
+    .replace(/[`<>\r\n]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function requiredClaimSessionId(value) {
+  const sessionId = normalizeClaimSessionId(value);
+  if (!sessionId) {
+    throw new Error("sessionId is required");
+  }
+  return sessionId;
+}
+
 function normalizeTitle(value) {
   return requiredString(value, "title").replace(/\s+/g, " ").trim();
 }
@@ -485,6 +648,54 @@ function countChecklistItems(markdown) {
     .split(/\r?\n/)
     .filter((line) => /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s+/.test(line))
     .length;
+}
+
+async function withTaskMarkdownLock(projectRoot, filePath, callback) {
+  const lock = await acquireLock(taskMarkdownLockPath(projectRoot, filePath));
+  try {
+    return await callback();
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
+function taskMarkdownLockPath(projectRoot, filePath) {
+  const hash = crypto.createHash("sha256").update(path.resolve(filePath)).digest("hex").slice(0, 16);
+  return path.join(projectRoot, ".agent-desk", "locks", `task-markdown-${hash}.lock`);
+}
+
+async function acquireLock(lockPath) {
+  const started = Date.now();
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  while (true) {
+    try {
+      await fs.mkdir(lockPath, { recursive: false });
+      await fs.writeFile(path.join(lockPath, "owner.json"), JSON.stringify({
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+      }, null, 2), "utf8");
+      return { lockPath };
+    } catch (error) {
+      if (error.code !== "EEXIST") {
+        throw error;
+      }
+      if (Date.now() - started > 30 * 60 * 1000) {
+        throw new Error(`timed out waiting for lock: ${lockPath}`);
+      }
+      await sleep(100);
+    }
+  }
+}
+
+async function releaseLock(lock) {
+  if (!lock?.lockPath) {
+    return;
+  }
+  await fs.rm(lock.lockPath, { recursive: true, force: true });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function uniqueStrings(values) {

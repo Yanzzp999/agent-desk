@@ -118,12 +118,13 @@ npm link
 
 ## 内置 Codex Skills
 
-这个包会随 npm 发布两个可选 Codex skill 定义，位于 `skills/`：
+这个包会随 npm 发布三个可选 Codex skill 定义，位于 `skills/`：
 
 - `skills/generate-agentdesk-task/SKILL.md`：把显式用户需求转成 AgentDesk control-plane task。它会先审查需求是否足以生成可执行的 `task.md`；如果目标、范围、验收或关键约束等阻塞信息缺失，会先反问用户补充，再创建 task。
 - `skills/run-agentdesk-subagents/SKILL.md`：基于已有 AgentDesk task 启动或协调 Codex CLI / Codex App 子代理，并把配置的 parallelism 视为最大并发上限。
+- `skills/claim-agentdesk-task/SKILL.md`：让 agent 从 markdown task 中原子领取一个未完成 checklist item，只实现这一项，并用同一个 agent/session 身份完成它。
 
-两个 skill 都只在显式点名时使用。它们会让 AgentDesk 保持聚焦在 `task.md`、MCP/CLI 工作流、`gpt-5.5`、`xhigh`、`fast`、每批最多 6 个子代理，以及集成到 `master`。
+所有内置 skill 都只在显式点名时使用。它们会让 AgentDesk 保持聚焦在 `task.md`、MCP/CLI 工作流、`gpt-5.5`、`xhigh`、`fast`、每批最多 6 个子代理，以及集成到 `master`。
 在执行子代理前，协调模型应先评审 task 复杂度和并发编辑冲突风险，决定并告知用户推荐的每批 subagent 数量；之后用户仍可在配置上限内自行选择不同的并发量。
 
 MCP tools：
@@ -131,7 +132,9 @@ MCP tools：
 - `create_task`：默认在 `<project>/task/` 下创建 `<title-slug>.task.md`
 - `list_tasks`：列出 `<project>/task/` 下的 markdown task 文件
 - `read_task`：读取 `<project>/task/` 下的某个 markdown task 文件
-- `claim_task_items`：为 checklist item 写入可见的 AgentDesk claim 标记，便于多 agent 协作
+- `claim_task_items`：为指定 checklist item 写入可见的 AgentDesk claim 标记，便于多 agent 协作
+- `claim_next_task_item`：原子领取第一个未完成且未被领取的 checklist item，并把正在实现的 `agent -> sessionId` 写进 `task.md`
+- `complete_task_items`：原子勾选同一个 assignee 和 session id 已领取的 item
 - `create_agentdesk_task`：通过 Codex CLI 生成 `.agent-desk/tasks/<taskId>/task.md`；若发现相似 task，默认返回候选项并要求用户确认继续已有 task 还是 `rebuild` 新 task
 - `list_agentdesk_tasks` / `read_agentdesk_task`：查看 AgentDesk control-plane task、生成的 `task.md` 和共享 `memory.md`
 - `start_subagent_session`：启动或准备 AgentDesk subagent session
@@ -142,6 +145,8 @@ MCP tools：
 AgentDesk 会使用当前 checkout；只有并发任务缺少无冲突证据、或显式选择 `worktree` 时，
 才会创建独立 worktree。协调模型也应先评审 task 复杂度与并发冲突风险，再决定每批启动多少
 subagent；模型会把这个推荐通知用户，用户后续仍可在配置上限内自行指定并发量。
+
+AgentDesk 会在启动前把 active session 记录到 task meta。只要 `activeSessionId` 仍存在，同一个 task 的第二个 session 会被拒绝，除非调用方显式使用重复 session 覆盖参数。
 
 `start_subagent_session` 支持两种 launcher：
 
@@ -162,6 +167,15 @@ Implement the checkout flow end to end.
 - [ ] Add payment state model
 - [ ] Wire confirmation screen
 ```
+
+领取某个 item 时，AgentDesk 会把可见归属标记写在 checkbox 下方：
+
+```md
+- [ ] Implement API handler
+  - AgentDesk claim: `agent-alpha` at 2026-05-22T10:00:00.000Z; session: `session-abc`; note: implementing
+```
+
+agent 应在实现前调用 `claim_next_task_item`，验证通过后调用 `complete_task_items`。这样人直接读 `task.md` 就能看到哪个 agent/session 正在实现，同时避免多个独立 agent 静默实现同一项。
 
 ## 默认配置
 
@@ -265,7 +279,7 @@ verunectl tasks create [--title TEXT] [--brief TEXT] [--rebuild|--continue-simil
 verunectl mcp [--project DIR]
 verunectl sessions list [--task <taskId>] [--json]
 verunectl sessions show <sessionId> [--json]
-verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--json]
+verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--allow-duplicate-session] [--json]
 verunectl sessions logs <sessionId> <agentId> [--json]
 ```
 
@@ -285,6 +299,8 @@ verunectl sessions logs <sessionId> <agentId> [--json]
 - `--codex-count N`：`--parallel` 的别名
 - `--execution-mode MODE`：`auto`、`worktree` 或 `current-branch`，默认 `auto`
 - `--subagent-launcher L`：`current-branch` 下可选 `codex-cli` 或 `codex-app`
+- `--allow-duplicate-session`：覆盖 task 的 active-session 防重复保护
+- `--force`：`--allow-duplicate-session` 的别名
 
 ## 运行行为
 

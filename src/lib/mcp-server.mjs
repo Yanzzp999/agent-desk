@@ -13,6 +13,8 @@ import {
 } from "./control-plane.mjs";
 import {
   claimTaskMarkdownItems,
+  claimNextTaskMarkdownItem,
+  completeTaskMarkdownItems,
   createTaskMarkdownFile,
   listTaskMarkdownFiles,
   readTaskMarkdownFile,
@@ -119,6 +121,7 @@ export function createAgentDeskMcpServer(options = {}) {
       taskName: z.string().min(1).describe("Task filename, title, or title slug inside task/. Examples: 'checkout-flow.task.md' or 'Checkout flow'."),
       items: z.array(z.union([z.number(), z.string().min(1)])).min(1).describe("Checklist item selectors. Use 1-based item numbers, exact titles, or unique title fragments."),
       assignee: z.string().optional().describe("Agent/session name to show in the claim marker. Defaults to AGENT_DESK_AGENT_NAME, CODEX_SESSION_ID, or 'agent'."),
+      sessionId: z.string().optional().describe("Optional session id to write beside the claim marker."),
       note: z.string().optional().describe("Optional short note stored beside the claim marker."),
       force: z.boolean().optional().describe("Overwrite claims owned by another assignee. Default: false."),
       projectRoot: z.string().optional().describe("Project root. Defaults to AGENT_DESK_PROJECT_ROOT, INIT_CWD, or the MCP server working directory."),
@@ -144,6 +147,76 @@ export function createAgentDeskMcpServer(options = {}) {
       projectRoot: args.projectRoot || options.projectRoot,
     });
     return toolResult(result, `Claimed ${result.claimed.length} item(s) in ${result.filePath}`);
+  });
+
+  server.registerTool("claim_next_task_item", {
+    title: "Claim Next Task Item",
+    description: "Atomically claim the first open, unclaimed checklist item in a markdown task file. The visible claim marker includes assignee and session id so humans can see who is implementing it.",
+    inputSchema: {
+      taskName: z.string().min(1).describe("Task filename, title, or title slug inside task/."),
+      assignee: z.string().min(1).describe("Agent name to show in the claim marker."),
+      sessionId: z.string().min(1).describe("Session id to show in the claim marker."),
+      note: z.string().optional().describe("Optional short note stored beside the claim marker. Default: implementing."),
+      projectRoot: z.string().optional().describe("Project root. Defaults to AGENT_DESK_PROJECT_ROOT, INIT_CWD, or the MCP server working directory."),
+      taskDir: z.string().optional().describe("Task directory relative to projectRoot. Default: task."),
+    },
+    outputSchema: {
+      projectRoot: z.string(),
+      taskDir: z.string(),
+      filePath: z.string(),
+      filename: z.string(),
+      title: z.string(),
+      taskCount: z.number(),
+      openCount: z.number(),
+      doneCount: z.number(),
+      claimedCount: z.number(),
+      hasWork: z.boolean(),
+      items: z.array(taskItemSchema()),
+      claimed: z.array(taskItemSchema()),
+      markdown: z.string(),
+    },
+  }, async (args) => {
+    const result = await claimNextTaskMarkdownItem({
+      ...args,
+      projectRoot: args.projectRoot || options.projectRoot,
+    });
+    const text = result.hasWork
+      ? `Claimed item ${result.claimed[0]?.index || ""} in ${result.filePath}`
+      : `No unclaimed checklist items remain in ${result.filePath}`;
+    return toolResult(result, text);
+  });
+
+  server.registerTool("complete_task_items", {
+    title: "Complete Task Items",
+    description: "Atomically check off checklist items previously claimed by the same assignee and session id.",
+    inputSchema: {
+      taskName: z.string().min(1).describe("Task filename, title, or title slug inside task/."),
+      items: z.array(z.union([z.number(), z.string().min(1)])).min(1).describe("Checklist item selectors. Use 1-based item numbers, exact titles, or unique title fragments."),
+      assignee: z.string().min(1).describe("Agent name that owns the claim marker."),
+      sessionId: z.string().min(1).describe("Session id that owns the claim marker."),
+      projectRoot: z.string().optional().describe("Project root. Defaults to AGENT_DESK_PROJECT_ROOT, INIT_CWD, or the MCP server working directory."),
+      taskDir: z.string().optional().describe("Task directory relative to projectRoot. Default: task."),
+    },
+    outputSchema: {
+      projectRoot: z.string(),
+      taskDir: z.string(),
+      filePath: z.string(),
+      filename: z.string(),
+      title: z.string(),
+      taskCount: z.number(),
+      openCount: z.number(),
+      doneCount: z.number(),
+      claimedCount: z.number(),
+      items: z.array(taskItemSchema()),
+      completed: z.array(taskItemSchema()),
+      markdown: z.string(),
+    },
+  }, async (args) => {
+    const result = await completeTaskMarkdownItems({
+      ...args,
+      projectRoot: args.projectRoot || options.projectRoot,
+    });
+    return toolResult(result, `Completed ${result.completed.length} item(s) in ${result.filePath}`);
   });
 
   server.registerTool("create_agentdesk_task", {
@@ -205,6 +278,8 @@ export function createAgentDeskMcpServer(options = {}) {
       subagentLauncher: z.enum(["codex-cli", "codex-app"]).optional().describe("Subagent launcher. Default: codex-cli."),
       launchPrompt: z.string().optional().describe("Optional extra launch context included in each subagent prompt."),
       waitForCompletion: z.boolean().optional().describe("For codex-cli sessions, wait for all subagents to finish before returning. Default: true."),
+      allowDuplicateSession: z.boolean().optional().describe("Override the active-session guard and allow another session for the same task. Default: false."),
+      force: z.boolean().optional().describe("Alias for allowDuplicateSession."),
       ...contextInputSchema(),
     },
     outputSchema: sessionStartSchema(),
@@ -222,6 +297,7 @@ export function createAgentDeskMcpServer(options = {}) {
       subagentLauncher,
       launchPrompt: args.launchPrompt,
       waitForCompletion,
+      allowDuplicateSession: args.allowDuplicateSession || args.force,
     });
     const appLaunchPlan = subagentLauncher === "codex-app"
       ? await getCodexAppLaunchPlan(context, result.sessionId)
@@ -303,6 +379,7 @@ function taskItemSchema() {
     checked: z.boolean(),
     claimedBy: z.string(),
     claimedAt: z.string(),
+    claimSessionId: z.string(),
     claimNote: z.string(),
     claimLine: z.number(),
   });

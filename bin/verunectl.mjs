@@ -166,6 +166,7 @@ async function handleSessions(context, parsed) {
       reasoning: parsed.reasoning || parsed.effort,
       executionMode: parsed["execution-mode"] || parsed.mode,
       subagentLauncher: parsed["subagent-launcher"],
+      allowDuplicateSession: parsed["allow-duplicate-session"] || parsed.force,
     });
     return output(parsed, result, () => `Started session: ${result.sessionId}`);
   }
@@ -282,7 +283,7 @@ Usage:
   verunectl config init [--force] [--json]
   verunectl sessions list [--task <taskId>] [--json]
   verunectl sessions show <sessionId> [--json]
-  verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--subagent-launcher LAUNCHER] [--json]
+  verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--subagent-launcher LAUNCHER] [--allow-duplicate-session] [--json]
   verunectl sessions logs <sessionId> <agentId> [--json]
 
 Global options:
@@ -304,5 +305,8 @@ Session start options:
   --codex-count N        Alias for --parallel.
   --execution-mode MODE  auto, worktree, or current-branch. Default: auto.
   --subagent-launcher L  codex-cli or codex-app for current-branch mode.
+  --allow-duplicate-session
+                          Override the active-session guard for this task.
+  --force                 Alias for --allow-duplicate-session.
 `);
 }

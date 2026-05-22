@@ -101,8 +101,9 @@ The package ships optional Codex skill definitions under `skills/`:
 
 - `skills/generate-agentdesk-task/SKILL.md`: turns an explicit user request into an AgentDesk control-plane task. It reviews whether the request is complete enough for an executable `task.md` and asks a follow-up question before task creation when blocking details are missing.
 - `skills/run-agentdesk-subagents/SKILL.md`: runs or coordinates an existing AgentDesk task with Codex CLI or Codex App subagents, treating configured parallelism as a maximum concurrency cap.
+- `skills/claim-agentdesk-task/SKILL.md`: lets an agent atomically claim one open checklist item from a markdown task, implement only that item, and complete it with the same agent/session identity.
 
-Both skills are explicit-invocation only. They keep AgentDesk focused on `task.md`, the MCP/CLI workflow, `gpt-5.5`, `xhigh`, `fast`, batches of up to 6, and integration into `master`.
+All bundled skills are explicit-invocation only. They keep AgentDesk focused on `task.md`, the MCP/CLI workflow, `gpt-5.5`, `xhigh`, `fast`, batches of up to 6, and integration into `master`.
 Before subagent execution, the coordinating model should review task complexity and concurrent-edit conflict risk, choose and tell the user a recommended per-batch subagent count, and still let the user override the concurrency later within the configured maximum.
 
 ## MCP Tools
@@ -110,13 +111,17 @@ Before subagent execution, the coordinating model should review task complexity 
 - `create_task`: creates a markdown task file under `<project>/task/`.
 - `list_tasks`: lists markdown task files under `<project>/task/`.
 - `read_task`: reads a markdown task file under `<project>/task/`.
-- `claim_task_items`: writes visible AgentDesk claim markers onto checklist items so multiple agents can coordinate.
+- `claim_task_items`: writes visible AgentDesk claim markers onto selected checklist items so multiple agents can coordinate.
+- `claim_next_task_item`: atomically claims the first open, unclaimed checklist item and writes the implementing `agent -> sessionId` marker into `task.md`.
+- `complete_task_items`: atomically checks off items claimed by the same assignee and session id.
 - `create_agentdesk_task`: uses Codex CLI to generate `.agent-desk/tasks/<taskId>/task.md`; if a similar task already exists, it returns candidates and asks the caller to continue or rebuild.
 - `list_agentdesk_tasks` / `read_agentdesk_task`: inspect control-plane tasks, generated `task.md`, and shared `memory.md`.
 - `start_subagent_session`: starts or prepares an AgentDesk subagent session.
 - `list_subagent_sessions` / `read_subagent_session`: inspect session status, agent summaries, and log indexes.
 
 `start_subagent_session` lets the main agent decide whether worktree isolation is needed. The default `executionMode: "auto"` uses the current checkout for single tasks, serial tasks, or clearly non-overlapping work. AgentDesk creates isolated worktrees only when parallel work lacks conflict evidence or when `worktree` is explicitly requested. The coordinating model should also assess task complexity and conflict risk before choosing how many subagents to launch per batch; after it announces that recommendation, the user can still choose a different concurrency value within the configured maximum.
+
+AgentDesk records the active session on the task before launch. A second session for the same task is rejected while `activeSessionId` is set, unless the caller explicitly uses the duplicate-session override.
 
 Supported launchers:
 
@@ -139,6 +144,15 @@ Implement the checkout flow end to end.
 - [ ] Add payment state model
 - [ ] Wire confirmation screen
 ```
+
+Claiming a task item writes a visible ownership marker directly below the checkbox:
+
+```md
+- [ ] Implement API handler
+  - AgentDesk claim: `agent-alpha` at 2026-05-22T10:00:00.000Z; session: `session-abc`; note: implementing
+```
+
+Agents should use `claim_next_task_item` before implementation and `complete_task_items` after verification. This keeps the markdown readable for humans while preventing independent agents from silently implementing the same item.
 
 ## Defaults
 
@@ -235,7 +249,7 @@ verunectl tasks create [--title TEXT] [--brief TEXT] [--rebuild|--continue-simil
 verunectl mcp [--project DIR]
 verunectl sessions list [--task <taskId>] [--json]
 verunectl sessions show <sessionId> [--json]
-verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--json]
+verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--allow-duplicate-session] [--json]
 verunectl sessions logs <sessionId> <agentId> [--json]
 ```
 
@@ -255,6 +269,8 @@ Session options:
 - `--codex-count N`: alias for `--parallel`.
 - `--execution-mode MODE`: choose `auto`, `worktree`, or `current-branch`. Default: `auto`.
 - `--subagent-launcher L`: choose `codex-cli` or `codex-app` in `current-branch` mode.
+- `--allow-duplicate-session`: override the active-session guard for a task.
+- `--force`: alias for `--allow-duplicate-session`.
 
 ## Runtime Behavior
 

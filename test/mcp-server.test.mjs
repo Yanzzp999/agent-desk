@@ -25,7 +25,9 @@ test("MCP server runs markdown task tools against the launched project", async (
   try {
     await client.connect(transport);
     const expectedTools = [
+      "claim_next_task_item",
       "claim_task_items",
+      "complete_task_items",
       "create_agentdesk_task",
       "create_task",
       "list_agentdesk_tasks",
@@ -82,6 +84,7 @@ test("MCP server runs markdown task tools against the launched project", async (
         taskName: "MCP task generation",
         items: [1, "Write task"],
         assignee: "mcp-agent",
+        sessionId: "session-mcp",
         note: "manual session",
       },
     });
@@ -89,7 +92,9 @@ test("MCP server runs markdown task tools against the launched project", async (
     assert.equal(claimed.structuredContent.claimed.length, 2);
     assert.equal(claimed.structuredContent.claimedCount, 2);
     assert.equal(claimed.structuredContent.items[0].claimedBy, "mcp-agent");
+    assert.equal(claimed.structuredContent.items[0].claimSessionId, "session-mcp");
     assert.match(claimed.structuredContent.markdown, /AgentDesk claim: `mcp-agent`/);
+    assert.match(claimed.structuredContent.markdown, /session: `session-mcp`/);
     assert.match(claimed.structuredContent.markdown, /note: manual session/);
 
     const listedAfterClaim = await client.callTool({
@@ -102,6 +107,7 @@ test("MCP server runs markdown task tools against the launched project", async (
     assert.equal(listedAfterClaim.structuredContent.items.length, 1);
     assert.equal(listedAfterClaim.structuredContent.items[0].claimedCount, 2);
     assert.equal(listedAfterClaim.structuredContent.items[0].items[0].claimedBy, "mcp-agent");
+    assert.equal(listedAfterClaim.structuredContent.items[0].items[0].claimSessionId, "session-mcp");
     assert.equal(listedAfterClaim.structuredContent.items[0].items[1].claimNote, "manual session");
 
     const read = await client.callTool({
@@ -112,6 +118,7 @@ test("MCP server runs markdown task tools against the launched project", async (
     });
 
     assert.equal(read.structuredContent.claimedCount, 2);
+    assert.equal(read.structuredContent.items[1].claimSessionId, "session-mcp");
     assert.equal(read.structuredContent.items[1].claimNote, "manual session");
     assert.equal(read.structuredContent.markdown, claimed.structuredContent.markdown);
 
@@ -120,6 +127,49 @@ test("MCP server runs markdown task tools against the launched project", async (
       "utf8",
     );
     assert.equal(fileText, claimed.structuredContent.markdown);
+
+    const nextTask = await client.callTool({
+      name: "create_task",
+      arguments: {
+        title: "MCP next claim",
+        tasks: ["Implement next item"],
+      },
+    });
+    assert.equal(nextTask.structuredContent.filename, "mcp-next-claim.task.md");
+
+    const nextClaim = await client.callTool({
+      name: "claim_next_task_item",
+      arguments: {
+        taskName: "MCP next claim",
+        assignee: "mcp-next-agent",
+        sessionId: "session-next",
+      },
+    });
+    assert.equal(nextClaim.structuredContent.hasWork, true);
+    assert.equal(nextClaim.structuredContent.claimed.length, 1);
+    assert.equal(nextClaim.structuredContent.claimed[0].claimSessionId, "session-next");
+
+    const completed = await client.callTool({
+      name: "complete_task_items",
+      arguments: {
+        taskName: "MCP next claim",
+        items: [1],
+        assignee: "mcp-next-agent",
+        sessionId: "session-next",
+      },
+    });
+    assert.equal(completed.structuredContent.completed[0].checked, true);
+
+    const noWork = await client.callTool({
+      name: "claim_next_task_item",
+      arguments: {
+        taskName: "MCP next claim",
+        assignee: "mcp-next-agent-2",
+        sessionId: "session-next-2",
+      },
+    });
+    assert.equal(noWork.structuredContent.hasWork, false);
+    assert.deepEqual(noWork.structuredContent.claimed, []);
   } finally {
     await client.close();
   }

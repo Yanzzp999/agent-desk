@@ -300,6 +300,9 @@ export async function createTask(context, request = {}) {
     completedAt: null,
     lastError: "",
     subtaskCount: 0,
+    activeSessionId: "",
+    activeSessionStartedAt: null,
+    activeSessionStatus: "",
     paths: {
       taskDir,
       briefMd: path.join(taskDir, "brief.md"),
@@ -457,86 +460,153 @@ export async function createSession(context, taskId, request = {}) {
   if (sessionRequest.executionMode === "worktree") {
     await assertMasterBranch(context.projectRoot);
   }
-  const { sessionId, sessionDir } = await allocateSessionDir(context, task);
-  const now = new Date().toISOString();
-  const meta = {
-    schemaVersion: SCHEMA_VERSION,
-    sessionId,
-    taskId: task.taskId,
-    title: task.title,
-    status: "queued",
-    parallelism: sessionRequest.parallelism,
-    batchSize: DEFAULT_LAUNCH_BATCH_SIZE,
-    model: sessionRequest.model,
-    reasoning: sessionRequest.reasoning,
-    serviceTier: sessionRequest.serviceTier,
-    executionMode: sessionRequest.executionMode,
-    requestedExecutionMode: sessionRequest.requestedExecutionMode,
-    subagentLauncher: sessionRequest.subagentLauncher,
-    launchPrompt: sessionRequest.launchPrompt,
-    worktreeDecision: sessionRequest.worktreeDecision,
-    createdAt: now,
-    updatedAt: now,
-    startedAt: null,
-    completedAt: null,
-    lastError: "",
-    totalAgents: 0,
-    succeededAgents: 0,
-    failedAgents: 0,
-    runningAgents: 0,
-    agents: [],
-    paths: {
-      sessionDir,
-      metaJson: path.join(sessionDir, "meta.json"),
-      docMd: path.join(sessionDir, "session.md"),
-      stdoutLog: path.join(sessionDir, "stdout.log"),
-      stderrLog: path.join(sessionDir, "stderr.log"),
-    },
-  };
-  await fsp.writeFile(meta.paths.stdoutLog, "", "utf8");
-  await fsp.writeFile(meta.paths.stderrLog, "", "utf8");
-  await writeJsonAtomic(meta.paths.metaJson, meta);
+  const allowDuplicateSession = normalizeBoolean(
+    request.allowDuplicateSession ?? request.allow_duplicate_session ?? request.force,
+    "allowDuplicateSession",
+  );
+  const { task: claimedTask, session: meta } = await createClaimedSessionMeta(context, taskId, sessionRequest, {
+    allowDuplicateSession,
+  });
+  const sessionId = meta.sessionId;
 
   if (sessionRequest.executionMode === "current-branch" && sessionRequest.subagentLauncher === "codex-app") {
-    await prepareCodexAppSession(context, task, sessionId);
-    await updateTaskMeta(context, taskId, {
-      status: "succeeded",
-      completedAt: new Date().toISOString(),
-      lastError: "",
-    });
-    return enrichSessionSummary(context, await readSessionMeta(context, sessionId));
+    try {
+      await prepareCodexAppSession(context, claimedTask, sessionId);
+      await finishTaskActiveSession(context, taskId, sessionId, {
+        status: "succeeded",
+        completedAt: new Date().toISOString(),
+        lastError: "",
+      });
+      return enrichSessionSummary(context, await readSessionMeta(context, sessionId));
+    } catch (error) {
+      const message = error.message || String(error);
+      await updateSessionMeta(context, sessionId, {
+        status: "failed",
+        completedAt: new Date().toISOString(),
+        lastError: message,
+      }).catch(() => {});
+      await finishTaskActiveSession(context, taskId, sessionId, {
+        status: "failed",
+        completedAt: new Date().toISOString(),
+        lastError: message,
+      }).catch(() => {});
+      throw error;
+    }
   }
 
-  await updateTaskMeta(context, taskId, { status: "running" });
   if (waitForCompletion) {
     return runSessionJobAndReturnStatus(context, taskId, sessionId);
   }
 
-  const workerPath = path.join(CONTROL_PLANE_ROOT, "src", "worker", "run-agent-desk-job.mjs");
-  const child = spawn(process.execPath, [
-    workerPath,
-    "--project",
-    context.projectRoot,
-    "--desk-root",
-    context.deskRoot,
-    "--worktrees-root",
-    context.worktreesRoot,
-    "--config",
-    context.configPath,
-    "--codex-cli",
-    context.codexCli,
-    "--job",
-    "run-session",
-    "--session",
-    sessionId,
-  ], {
-    cwd: context.projectRoot,
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
+  try {
+    const workerPath = path.join(CONTROL_PLANE_ROOT, "src", "worker", "run-agent-desk-job.mjs");
+    const child = spawn(process.execPath, [
+      workerPath,
+      "--project",
+      context.projectRoot,
+      "--desk-root",
+      context.deskRoot,
+      "--worktrees-root",
+      context.worktreesRoot,
+      "--config",
+      context.configPath,
+      "--codex-cli",
+      context.codexCli,
+      "--job",
+      "run-session",
+      "--session",
+      sessionId,
+    ], {
+      cwd: context.projectRoot,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  } catch (error) {
+    const message = error.message || String(error);
+    await updateSessionMeta(context, sessionId, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      lastError: message,
+    }).catch(() => {});
+    await finishTaskActiveSession(context, taskId, sessionId, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      lastError: message,
+    }).catch(() => {});
+    throw error;
+  }
 
   return enrichSessionSummary(context, meta);
+}
+
+async function createClaimedSessionMeta(context, taskId, sessionRequest, options = {}) {
+  const lock = await acquireLock(path.join(context.locksRoot, `task-${taskId}.lock`));
+  try {
+    const task = await readTaskMeta(context, taskId);
+    if (!TASK_STATUSES.has(task.status) || !["ready", "running", "succeeded", "failed"].includes(task.status)) {
+      throw new Error(`task is not ready to execute: ${task.status}`);
+    }
+    if (task.activeSessionId && !options.allowDuplicateSession) {
+      const status = task.activeSessionStatus ? ` (${task.activeSessionStatus})` : "";
+      throw new Error(`task already has an active session: ${task.activeSessionId}${status}`);
+    }
+
+    const { sessionId, sessionDir } = await allocateSessionDir(context, task);
+    const now = new Date().toISOString();
+    const meta = {
+      schemaVersion: SCHEMA_VERSION,
+      sessionId,
+      taskId: task.taskId,
+      title: task.title,
+      status: "queued",
+      parallelism: sessionRequest.parallelism,
+      batchSize: DEFAULT_LAUNCH_BATCH_SIZE,
+      model: sessionRequest.model,
+      reasoning: sessionRequest.reasoning,
+      serviceTier: sessionRequest.serviceTier,
+      executionMode: sessionRequest.executionMode,
+      requestedExecutionMode: sessionRequest.requestedExecutionMode,
+      subagentLauncher: sessionRequest.subagentLauncher,
+      launchPrompt: sessionRequest.launchPrompt,
+      worktreeDecision: sessionRequest.worktreeDecision,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: null,
+      completedAt: null,
+      lastError: "",
+      totalAgents: 0,
+      succeededAgents: 0,
+      failedAgents: 0,
+      runningAgents: 0,
+      agents: [],
+      paths: {
+        sessionDir,
+        metaJson: path.join(sessionDir, "meta.json"),
+        docMd: path.join(sessionDir, "session.md"),
+        stdoutLog: path.join(sessionDir, "stdout.log"),
+        stderrLog: path.join(sessionDir, "stderr.log"),
+      },
+    };
+    await fsp.writeFile(meta.paths.stdoutLog, "", "utf8");
+    await fsp.writeFile(meta.paths.stderrLog, "", "utf8");
+    await writeJsonAtomic(meta.paths.metaJson, meta);
+
+    const updatedTask = {
+      ...task,
+      status: "running",
+      updatedAt: now,
+      completedAt: null,
+      lastError: "",
+      activeSessionId: sessionId,
+      activeSessionStartedAt: now,
+      activeSessionStatus: "queued",
+    };
+    await writeJsonAtomic(path.join(taskDirPath(context, task.taskId), "meta.json"), updatedTask);
+    return { task: updatedTask, session: meta };
+  } finally {
+    await releaseLock(lock);
+  }
 }
 
 async function runSessionJobAndReturnStatus(context, taskId, sessionId) {
@@ -549,7 +619,7 @@ async function runSessionJobAndReturnStatus(context, taskId, sessionId) {
       completedAt: new Date().toISOString(),
       lastError: message,
     }).catch(() => {});
-    await updateTaskMeta(context, taskId, {
+    await finishTaskActiveSession(context, taskId, sessionId, {
       status: "failed",
       completedAt: new Date().toISOString(),
       lastError: message,
@@ -686,8 +756,9 @@ export async function runSessionJob(context, sessionId) {
       completedAt: new Date().toISOString(),
       lastError: error,
     });
-    await updateTaskMeta(context, task.taskId, {
+    await finishTaskActiveSession(context, task.taskId, sessionId, {
       status: "failed",
+      completedAt: new Date().toISOString(),
       lastError: error,
     });
     throw new Error(error);
@@ -742,6 +813,7 @@ export async function runSessionJob(context, sessionId) {
     totalAgents: agents.length,
     agents,
   });
+  await updateTaskActiveSessionStatus(context, task.taskId, sessionId, "running");
   await writeSessionDocumentation(context, sessionId);
 
   const pending = [...agents];
@@ -781,7 +853,7 @@ export async function runSessionJob(context, sessionId) {
     completedAt: new Date().toISOString(),
     lastError: finalStatus === "failed" ? finalSession.lastError : "",
   });
-  await updateTaskMeta(context, task.taskId, {
+  await finishTaskActiveSession(context, task.taskId, sessionId, {
     status: finalStatus,
     completedAt: new Date().toISOString(),
     lastError: finalStatus === "failed" ? finalSession.lastError : "",
@@ -1989,6 +2061,39 @@ async function updateTaskMeta(context, taskId, patch) {
       ...meta,
       ...patch,
       status,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+}
+
+async function updateTaskActiveSessionStatus(context, taskId, sessionId, activeSessionStatus) {
+  return mutateTaskMeta(context, taskId, (meta) => {
+    if (meta.activeSessionId && meta.activeSessionId !== sessionId) {
+      return meta;
+    }
+    return {
+      ...meta,
+      status: "running",
+      activeSessionId: sessionId,
+      activeSessionStatus,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+}
+
+async function finishTaskActiveSession(context, taskId, sessionId, patch) {
+  return mutateTaskMeta(context, taskId, (meta) => {
+    if (meta.activeSessionId && meta.activeSessionId !== sessionId) {
+      return meta;
+    }
+    const status = patch.status ? normalizeTaskStatus(patch.status) : meta.status;
+    return {
+      ...meta,
+      ...patch,
+      status,
+      activeSessionId: "",
+      activeSessionStartedAt: null,
+      activeSessionStatus: "",
       updatedAt: new Date().toISOString(),
     };
   });

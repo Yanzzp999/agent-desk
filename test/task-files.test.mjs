@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import {
   claimTaskMarkdownItems,
+  claimNextTaskMarkdownItem,
+  completeTaskMarkdownItems,
   createTaskMarkdownFile,
   listTaskMarkdownFiles,
   readTaskMarkdownFile,
@@ -97,6 +99,7 @@ test("claims checklist items by task name and preserves visible ownership marker
     taskName: "Manual claim flow",
     items: [1, "UI"],
     assignee: "agent-alpha",
+    sessionId: "session-alpha",
     claimedAt: "2026-05-14T00:00:00.000Z",
   });
 
@@ -108,6 +111,7 @@ test("claims checklist items by task name and preserves visible ownership marker
   const read = await readTaskMarkdownFile({ projectRoot, taskName: "manual-claim-flow" });
   assert.equal(read.claimedCount, 2);
   assert.equal(read.items[0].claimedBy, "agent-alpha");
+  assert.equal(read.items[0].claimSessionId, "session-alpha");
   assert.equal(read.items[1].claimedBy, "agent-alpha");
 
   await assert.rejects(
@@ -119,4 +123,97 @@ test("claims checklist items by task name and preserves visible ownership marker
     }),
     /already claimed: 1 by agent-alpha/,
   );
+});
+
+test("atomically claims the next open checklist item across concurrent agents", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-"));
+  await createTaskMarkdownFile({
+    projectRoot,
+    title: "Concurrent claim flow",
+    tasks: [
+      "Implement the API",
+      "Wire the UI",
+      "Add tests",
+    ],
+  });
+
+  const claims = await Promise.all(["alpha", "beta", "gamma"].map((name) => claimNextTaskMarkdownItem({
+    projectRoot,
+    taskName: "Concurrent claim flow",
+    assignee: `agent-${name}`,
+    sessionId: `session-${name}`,
+    claimedAt: "2026-05-14T00:00:00.000Z",
+  })));
+
+  assert.deepEqual(claims.map((claim) => claim.hasWork), [true, true, true]);
+  assert.equal(new Set(claims.map((claim) => claim.claimed[0].index)).size, 3);
+  assert.equal(new Set(claims.map((claim) => claim.claimed[0].claimSessionId)).size, 3);
+
+  const empty = await claimNextTaskMarkdownItem({
+    projectRoot,
+    taskName: "Concurrent claim flow",
+    assignee: "agent-delta",
+    sessionId: "session-delta",
+  });
+  assert.equal(empty.hasWork, false);
+  assert.deepEqual(empty.claimed, []);
+});
+
+test("completes only items claimed by the same assignee and session", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-"));
+  await createTaskMarkdownFile({
+    projectRoot,
+    title: "Completion claim flow",
+    tasks: ["Implement the API"],
+  });
+
+  const claimed = await claimNextTaskMarkdownItem({
+    projectRoot,
+    taskName: "Completion claim flow",
+    assignee: "agent-alpha",
+    sessionId: "session-alpha",
+    claimedAt: "2026-05-14T00:00:00.000Z",
+  });
+  assert.equal(claimed.claimed[0].checked, false);
+
+  await assert.rejects(
+    () => completeTaskMarkdownItems({
+      projectRoot,
+      taskName: "Completion claim flow",
+      items: [1],
+      assignee: "agent-alpha",
+      sessionId: "session-beta",
+    }),
+    /not claimed by agent-alpha\/session-beta/,
+  );
+
+  const completed = await completeTaskMarkdownItems({
+    projectRoot,
+    taskName: "Completion claim flow",
+    items: [1],
+    assignee: "agent-alpha",
+    sessionId: "session-alpha",
+  });
+  assert.equal(completed.completed[0].checked, true);
+  assert.match(completed.markdown, /^- \[x\] Implement the API/m);
+});
+
+test("parses legacy claim markers without session ids", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-"));
+  const taskDir = path.join(projectRoot, "task");
+  await fs.mkdir(taskDir, { recursive: true });
+  await fs.writeFile(path.join(taskDir, "legacy.task.md"), [
+    "# Legacy claim",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] Keep old markers readable",
+    "  - AgentDesk claim: `agent-old` at 2026-05-14T00:00:00.000Z; note: old format",
+    "",
+  ].join("\n"), "utf8");
+
+  const read = await readTaskMarkdownFile({ projectRoot, taskName: "legacy.task.md" });
+  assert.equal(read.items[0].claimedBy, "agent-old");
+  assert.equal(read.items[0].claimSessionId, "");
+  assert.equal(read.items[0].claimNote, "old format");
 });
