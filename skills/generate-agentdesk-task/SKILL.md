@@ -11,6 +11,7 @@ Do not use this skill unless the user explicitly names `$generate-agentdesk-task
 
 Use this skill to turn a user request into an AgentDesk control-plane task.
 By default, generate the task title, brief, checklist, and `task.md` content in Chinese unless the user explicitly asks for another language or the target repository clearly requires another language.
+AgentDesk is CLI/MCP-only: use the MCP stdio tools or `verunectl`, and do not introduce GUI, Electron, Web app, or `npm run dev` validation steps unless a future task explicitly adds that supported surface.
 
 ## Task Brief Completeness Review
 
@@ -44,7 +45,8 @@ Do not ask for extra detail when the missing information is non-blocking or the 
 ## Guardrails
 
 - Keep AgentDesk centered on `task.md`; do not reintroduce PRD JSON, Gemini CLI, or Claude Code compatibility flows.
+- Prefer the MCP stdio server and `verunectl` as the supported interfaces.
 - Generate user-facing task content in Chinese by default, including titles, briefs, checklist items, task notes, and final summaries.
-- Prefer explicit session defaults in user-facing notes: `gpt-5.5`, `xhigh`, `fast`, batches of up to 6, integration into `master`.
+- Prefer explicit session defaults in user-facing notes: `gpt-5.5`, `xhigh`, service tier `fast`, execution mode `auto`, batches of up to 6, and worktree integration into `master`.
 - Make clear that before subagent execution, the coordinating model should review task complexity and concurrency-conflict risk, decide a recommended per-batch subagent count within the configured cap, notify the user of that recommendation, and respect any later user-selected concurrency.
 - If task generation fails, preserve the task directory and summarize `stdout.log` / `stderr.log` rather than deleting artifacts.

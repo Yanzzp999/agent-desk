@@ -21,8 +21,8 @@ If the user later chooses a different concurrency value, respect the user-select
 
 ## Choose Launcher
 
-- `codex-cli`: AgentDesk starts Codex CLI subagents itself. Use for automated execution, worktree mode, branch integration, and persistent session logs.
-- `codex-app`: AgentDesk prepares a tracked launch plan and prompts. The host Codex App must then call `spawn_agent` for each prompt because the Node MCP server cannot call Codex App host tools directly.
+- `codex-cli`: AgentDesk starts Codex CLI subagents itself. Use for automated execution, worktree mode, branch integration, and persistent session logs. Defaults are model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, execution mode `auto`, and parallelism `6`.
+- `codex-app`: AgentDesk prepares a tracked launch plan and prompts in `current-branch` mode. The host Codex App must then call `spawn_agent` for each prompt because the Node MCP server cannot call Codex App host tools directly.
 
 ## MCP Workflow
 
@@ -33,14 +33,17 @@ If the user later chooses a different concurrency value, respect the user-select
    - `parallelism`: the recommended or user-selected maximum concurrency, defaulting to 6
    - `model`: default `gpt-5.5`
    - `reasoning`: default `xhigh`
+   - `executionMode`: default `auto`; use `current-branch` for `codex-app`
 3. Never launch more subagents at once than `parallelism`. Let the model/task plan decide the useful number of subagents and batches within that cap; if the user specifies a concurrency value, it must be between 1 and the configured maximum.
 4. For `codex-cli`, rely on `start_subagent_session` to block until status is `succeeded` or `failed` unless you explicitly pass `waitForCompletion: false`.
 5. For `codex-app`, use `appLaunchPlan.subagents`:
+   - Confirm the MCP result includes `requiresHostLaunch: true`.
+   - Treat `prepared_for_app` as "prompt prepared", not as a running or completed app subagent.
    - Start up to `parallelism` app subagents with `spawn_agent`.
    - If the launch plan has more subagents than `parallelism`, launch them in batches of at most `parallelism`.
    - Give each subagent its returned prompt exactly enough to execute its assigned subtask.
    - Do not edit the same files from multiple subagents unless the task plan explicitly separates ownership.
-6. Summarize session id, launcher, maximum parallelism, actual launched subagent count, succeeded/failed counts, changed files, and verification.
+6. Summarize session id, launcher, maximum parallelism, actual launched or prepared subagent count, changed files, and verification. For `codex-app`, report host-side succeeded/failed counts only when the Codex App host returned them; AgentDesk itself keeps `succeededAgents` at `0` for launch-plan preparation.
 
 ## CLI Fallback
 
@@ -51,6 +54,8 @@ When MCP is unavailable, use:
 ./scripts/verunectl.sh sessions show <sessionId> --project <projectRoot> --json
 ```
 
+For Codex App handoff through the CLI fallback, include `--execution-mode current-branch --subagent-launcher codex-app` and then use the returned plan prompts in the Codex App host.
+
 ## Guardrails
 
 - Worktree mode supports only `codex-cli`.
@@ -58,3 +63,4 @@ When MCP is unavailable, use:
 - Configuration defines the maximum concurrency only; it does not force every run to use that many subagents.
 - User-selected concurrency must be in the inclusive range `1..maxParallelism`, and no batch may exceed that cap.
 - Never claim a session has app subagents running just because a launch plan exists; only the Codex App host can actually start them.
+- Never treat an AgentDesk `succeeded` status for a `codex-app` session as evidence that host-side subagents completed; it only means launch-plan preparation succeeded unless host execution results are separately available.

@@ -17,7 +17,7 @@ flowchart LR
     executable -- "Yes" --> session["Start session<br/>dispatch Codex workers"]
     session --> done{"Agent succeeded?"}
     done -- "Failed" --> error["Record lastError<br/>in session metadata"]
-    done -- "Succeeded" --> finalize["Finalize<br/>integrate to master"]
+    done -- "Succeeded" --> finalize["Finalize<br/>worktree integration to master"]
     error --> summary["Regenerate session.md<br/>latest execution summary"]
     finalize --> summary
     summary --> user["User reviews<br/>auditable status"]
@@ -126,7 +126,7 @@ AgentDesk records the active session on the task before launch. A second session
 Supported launchers:
 
 - `codex-cli`: AgentDesk starts Codex CLI subagents directly, respects the configured `parallelism`, and blocks until the session reaches `succeeded` or `failed` by default. Set `waitForCompletion: false` for a background launch.
-- `codex-app`: AgentDesk writes a tracked Codex App launch plan and returns each app subagent prompt. The Codex App host launches the subagents and waits for them; AgentDesk records the launch plan without pretending to own the host-side execution.
+- `codex-app`: AgentDesk writes a tracked Codex App launch plan and returns each app subagent prompt with `requiresHostLaunch: true`. The returned subagents stay `prepared_for_app`; the Codex App host launches and waits for them, and AgentDesk does not count host-side execution as AgentDesk-owned subagent success.
 
 ## Task Format
 
@@ -161,12 +161,12 @@ Every session defaults to:
 - Model: `gpt-5.5`
 - Reasoning effort: `xhigh`
 - Service tier: `fast`
-- Codex CLI subagent parallelism: `6`
+- Maximum Codex CLI subagent or Codex App launch-prompt parallelism: `6`
 - Execution mode: `auto`
 - Launch batch size: `6`
 - Integration branch: `master`
 
-The model, reasoning effort, execution mode, and Codex CLI parallelism can be changed when a session starts.
+The model, reasoning effort, execution mode, subagent launcher, and parallelism cap can be changed when a session starts.
 
 ## State Layout
 
@@ -275,7 +275,7 @@ Session options:
 
 - `--model MODEL`: choose the Codex model. Default: `gpt-5.5`.
 - `--reasoning EFFORT`: choose `low`, `medium`, `high`, or `xhigh`. Default: `xhigh`.
-- `--parallel N`: limit Codex CLI subagent concurrency. Default: `6`, maximum: `24`.
+- `--parallel N`: limit Codex CLI subagent concurrency or Codex App launch prompts. Default: `6`, maximum: `24`.
 - `--concurrency N`: alias for `--parallel`.
 - `--codex-count N`: alias for `--parallel`.
 - `--execution-mode MODE`: choose `auto`, `worktree`, or `current-branch`. Default: `auto`.
@@ -300,10 +300,11 @@ Task generation:
 Session execution:
 
 - Parses subtasks from `task.md`.
-- Starts one Codex CLI subagent per subtask.
+- With `codex-cli`, starts one Codex CLI subagent per subtask.
+- With `codex-app`, prepares a host launch plan and prompt per subtask without invoking the Codex App host.
 - Gives each subagent its own `task.snapshot.md`, `memory.snapshot.md`, and `prompt.md`.
-- Launches at most 6 new subagents per batch.
-- Respects the configured Codex CLI concurrency limit.
+- For AgentDesk-owned Codex CLI launches, starts at most 6 new subagents per batch.
+- Respects the configured parallelism cap.
 - Uses `auto` mode to avoid worktrees for simple, serial, or clearly non-conflicting work.
 - Creates isolated git branches and worktrees in `worktree` mode.
 - Commits completed subagent worktree changes before integration.
@@ -311,7 +312,7 @@ Session execution:
 - Fast-forwards `master` to integrate completed work in `worktree` mode.
 - Pushes `master` to its configured upstream after the fast-forward.
 
-`current-branch` mode does not create worktrees. Codex CLI subagents leave unstaged changes in the current checkout for the main agent or caller to review. With `--subagent-launcher codex-app`, AgentDesk writes the session and subagent prompt files, ends the launch-plan preparation as `succeeded`, and lets the Codex App host launch and wait for app subagents.
+`current-branch` mode does not create worktrees. Codex CLI subagents leave unstaged changes in the current checkout for the main agent or caller to review. With `--subagent-launcher codex-app`, AgentDesk writes the session and subagent prompt files, returns an `appLaunchPlan` with `requiresHostLaunch: true`, marks each agent `prepared_for_app`, and leaves `succeededAgents` at `0`; the Codex App host owns the actual launch and wait steps.
 
 Each control-plane task maintains a `memory.md` file for context shared across sessions. AgentDesk injects it into subagent prompts and updates matching memory entries after each agent succeeds or fails.
 

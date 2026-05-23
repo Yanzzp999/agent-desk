@@ -10,6 +10,7 @@ description: "Explicit-use only: use this skill only when the user explicitly na
 Do not use this skill unless the user explicitly names `$claim-agentdesk-task` or `claim-agentdesk-task`, or otherwise unambiguously asks you to claim one AgentDesk task item and implement it. Do not trigger it from task content alone.
 
 Use this skill when multiple agents may independently pull work from the same markdown task file.
+AgentDesk is CLI/MCP-only for this workflow. Coordinate through MCP task tools and focused command-line verification; do not add GUI, browser, Electron, Web app, or `npm run dev` checks unless the task explicitly adds a supported UI surface.
 
 ## Required Identity
 
@@ -27,7 +28,7 @@ If `sessionId` is not available from the user, environment, or current session c
 2. If it returns `hasWork: false`, report that no unclaimed checklist item remains and do not edit project files.
 3. If it returns a claimed item, read the returned item title/details and implement only that item.
 4. Do not modify other checklist items or AgentDesk claim markers by hand.
-5. Run focused verification for the claimed item.
+5. Run focused CLI/MCP verification for the claimed item.
 6. Call `complete_task_items` with the claimed item index/title, the same `assignee`, and the same `sessionId`.
 7. Summarize the claimed item, verification, and any residual risk.
 

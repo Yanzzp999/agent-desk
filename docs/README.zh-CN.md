@@ -1,13 +1,14 @@
 # AgentDesk
 
 AgentDesk 是一个以 MCP 和 CLI 为中心的项目编排工具，用来在任意本地项目里
-生成 markdown checklist 任务文件，并通过 Codex CLI 子代理执行这些任务。
+生成 markdown checklist 任务文件，通过 Codex CLI 子代理执行任务，或为 Codex App
+准备可追踪的 launch plan。
 
 它围绕三个概念工作：
 
 - `Project`：任意一个本地 git 仓库
 - `Task`：存放在 `<project>/.agent-desk/tasks` 下的 `task.md`
-- `Session`：一次执行运行，会把 `task.md` 里的子任务分发给多个 Codex CLI 子代理
+- `Session`：一次执行运行，会把 `task.md` 里的子任务交给 Codex CLI 子代理，或生成 Codex App host 可执行的 launch plan
 
 AgentDesk 不再提供 GUI、Electron 外壳或本地 Web 应用。当前支持的主要入口是
 MCP stdio server 和 `verunectl`。
@@ -27,7 +28,7 @@ flowchart LR
     executable -- "Yes" --> session["Start session<br/>dispatch Codex workers"]
     session --> done{"Agent succeeded?"}
     done -- "Failed" --> error["Record lastError<br/>in session metadata"]
-    done -- "Succeeded" --> finalize["Finalize<br/>integrate to master"]
+    done -- "Succeeded" --> finalize["Finalize<br/>worktree integration to master"]
     error --> summary["Regenerate session.md<br/>latest execution summary"]
     finalize --> summary
     summary --> user["User reviews<br/>auditable status"]
@@ -35,8 +36,7 @@ flowchart LR
 
 ## MCP 使用方式
 
-AgentDesk 提供 `agent-desk-mcp` stdio server，可以被 Codex、Claude Desktop 或其他
-MCP 客户端从任意项目目录启动。默认项目根目录是 MCP server 的启动目录，也可以
+AgentDesk 提供 `agent-desk-mcp` stdio server，可以被 Codex 或其他 MCP 客户端从任意项目目录启动。默认项目根目录是 MCP server 的启动目录，也可以
 通过 `--project` 或 `AGENT_DESK_PROJECT_ROOT` 覆盖。
 
 ### 推荐安装到 Codex
@@ -151,7 +151,7 @@ AgentDesk 会在启动前把 active session 记录到 task meta。只要 `active
 `start_subagent_session` 支持两种 launcher：
 
 - `codex-cli`：由 AgentDesk 直接启动 Codex CLI subagents，遵守 `parallelism` 并发上限；MCP 调用默认阻塞到 session 进入 `succeeded` 或 `failed`，可通过 `waitForCompletion: false` 保留后台启动行为。
-- `codex-app`：生成可追踪的 Codex App launch plan，返回每个 app subagent 的 prompt，并立即把 AgentDesk session 结束为 `succeeded`。由于 MCP server 运行在 Node 进程内，不能直接调用 Codex App 宿主的 `spawn_agent` 工具；调用方需要按返回的 `appLaunchPlan.subagents` 并发启动 Codex App subagents，后续等待由 Codex App 宿主负责，AgentDesk 不会等待或回写 app subagent succeeded counts。
+- `codex-app`：生成可追踪的 Codex App launch plan，返回每个 app subagent 的 prompt，并在 MCP 结果中返回 `requiresHostLaunch: true`。这些 subagent 状态保持为 `prepared_for_app`，`succeededAgents` 保持为 `0`；由于 MCP server 运行在 Node 进程内，不能直接调用 Codex App 宿主的 `spawn_agent` 工具，后续启动与等待由 Codex App 宿主负责。
 
 `create_task` 写出的任务始终使用 markdown 待办清单格式：
 
@@ -184,12 +184,12 @@ agent 应在实现前调用 `claim_next_task_item`，验证通过后调用 `comp
 - 模型：`gpt-5.5`
 - 思考深度：`xhigh`
 - 服务层级：`fast`
-- 并发 Codex CLI 子代理数量：`6`
+- 最大 Codex CLI 子代理或 Codex App launch prompt 并发数：`6`
 - 执行模式：`auto`，由主 agent/AgentDesk 判断是否需要 worktree
 - 启动批次大小：`6`
 - 集成分支：`master`
 
-启动 session 时可以配置模型、思考深度和并发 Codex CLI 数量。
+启动 session 时可以配置模型、思考深度、执行模式、subagent launcher 和并发上限。
 
 ## 状态目录
 
@@ -304,7 +304,7 @@ verunectl sessions logs <sessionId> <agentId> [--json]
 
 - `--model MODEL`：选择 Codex 模型，默认 `gpt-5.5`
 - `--reasoning EFFORT`：选择 `low`、`medium`、`high` 或 `xhigh`，默认 `xhigh`
-- `--parallel N`：限制并发 Codex CLI 子代理数量，默认 `6`，最大 `24`
+- `--parallel N`：限制并发 Codex CLI 子代理数量或 Codex App launch prompt 数量，默认 `6`，最大 `24`
 - `--concurrency N`：`--parallel` 的别名
 - `--codex-count N`：`--parallel` 的别名
 - `--execution-mode MODE`：`auto`、`worktree` 或 `current-branch`，默认 `auto`
@@ -329,10 +329,11 @@ verunectl sessions logs <sessionId> <agentId> [--json]
 Session 执行：
 
 - 从 `task.md` 解析子任务
-- 每个子任务启动一个 Codex CLI 子代理
+- 使用 `codex-cli` 时，每个子任务启动一个 Codex CLI 子代理
+- 使用 `codex-app` 时，每个子任务只准备一个 host launch plan prompt，不直接调用 Codex App 宿主
 - 每个子代理使用独立的 `task.snapshot.md`、`memory.snapshot.md` 和 `prompt.md` 作为启动上下文
-- 每批最多启动 6 个新的子代理
-- 遵守 session 选择的并发 Codex CLI 上限
+- 对 AgentDesk 自己启动的 Codex CLI 子代理，每批最多启动 6 个新的子代理
+- 遵守 session 选择的并发上限
 - 默认 `auto` 会先判断是否需要 worktree；简单任务、串行任务或明确无冲突的分文件/分模块任务会直接在当前 checkout 实现
 - `worktree` 模式会为每个子代理创建独立 git branch 和 git worktree
 - 集成前会先提交已完成子代理 worktree 内的改动
@@ -340,7 +341,7 @@ Session 执行：
 - `worktree` 模式会通过 fast-forward 更新 `master` 集成完成的工作
 - fast-forward 后会把 `master` 推送到已配置的上游分支
 
-`current-branch` 模式不创建 worktree；Codex CLI 子代理会在当前 checkout 内留下未暂存改动，供主 agent 或调用方复核。它也可以选择 `--subagent-launcher codex-app`，此时 AgentDesk 会创建 session 和每个 subagent 的 prompt 文件，然后以 `succeeded` 状态结束这次 launch-plan 准备；Codex App 宿主按 launch plan 直接启动 app subagents，并负责后续等待。
+`current-branch` 模式不创建 worktree；Codex CLI 子代理会在当前 checkout 内留下未暂存改动，供主 agent 或调用方复核。它也可以选择 `--subagent-launcher codex-app`，此时 AgentDesk 会创建 session 和每个 subagent 的 prompt 文件，返回带有 `requiresHostLaunch: true` 的 `appLaunchPlan`，把每个 agent 标记为 `prepared_for_app`，并保持 `succeededAgents` 为 `0`；Codex App 宿主按 launch plan 直接启动 app subagents，并负责后续等待。
 
 每个 control-plane task 都会维护一个 `memory.md`，用于记录跨 session 共享的上下文。AgentDesk 会在启动子代理时把该文件注入 prompt，并在每个 agent 完成或失败后用 `sessionId + agentId` 标记自动更新对应 memory 条目。
 
