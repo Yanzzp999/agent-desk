@@ -321,7 +321,10 @@ test("claim_task_items rejects completed or session-conflicting claims unless fo
   assert.equal(forced.items[0].claimedBy, "agent-alpha");
   assert.equal(forced.items[0].claimSessionId, "session-alpha");
   assert.equal(forced.items[2].checked, true);
-  assert.equal((forced.markdown.match(/AgentDesk claim:/g) || []).length, 3);
+  assert.equal(forced.items[2].claimedBy, "");
+  assert.equal(forced.items[2].claimSessionId, "");
+  assert.equal(forced.claimedCount, 2);
+  assert.equal((forced.markdown.match(/AgentDesk claim:/g) || []).length, 2);
   assert.match(forced.markdown, /AgentDesk claim: `agent-beta` at 2026-05-14T01:00:00.000Z; session: `session-beta`; note: forced takeover/);
 });
 
