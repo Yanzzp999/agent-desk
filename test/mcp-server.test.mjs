@@ -333,6 +333,14 @@ test("MCP server reports actionable Codex CLI session failures", async () => {
     assert.equal(started.structuredContent.failedAgents, 1);
     assert.match(started.structuredContent.lastError, /synthetic fake Codex failure/);
 
+    const taskMarkdown = await fs.readFile(
+      path.join(projectRoot, ".agent-desk", "tasks", "task-mcp-failure", "task.md"),
+      "utf8",
+    );
+    assert.match(taskMarkdown, /- \[ \] Trigger fake Codex failure/);
+    assert.match(taskMarkdown, /AgentDesk status: `failed`; session: `[^`]+`; agent: `agent-01`/);
+    assert.doesNotMatch(taskMarkdown, /- \[x\] Trigger fake Codex failure/);
+
     const read = await client.callTool({
       name: "read_subagent_session",
       arguments: {

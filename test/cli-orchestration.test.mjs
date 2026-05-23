@@ -128,6 +128,12 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   ], { cwd: REPO_ROOT, env });
   assert.equal(sessionStart.exitCode, 0, sessionStart.stderr);
   const sessionSummary = JSON.parse(sessionStart.stdout);
+  const runningTaskMarkdown = await waitForText(
+    taskMeta.paths.taskMd,
+    (text) => /AgentDesk status: `running`; session: `[^`]+`; agent: `agent-0[12]`/.test(text) ? text : null,
+    10000,
+  );
+  assert.match(runningTaskMarkdown, /- \[ \] Implement CLI config plumbing/);
   const sessionMeta = await waitForJson(
     path.join(projectRoot, ".agent-desk", "sessions", sessionSummary.sessionId, "meta.json"),
     (meta) => ["succeeded", "failed"].includes(meta.status) ? meta : null,
@@ -144,6 +150,12 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.equal(sessionMeta.succeededAgents, 3);
   assert.equal(sessionMeta.failedAgents, 0);
   assert.deepEqual(sessionMeta.agents.map((agent) => agent.status), ["succeeded", "succeeded", "succeeded"]);
+
+  const completedTaskMarkdown = await fs.readFile(taskMeta.paths.taskMd, "utf8");
+  assert.equal((completedTaskMarkdown.match(/^- \[x\] /gm) || []).length, 3);
+  assert.equal((completedTaskMarkdown.match(/^- \[ \] /gm) || []).length, 0);
+  assert.equal((completedTaskMarkdown.match(/AgentDesk status: `succeeded`/g) || []).length, 3);
+  assert.doesNotMatch(completedTaskMarkdown, /AgentDesk status: `running`/);
 
   const sessionDoc = await fs.readFile(sessionMeta.paths.docMd, "utf8");
   assert.match(sessionDoc, /- Model: gpt-5\.5/);
@@ -852,6 +864,24 @@ async function waitForJson(filePath, predicate, timeoutMs = 15000) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`timed out waiting for ${filePath}: ${lastError?.message || lastError || "no matching state"}`);
+}
+
+async function waitForText(filePath, predicate, timeoutMs = 15000) {
+  const started = Date.now();
+  let lastError = null;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const text = await fs.readFile(filePath, "utf8");
+      const result = predicate(text);
+      if (result) {
+        return result;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`timed out waiting for ${filePath}: ${lastError?.message || lastError || "no matching text"}`);
 }
 
 async function readJsonLines(filePath) {

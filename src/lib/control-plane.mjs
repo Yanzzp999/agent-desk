@@ -845,6 +845,7 @@ export async function runSessionJob(context, sessionId) {
       if (!nextAgent) {
         break;
       }
+      await syncTaskChecklistItemStatusSafe(context, task, sessionId, nextAgent, "running", session.paths.stderrLog);
       const promise = runSingleAgent(context, task, session, sessionId, nextAgent)
         .then((result) => ({ agentId: nextAgent.id, result }))
         .catch((error) => ({ agentId: nextAgent.id, error }));
@@ -861,6 +862,10 @@ export async function runSessionJob(context, sessionId) {
       appendFileSyncSafe(session.paths.stderrLog, `${settled.agentId}: ${settled.error.message}\n`);
     }
     await refreshSessionCounts(context, sessionId);
+    const settledAgent = await getSessionAgent(context, sessionId, settled.agentId)
+      || agents.find((agent) => agent.id === settled.agentId);
+    const itemStatus = settledAgent?.status === "succeeded" ? "succeeded" : "failed";
+    await syncTaskChecklistItemStatusSafe(context, task, sessionId, settledAgent, itemStatus, session.paths.stderrLog);
     await writeSessionDocumentation(context, sessionId);
   }
 
@@ -1781,6 +1786,92 @@ async function writeSessionDocumentation(context, sessionId) {
   const task = await readTaskMeta(context, session.taskId).catch(() => null);
   await fsp.mkdir(path.dirname(session.paths.docMd), { recursive: true });
   await fsp.writeFile(session.paths.docMd, renderSessionDocument(session, task), "utf8");
+}
+
+async function syncTaskChecklistItemStatusSafe(context, task, sessionId, agent, status, stderrLog) {
+  try {
+    await syncTaskChecklistItemStatus(context, task, sessionId, agent, status);
+  } catch (error) {
+    appendFileSyncSafe(stderrLog, `task checklist sync failed for ${agent?.id || "unknown"}: ${error.message}\n`);
+  }
+}
+
+async function syncTaskChecklistItemStatus(context, task, sessionId, agent, status) {
+  if (!task?.paths?.taskMd || !agent?.order) {
+    return;
+  }
+  const normalizedStatus = normalizeAgentStatus(status);
+  const lock = await acquireLock(path.join(context.locksRoot, `task-checklist-${task.taskId}.lock`));
+  try {
+    const markdown = await readTextSafe(task.paths.taskMd);
+    if (!markdown.trim()) {
+      return;
+    }
+    const updated = applyTaskChecklistItemStatus(markdown, agent.order, {
+      status: normalizedStatus,
+      sessionId,
+      agentId: agent.id,
+    });
+    if (updated !== markdown) {
+      await writeTextAtomic(task.paths.taskMd, updated);
+    }
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
+function applyTaskChecklistItemStatus(markdown, order, state) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const items = checklistItemsForStatusEditing(lines);
+  const item = items[Number(order) - 1];
+  if (!item) {
+    return markdown;
+  }
+
+  const checked = state.status === "succeeded" ? "x" : " ";
+  lines[item.lineIndex] = lines[item.lineIndex].replace(
+    /^(\s*(?:[-*+]|\d+[.)])\s+)\[[ xX]\](\s+.+?)\s*$/,
+    `$1[${checked}]$2`,
+  );
+  const statusLine = renderTaskChecklistStatusLine(item.indent, state);
+  if (item.statusLineIndex >= 0) {
+    lines[item.statusLineIndex] = statusLine;
+  } else {
+    lines.splice(item.lineIndex + 1, 0, statusLine);
+  }
+  return lines.join("\n");
+}
+
+function checklistItemsForStatusEditing(lines) {
+  const items = [];
+  let current = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const itemMatch = String(lines[index]).match(/^(\s*)(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s+.+?\s*$/);
+    if (itemMatch) {
+      current = {
+        lineIndex: index,
+        indent: itemMatch[1] || "",
+        statusLineIndex: -1,
+      };
+      items.push(current);
+      continue;
+    }
+    if (!current || current.statusLineIndex >= 0) {
+      continue;
+    }
+    if (isTaskChecklistStatusLine(lines[index])) {
+      current.statusLineIndex = index;
+    }
+  }
+  return items;
+}
+
+function isTaskChecklistStatusLine(line) {
+  return /^\s*[-*+]\s+AgentDesk status:\s+`(?:running|succeeded|failed)`(?:;|$)/.test(String(line || ""));
+}
+
+function renderTaskChecklistStatusLine(indent, state) {
+  return `${indent}  - AgentDesk status: \`${state.status}\`; session: \`${state.sessionId}\`; agent: \`${state.agentId}\``;
 }
 
 async function prepareAgentWorktree(context, agent) {
