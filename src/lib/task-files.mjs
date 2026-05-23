@@ -578,7 +578,7 @@ function isClaimConflict(item, assignee, sessionId) {
   if (item.claimedBy !== assignee) {
     return true;
   }
-  return Boolean(sessionId && item.claimSessionId && item.claimSessionId !== sessionId);
+  return item.claimSessionId !== sessionId;
 }
 
 function isClaimOwnedBy(item, assignee, sessionId) {

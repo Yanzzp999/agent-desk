@@ -240,6 +240,91 @@ test("claims checklist items by task name and preserves visible ownership marker
   );
 });
 
+test("claim_task_items rejects completed or session-conflicting claims unless forced", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-"));
+  await createTaskMarkdownFile({
+    projectRoot,
+    title: "Claim conflict flow",
+    tasks: [
+      "Preserve existing claim owner",
+      "Allow forced takeover",
+      "Reject completed work",
+    ],
+  });
+
+  await claimTaskMarkdownItems({
+    projectRoot,
+    taskName: "Claim conflict flow",
+    items: [1, 2, 3],
+    assignee: "agent-alpha",
+    sessionId: "session-alpha",
+    claimedAt: "2026-05-14T00:00:00.000Z",
+    note: "original owner",
+  });
+
+  await completeTaskMarkdownItems({
+    projectRoot,
+    taskName: "Claim conflict flow",
+    items: [3],
+    assignee: "agent-alpha",
+    sessionId: "session-alpha",
+  });
+
+  await assert.rejects(
+    () => claimTaskMarkdownItems({
+      projectRoot,
+      taskName: "Claim conflict flow",
+      items: [1],
+      assignee: "agent-alpha",
+    }),
+    /already claimed: 1 by agent-alpha\/session-alpha/,
+  );
+
+  await assert.rejects(
+    () => claimTaskMarkdownItems({
+      projectRoot,
+      taskName: "Claim conflict flow",
+      items: [1],
+      assignee: "agent-alpha",
+      sessionId: "session-beta",
+    }),
+    /already claimed: 1 by agent-alpha\/session-alpha/,
+  );
+
+  await assert.rejects(
+    () => claimTaskMarkdownItems({
+      projectRoot,
+      taskName: "Claim conflict flow",
+      items: [3],
+      assignee: "agent-beta",
+      sessionId: "session-beta",
+      force: true,
+    }),
+    /cannot claim completed item\(s\): 3/,
+  );
+
+  const forced = await claimTaskMarkdownItems({
+    projectRoot,
+    taskName: "Claim conflict flow",
+    items: [2],
+    assignee: "agent-beta",
+    sessionId: "session-beta",
+    claimedAt: "2026-05-14T01:00:00.000Z",
+    note: "forced takeover",
+    force: true,
+  });
+
+  assert.equal(forced.claimed[0].index, 2);
+  assert.equal(forced.claimed[0].claimedBy, "agent-beta");
+  assert.equal(forced.claimed[0].claimSessionId, "session-beta");
+  assert.equal(forced.claimed[0].claimNote, "forced takeover");
+  assert.equal(forced.items[0].claimedBy, "agent-alpha");
+  assert.equal(forced.items[0].claimSessionId, "session-alpha");
+  assert.equal(forced.items[2].checked, true);
+  assert.equal((forced.markdown.match(/AgentDesk claim:/g) || []).length, 3);
+  assert.match(forced.markdown, /AgentDesk claim: `agent-beta` at 2026-05-14T01:00:00.000Z; session: `session-beta`; note: forced takeover/);
+});
+
 test("atomically claims the next open checklist item across concurrent agents", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-"));
   await createTaskMarkdownFile({
