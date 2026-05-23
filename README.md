@@ -247,9 +247,11 @@ verunectl tasks list [--json]
 verunectl tasks show <taskId> [--json]
 verunectl tasks create [--title TEXT] [--brief TEXT] [--rebuild|--continue-similar] [--json]
 verunectl mcp [--project DIR]
+verunectl config show [--json]
+verunectl config init [--force] [--json]
 verunectl sessions list [--task <taskId>] [--json]
 verunectl sessions show <sessionId> [--json]
-verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--allow-duplicate-session] [--json]
+verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--subagent-launcher LAUNCHER] [--allow-duplicate-session] [--json]
 verunectl sessions logs <sessionId> <agentId> [--json]
 ```
 
@@ -271,6 +273,12 @@ Session options:
 - `--subagent-launcher L`: choose `codex-cli` or `codex-app` in `current-branch` mode.
 - `--allow-duplicate-session`: override the active-session guard for a task.
 - `--force`: alias for `--allow-duplicate-session`.
+
+Fixed workflow defaults:
+
+- Service tier: `fast`.
+- Launch batch size: `6`.
+- Completed `worktree` sessions rebase onto and fast-forward `master`.
 
 ## Runtime Behavior
 

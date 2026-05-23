@@ -19,6 +19,9 @@ test("verunectl help exposes CLI-only task and session commands", async () => {
   assert.match(result.stdout, /--model MODEL/);
   assert.match(result.stdout, /--reasoning EFFORT/);
   assert.match(result.stdout, /--parallel N/);
+  assert.match(result.stdout, /Service tier: fast/);
+  assert.match(result.stdout, /Launch batch size: 6/);
+  assert.match(result.stdout, /fast-forward master/);
   assert.doesNotMatch(result.stdout, /\bgui\b/i);
   assert.doesNotMatch(result.stdout, /\bserve\b/i);
   assert.doesNotMatch(result.stdout, /electron/i);

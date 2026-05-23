@@ -332,5 +332,10 @@ Session start options:
   --allow-duplicate-session
                           Override the active-session guard for this task.
   --force                 Alias for --allow-duplicate-session.
+
+Workflow defaults:
+  Service tier: fast.
+  Launch batch size: 6.
+  Completed worktree sessions rebase onto and fast-forward master.
 `);
 }

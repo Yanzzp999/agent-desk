@@ -277,9 +277,11 @@ verunectl tasks list [--json]
 verunectl tasks show <taskId> [--json]
 verunectl tasks create [--title TEXT] [--brief TEXT] [--rebuild|--continue-similar] [--json]
 verunectl mcp [--project DIR]
+verunectl config show [--json]
+verunectl config init [--force] [--json]
 verunectl sessions list [--task <taskId>] [--json]
 verunectl sessions show <sessionId> [--json]
-verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--allow-duplicate-session] [--json]
+verunectl sessions start <taskId> [--model MODEL] [--reasoning EFFORT] [--parallel N] [--execution-mode MODE] [--subagent-launcher LAUNCHER] [--allow-duplicate-session] [--json]
 verunectl sessions logs <sessionId> <agentId> [--json]
 ```
 
@@ -301,6 +303,12 @@ verunectl sessions logs <sessionId> <agentId> [--json]
 - `--subagent-launcher L`：`current-branch` 下可选 `codex-cli` 或 `codex-app`
 - `--allow-duplicate-session`：覆盖 task 的 active-session 防重复保护
 - `--force`：`--allow-duplicate-session` 的别名
+
+固定工作流默认值：
+
+- 服务层级：`fast`
+- 启动批次大小：`6`
+- 完成的 `worktree` session 会 rebase 到 `master`，并 fast-forward 更新 `master`
 
 ## 运行行为
 
