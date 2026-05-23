@@ -16,7 +16,9 @@ test("npm package includes bundled Codex skills", async () => {
     const text = await fs.readFile(skillPath, "utf8");
     assert.match(text, new RegExp(`name: ${skillName}`));
     assert.match(text, /Explicit Invocation Only/);
-    assert.match(text, /Do not trigger it from task content alone/);
+    assert.match(text, /The user must explicitly specify this skill by writing/);
+    assert.match(text, /Never infer this skill from task content/);
+    assert.doesNotMatch(text, /otherwise unambiguously/);
   }
 });
 

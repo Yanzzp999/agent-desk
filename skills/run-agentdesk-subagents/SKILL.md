@@ -1,13 +1,13 @@
 ---
 name: run-agentdesk-subagents
-description: "Explicit-use only: use this skill only when the user explicitly names `$run-agentdesk-subagents` or `run-agentdesk-subagents`, or otherwise unambiguously asks to use this specific skill. Do not proactively trigger it from task content alone. When explicitly requested, run or coordinate an existing AgentDesk task with parallel Codex CLI or Codex App subagents."
+description: "Explicitly specified only: use this skill only when the user writes `$run-agentdesk-subagents` or `run-agentdesk-subagents` by name. Never infer or proactively trigger it from task content, workflow fit, or subagent-related requests alone. When explicitly requested by name, run or coordinate an existing AgentDesk task with parallel Codex CLI or Codex App subagents."
 ---
 
 # Run AgentDesk Subagents
 
 ## Explicit Invocation Only
 
-Do not use this skill unless the user explicitly names `$run-agentdesk-subagents` or `run-agentdesk-subagents`, or otherwise unambiguously asks to use this specific skill. Do not trigger it from task content alone.
+The user must explicitly specify this skill by writing `$run-agentdesk-subagents` or `run-agentdesk-subagents` by name. Never infer this skill from task content, workflow fit, or subagent-related requests alone.
 
 Use this skill to execute an existing AgentDesk task with concurrent subagents.
 Treat configured parallelism as the maximum concurrency limit, not as a required number of subagents to launch. The model may decide how many subagents are useful for the task, and the user may request any concurrency from 1 through the configured maximum.

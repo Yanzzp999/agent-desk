@@ -1,13 +1,13 @@
 ---
 name: generate-agentdesk-task
-description: "Explicit-use only: use this skill only when the user explicitly names `$generate-agentdesk-task` or `generate-agentdesk-task`, or otherwise unambiguously asks to use this specific skill. Do not proactively trigger it from task content alone. When explicitly requested, create or prepare an AgentDesk task for a project before subagent execution."
+description: "Explicitly specified only: use this skill only when the user writes `$generate-agentdesk-task` or `generate-agentdesk-task` by name. Never infer or proactively trigger it from task content, workflow fit, or task-generation requests alone. When explicitly requested by name, create or prepare an AgentDesk task for a project before subagent execution."
 ---
 
 # Generate AgentDesk Task
 
 ## Explicit Invocation Only
 
-Do not use this skill unless the user explicitly names `$generate-agentdesk-task` or `generate-agentdesk-task`, or otherwise unambiguously asks to use this specific skill. Do not trigger it from task content alone.
+The user must explicitly specify this skill by writing `$generate-agentdesk-task` or `generate-agentdesk-task` by name. Never infer this skill from task content, workflow fit, or task-generation requests alone.
 
 Use this skill to turn a user request into an AgentDesk control-plane task.
 By default, generate the task title, brief, checklist, and `task.md` content in Chinese unless the user explicitly asks for another language or the target repository clearly requires another language.

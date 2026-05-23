@@ -1,13 +1,13 @@
 ---
 name: claim-agentdesk-task
-description: "Explicit-use only: use this skill only when the user explicitly names `$claim-agentdesk-task` or `claim-agentdesk-task`, or otherwise unambiguously asks an agent to claim one item from an AgentDesk markdown task and implement it. Do not proactively trigger it from task content alone. When invoked, atomically claim one checklist item, implement only that item, and complete it through AgentDesk."
+description: "Explicitly specified only: use this skill only when the user writes `$claim-agentdesk-task` or `claim-agentdesk-task` by name. Never infer or proactively trigger it from task content, workflow fit, or requests to claim AgentDesk work alone. When explicitly requested by name, atomically claim one checklist item, implement only that item, and complete it through AgentDesk."
 ---
 
 # Claim AgentDesk Task
 
 ## Explicit Invocation Only
 
-Do not use this skill unless the user explicitly names `$claim-agentdesk-task` or `claim-agentdesk-task`, or otherwise unambiguously asks you to claim one AgentDesk task item and implement it. Do not trigger it from task content alone.
+The user must explicitly specify this skill by writing `$claim-agentdesk-task` or `claim-agentdesk-task` by name. Never infer this skill from task content, workflow fit, or requests to claim AgentDesk work alone.
 
 Use this skill when multiple agents may independently pull work from the same markdown task file.
 AgentDesk is CLI/MCP-only for this workflow. Coordinate through MCP task tools and focused command-line verification; do not add GUI, browser, Electron, Web app, or `npm run dev` checks unless the task explicitly adds a supported UI surface.
