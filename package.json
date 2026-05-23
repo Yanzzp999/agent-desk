@@ -18,6 +18,7 @@
     "src/",
     "skills/",
     "scripts/install-mcp.sh",
+    "scripts/sync-codex-skills.sh",
     "scripts/verunectl.sh",
     "README.md",
     "docs/README.zh-CN.md"
@@ -31,6 +32,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "sync:codex-skills": "./scripts/sync-codex-skills.sh",
     "secret-scan": "gitleaks git --redact --verbose ."
   },
   "engines": {

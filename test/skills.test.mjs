@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -10,6 +12,7 @@ const REPO_ROOT = path.resolve(TEST_DIR, "..");
 test("npm package includes bundled Codex skills", async () => {
   const pkg = JSON.parse(await fs.readFile(path.join(REPO_ROOT, "package.json"), "utf8"));
   assert.ok(pkg.files.includes("skills/"));
+  assert.ok(pkg.files.includes("scripts/sync-codex-skills.sh"));
 
   for (const skillName of ["claim-agentdesk-task", "generate-agentdesk-task", "run-agentdesk-subagents"]) {
     const skillPath = path.join(REPO_ROOT, "skills", skillName, "SKILL.md");
@@ -20,6 +23,34 @@ test("npm package includes bundled Codex skills", async () => {
     assert.match(text, /Never infer this skill from task content/);
     assert.doesNotMatch(text, /otherwise unambiguously/);
   }
+});
+
+test("sync-codex-skills copies bundled skills to CODEX_HOME", async () => {
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-codex-home-"));
+  const stalePath = path.join(codexHome, "skills", "generate-agentdesk-task", "stale.txt");
+  await fs.mkdir(path.dirname(stalePath), { recursive: true });
+  await fs.writeFile(stalePath, "stale\n");
+
+  const result = await run("sh", [path.join(REPO_ROOT, "scripts", "sync-codex-skills.sh")], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+    },
+  });
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout, /Synced 3 Codex skill\(s\)/);
+
+  for (const skillName of ["claim-agentdesk-task", "generate-agentdesk-task", "run-agentdesk-subagents"]) {
+    const source = await fs.readFile(path.join(REPO_ROOT, "skills", skillName, "SKILL.md"), "utf8");
+    const installed = await fs.readFile(path.join(codexHome, "skills", skillName, "SKILL.md"), "utf8");
+    assert.equal(installed, source);
+  }
+
+  await assert.rejects(async () => {
+    await fs.access(stalePath);
+  }, { code: "ENOENT" });
 });
 
 test("claim-agentdesk-task skill documents atomic claim and completion workflow", async () => {
@@ -85,3 +116,22 @@ test("project docs describe model-reviewed concurrency recommendations", async (
   assert.match(generateSkill, /recommended per-batch subagent count/);
   assert.match(generateSkill, /later user-selected concurrency/);
 });
+
+function run(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, options);
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (exitCode) => {
+      resolve({ exitCode, stdout, stderr });
+    });
+  });
+}

@@ -23,6 +23,12 @@
 - If verification was skipped or blocked, Codex should mention that clearly in its final response.
 - If the user explicitly says not to commit or not to push, follow the user's instruction instead.
 
+## Skill Sync Workflow
+
+- When a change touches files under `skills/`, Codex should run `./scripts/sync-codex-skills.sh` after verification and before the final response so the repository skill definitions are copied to `${CODEX_HOME:-~/.codex}/skills`.
+- If writing to `${CODEX_HOME:-~/.codex}/skills` requires sandbox approval, request approval and run the sync once it is granted.
+- If the sync is skipped or blocked, clearly mention that in the final response and leave the repository changes intact.
+
 ## Product Direction
 
 - Keep AgentDesk centered on project configuration/selection through CLI/MCP, `task.md` generation, session history, and Codex subagent orchestration.
