@@ -175,6 +175,121 @@ test("MCP server runs markdown task tools against the launched project", async (
   }
 });
 
+test("MCP claim_next_task_item skips completed and claimed items in order", async () => {
+  const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-next-")));
+  const taskDir = path.join(projectRoot, "task");
+  const taskPath = path.join(taskDir, "mixed-next-claim.task.md");
+  await fs.mkdir(taskDir, { recursive: true });
+  await fs.writeFile(taskPath, [
+    "# Mixed next claim",
+    "",
+    "## Tasks",
+    "",
+    "- [x] Already complete",
+    "- [ ] Already claimed elsewhere",
+    "  - AgentDesk claim: `other-agent` at 2026-05-14T00:00:00.000Z; session: `session-other`; note: already underway",
+    "- [ ] First idle item",
+    "- [ ] Second idle item",
+    "",
+  ].join("\n"), "utf8");
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [MCP_BIN],
+    cwd: projectRoot,
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-desk-mcp-next-test", version: "0.0.0" });
+  const calls = [];
+  let finalMarkdown = "";
+
+  const duplicateClaimedIndexes = () => {
+    const seen = new Set();
+    const duplicate = new Set();
+    for (const call of calls) {
+      for (const item of call.claimed) {
+        if (seen.has(item.index)) {
+          duplicate.add(item.index);
+        }
+        seen.add(item.index);
+      }
+    }
+    return [...duplicate].sort((left, right) => left - right);
+  };
+
+  const evidence = () => JSON.stringify({
+    callOrder: calls.map((call) => call.label),
+    payloads: calls,
+    markdown: finalMarkdown,
+    duplicateClaimedIndexes: duplicateClaimedIndexes(),
+  }, null, 2);
+
+  const callNext = async (label, assignee, sessionId) => {
+    const result = await client.callTool({
+      name: "claim_next_task_item",
+      arguments: {
+        taskName: "mixed-next-claim.task.md",
+        assignee,
+        sessionId,
+        note: label,
+      },
+    });
+    const payload = result.structuredContent;
+    calls.push({
+      label,
+      hasWork: payload.hasWork,
+      claimedCount: payload.claimedCount,
+      claimed: payload.claimed.map((item) => ({
+        index: item.index,
+        title: item.title,
+        claimedBy: item.claimedBy,
+        claimSessionId: item.claimSessionId,
+      })),
+      items: payload.items.map((item) => ({
+        index: item.index,
+        title: item.title,
+        checked: item.checked,
+        claimedBy: item.claimedBy,
+        claimSessionId: item.claimSessionId,
+      })),
+    });
+    return payload;
+  };
+
+  try {
+    await client.connect(transport);
+    const first = await callNext("first-call", "agent-alpha", "session-alpha");
+    const second = await callNext("second-call", "agent-beta", "session-beta");
+    const empty = await callNext("third-call", "agent-gamma", "session-gamma");
+    finalMarkdown = await fs.readFile(taskPath, "utf8");
+
+    assert.deepEqual(calls.map((call) => call.hasWork), [true, true, false], evidence());
+    assert.deepEqual(calls.map((call) => call.claimed[0]?.index ?? null), [3, 4, null], evidence());
+    assert.deepEqual(duplicateClaimedIndexes(), [], evidence());
+
+    assert.equal(first.items[0].checked, true, evidence());
+    assert.equal(first.items[1].claimedBy, "other-agent", evidence());
+    assert.equal(first.items[1].claimSessionId, "session-other", evidence());
+    assert.equal(first.claimed[0].title, "First idle item", evidence());
+    assert.equal(second.claimed[0].title, "Second idle item", evidence());
+    assert.deepEqual(empty.claimed, [], evidence());
+    assert.equal(empty.claimedCount, 3, evidence());
+    assert.equal(empty.taskCount, 4, evidence());
+    assert.equal(empty.doneCount, 1, evidence());
+
+    assert.equal((finalMarkdown.match(/AgentDesk claim:/g) || []).length, 3, evidence());
+    assert.match(finalMarkdown, /AgentDesk claim: `other-agent`.+session: `session-other`/, evidence());
+    assert.match(finalMarkdown, /AgentDesk claim: `agent-alpha`.+session: `session-alpha`/, evidence());
+    assert.match(finalMarkdown, /AgentDesk claim: `agent-beta`.+session: `session-beta`/, evidence());
+  } catch (error) {
+    finalMarkdown ||= await fs.readFile(taskPath, "utf8").catch((readError) => `failed to read task file: ${readError.message}`);
+    error.message = `${error.message}\nclaim_next_task_item evidence:\n${evidence()}`;
+    throw error;
+  } finally {
+    await client.close();
+  }
+});
+
 test("MCP server starts Codex CLI subagent sessions", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-session-")));
   const projectRoot = path.join(root, "project");
