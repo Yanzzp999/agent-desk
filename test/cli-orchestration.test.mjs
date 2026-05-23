@@ -63,6 +63,83 @@ test("verunectl rejects missing CLI option values before side effects", async ()
   );
 });
 
+test("verunectl uses readable English directory ids for Chinese task and session names", { timeout: 30000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-readable-ids-"));
+  const projectRoot = path.join(root, "project");
+  const worktreesRoot = path.join(root, "worktrees");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const fakeState = path.join(root, "fake-state.json");
+  const fakeLog = path.join(root, "fake-log.jsonl");
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await writeFakeCodex(fakeCodex);
+  await initializeGitProject(projectRoot);
+
+  const env = {
+    ...process.env,
+    CODEX_CLI: fakeCodex,
+    FAKE_CODEX_STATE: fakeState,
+    FAKE_CODEX_LOG: fakeLog,
+  };
+
+  const taskCreate = await run(process.execPath, [
+    VERUNECTL,
+    "tasks",
+    "create",
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--title",
+    "AgentDesk \u4efb\u52a1\u9886\u53d6\u4e0e\u53cc\u542f\u52a8\u5668\u9a8c\u8bc1",
+    "--brief",
+    "Validate claim_next_task_item, Codex App, and Codex CLI launchers.",
+    "--rebuild",
+    "--json",
+  ], { cwd: REPO_ROOT, env });
+  assert.equal(taskCreate.exitCode, 0, taskCreate.stderr);
+  const taskSummary = JSON.parse(taskCreate.stdout);
+  assert.match(
+    taskSummary.taskId,
+    /^task-\d{8}T\d{6}Z-agentdesk-task-claim-dual-launcher-validation$/,
+  );
+  await waitForJson(
+    path.join(projectRoot, ".agent-desk", "tasks", taskSummary.taskId, "meta.json"),
+    (meta) => meta.status === "ready" ? meta : null,
+  );
+
+  const readableSessionTaskId = "task-readable-session-source";
+  await writeReadyAgentDeskTask(
+    projectRoot,
+    readableSessionTaskId,
+    "\u4efb\u52a1\u9886\u53d6\u4e0e\u53cc\u542f\u52a8\u5668\u9a8c\u8bc1",
+  );
+
+  const sessionStart = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "start",
+    readableSessionTaskId,
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--execution-mode",
+    "current-branch",
+    "--subagent-launcher",
+    "codex-app",
+    "--json",
+  ], { cwd: REPO_ROOT, env });
+  assert.equal(sessionStart.exitCode, 0, sessionStart.stderr);
+  const sessionSummary = JSON.parse(sessionStart.stdout);
+  assert.match(
+    sessionSummary.sessionId,
+    /^session-\d{8}T\d{6}Z-task-claim-dual-launcher-validation$/,
+  );
+  const sessionDirStat = await fs.stat(path.join(projectRoot, ".agent-desk", "sessions", sessionSummary.sessionId));
+  assert.equal(sessionDirStat.isDirectory(), true);
+});
+
 test("verunectl creates a task and runs configured Codex CLI subagents", { timeout: 60000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-e2e-"));
   const projectRoot = path.join(root, "project");

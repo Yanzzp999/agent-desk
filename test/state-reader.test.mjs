@@ -17,6 +17,7 @@ import {
   normalizeSessionRequest,
   parseAgentDeskConfigToml,
   parseTaskMarkdownItems,
+  readableTaskSlug,
   renderAgentDeskConfigToml,
   renderSessionDocument,
   upsertTaskMemoryEntry,
@@ -31,6 +32,21 @@ test("createContext uses project-scoped .agent-desk roots", async () => {
   assert.equal(context.tasksRoot, path.join(projectRoot, AGENT_DESK_STATE_DIRNAME, "tasks"));
   assert.equal(context.sessionsRoot, path.join(projectRoot, AGENT_DESK_STATE_DIRNAME, "sessions"));
   assert.match(context.worktreesRoot, /agent-desk\/worktrees/);
+});
+
+test("builds readable English slugs for Chinese AgentDesk task names", () => {
+  assert.equal(
+    readableTaskSlug("AgentDesk \u4efb\u52a1\u9886\u53d6\u4e0e\u53cc\u542f\u52a8\u5668\u9a8c\u8bc1"),
+    "agentdesk-task-claim-dual-launcher-validation",
+  );
+  assert.equal(
+    readableTaskSlug("Codex CLI \u542f\u52a8\u70df\u6d4b"),
+    "codex-cli-launch-smoke-test",
+  );
+  assert.equal(
+    readableTaskSlug("\u4efb\u52a1\u9886\u53d6\u4e0e\u53cc\u542f\u52a8\u5668\u9a8c\u8bc1"),
+    "task-claim-dual-launcher-validation",
+  );
 });
 
 test("createTask requires confirmation before duplicating a similar AgentDesk task", async () => {

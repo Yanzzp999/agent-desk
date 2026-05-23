@@ -29,6 +29,7 @@ export const DEFAULT_CONFIG_FILENAME = "config.toml";
 export const DEFAULT_TASK_MEMORY_FILENAME = "memory.md";
 export const AGENT_TASK_SNAPSHOT_FILENAME = "task.snapshot.md";
 export const AGENT_MEMORY_SNAPSHOT_FILENAME = "memory.snapshot.md";
+const DIRECTORY_SLUG_MAX_TOKENS = 10;
 const SCHEMA_VERSION = 2;
 const TASK_STATUSES = new Set(["received", "generating", "ready", "running", "succeeded", "failed"]);
 const SESSION_STATUSES = new Set(["queued", "waiting_for_app", "running", "succeeded", "failed"]);
@@ -41,6 +42,69 @@ const SUPPORTED_REASONING_EFFORTS = new Set(
   CODEX_REASONING_EFFORT_OPTIONS.map((option) => option.value).filter(Boolean),
 );
 const SUBAGENT_REPORT_SCHEMA_PATH = path.join(CONTROL_PLANE_ROOT, "src", "lib", "subagent-report.schema.json");
+const DIRECTORY_SLUG_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "of",
+  "on",
+  "or",
+  "the",
+  "through",
+  "to",
+  "with",
+]);
+const DIRECTORY_SLUG_PHRASES = Object.freeze([
+  { phrases: ["agentdesk"], tokens: ["agentdesk"] },
+  { phrases: ["codex cli"], tokens: ["codex", "cli"] },
+  { phrases: ["codex app"], tokens: ["codex", "app"] },
+  { phrases: ["mcp"], tokens: ["mcp"] },
+  { phrases: ["cli"], tokens: ["cli"] },
+  { phrases: ["subagent"], tokens: ["subagent"] },
+  { phrases: ["claim_next_task_item"], tokens: ["claim", "next", "task", "item"] },
+  {
+    phrases: [
+      "\u4efb\u52a1\u9886\u53d6",
+      "\u9886\u53d6\u4efb\u52a1",
+      "\u53d6\u51fa\u4efb\u52a1",
+    ],
+    tokens: ["task", "claim"],
+  },
+  {
+    phrases: [
+      "\u53cc\u542f\u52a8\u5668",
+      "\u53cc\u542f\u52a8",
+      "\u53cc\u53d1\u8d77",
+      "\u4e24\u79cd",
+      "\u4e24\u6761",
+    ],
+    tokens: ["dual", "launcher"],
+  },
+  { phrases: ["\u542f\u52a8\u70df\u6d4b", "\u70df\u6d4b"], tokens: ["launch", "smoke", "test"] },
+  { phrases: ["\u5168\u529f\u80fd", "\u6240\u6709\u529f\u80fd", "\u5168\u9762"], tokens: ["full", "feature"] },
+  { phrases: ["\u5065\u5eb7\u68c0\u67e5"], tokens: ["health", "check"] },
+  { phrases: ["\u4f1a\u8bdd\u5386\u53f2"], tokens: ["session", "history"] },
+  { phrases: ["\u5b50\u4ee3\u7406"], tokens: ["subagent"] },
+  { phrases: ["\u542f\u52a8\u5668"], tokens: ["launcher"] },
+  { phrases: ["\u53d1\u8d77"], tokens: ["launch"] },
+  { phrases: ["\u9a8c\u8bc1", "\u6821\u9a8c"], tokens: ["validation"] },
+  { phrases: ["\u68c0\u67e5"], tokens: ["check"] },
+  { phrases: ["\u4efb\u52a1"], tokens: ["task"] },
+  { phrases: ["\u4f1a\u8bdd"], tokens: ["session"] },
+  { phrases: ["\u76ee\u5f55"], tokens: ["directory"] },
+  { phrases: ["\u914d\u7f6e"], tokens: ["config"] },
+  { phrases: ["\u65e5\u5fd7"], tokens: ["logs"] },
+  { phrases: ["\u6587\u6863"], tokens: ["docs"] },
+  { phrases: ["\u9879\u76ee"], tokens: ["project"] },
+  { phrases: ["\u96c6\u6210"], tokens: ["integration"] },
+]);
 
 export function findProjectRoot(cwd = process.cwd()) {
   const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
@@ -2329,13 +2393,13 @@ async function mutateSessionMeta(context, sessionId, mutate) {
 }
 
 async function allocateTaskDir(context, request) {
-  const base = `task-${compactTimestamp(new Date())}-${slug(request.title)}`;
+  const base = `task-${compactTimestamp(new Date())}-${readableTaskSlug(request.title, request.brief)}`;
   const { id, dir } = await allocateUniqueDir(base, (candidate) => taskDirPath(context, candidate));
   return { taskId: id, taskDir: dir };
 }
 
 async function allocateSessionDir(context, task) {
-  const base = `session-${compactTimestamp(new Date())}-${slug(task.title || task.taskId)}`;
+  const base = `session-${compactTimestamp(new Date())}-${readableTaskSlug(task.name, task.title, task.brief, task.taskId)}`;
   const { id, dir } = await allocateUniqueDir(base, (candidate) => sessionDirPath(context, candidate));
   return { sessionId: id, sessionDir: dir };
 }
@@ -2804,6 +2868,52 @@ function firstNonEmptyLine(text) {
 function extractMarkdownTitle(markdown) {
   const match = String(markdown || "").match(/^#\s+(.+?)\s*$/m);
   return match ? match[1].trim() : "";
+}
+
+export function readableTaskSlug(...values) {
+  const tokens = [];
+  for (const value of values.flat()) {
+    const text = normalizeOptionalString(value);
+    if (!text) {
+      continue;
+    }
+    collectAsciiSlugTokens(text, tokens);
+    collectMappedSlugTokens(text, tokens);
+    if (tokens.length >= 4) {
+      break;
+    }
+  }
+  return tokens.length > 0 ? tokens.slice(0, DIRECTORY_SLUG_MAX_TOKENS).join("-") : "task";
+}
+
+function collectAsciiSlugTokens(value, tokens) {
+  const normalized = String(value || "")
+    .replace(/agent\s*desk/gi, "agentdesk")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ");
+  for (const token of normalized.split(/\s+/)) {
+    addDirectorySlugToken(tokens, token);
+  }
+}
+
+function collectMappedSlugTokens(value, tokens) {
+  const normalized = String(value || "").toLowerCase();
+  for (const entry of DIRECTORY_SLUG_PHRASES) {
+    if (entry.phrases.some((phrase) => normalized.includes(phrase))) {
+      for (const token of entry.tokens) {
+        addDirectorySlugToken(tokens, token);
+      }
+    }
+  }
+}
+
+function addDirectorySlugToken(tokens, token) {
+  const normalized = slug(token);
+  if (!normalized || normalized === "item" || DIRECTORY_SLUG_STOP_WORDS.has(normalized) || tokens.includes(normalized)) {
+    return;
+  }
+  tokens.push(normalized);
 }
 
 function compactTimestamp(date) {

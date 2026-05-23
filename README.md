@@ -203,11 +203,13 @@ Each project stores orchestration state in:
 ```
 
 `taskId` and `sessionId` stay stable for paths, commands, worktree names, and
-MCP lookups. User-facing lists, details, and structured MCP results also expose a
-`name`: task names come from the model-generated `task.md` H1, and session names
-reuse that task name so lists stay readable. Execution settings such as launcher,
-model, reasoning, service tier, and parallelism remain available as separate
-structured fields and in the session document.
+MCP lookups. New task and session directory names include a timestamp plus a
+readable English slug derived from the task name and brief, so paths are easier
+to scan while remaining unique. User-facing lists, details, and structured MCP
+results also expose a `name`: task names come from the model-generated `task.md`
+H1, and session names reuse that task name so lists stay readable. Execution
+settings such as launcher, model, reasoning, service tier, and parallelism remain
+available as separate structured fields and in the session document.
 
 Persistent git worktrees are stored outside the project by default:
 

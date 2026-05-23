@@ -226,10 +226,12 @@ agent 应在实现前调用 `claim_next_task_item`，验证通过后调用 `comp
 ```
 
 `taskId` 和 `sessionId` 会作为路径、命令、worktree 名称和 MCP 查询的稳定
-引用保留下来。面向用户的列表、详情和结构化 MCP 结果会额外暴露 `name`：
-task 名称来自模型生成的 `task.md` H1，session 名称复用该 task 名称，便于
-浏览。launcher、模型、reasoning、service tier、并发数等执行设置仍保留在独立
-结构化字段和 session 文档中。
+引用保留下来。新的 task / session 目录名会包含时间戳和从 task 名称、brief
+派生出的英文可读 slug，让磁盘路径更容易人工扫描，同时仍保持唯一。面向用户的
+列表、详情和结构化 MCP 结果会额外暴露 `name`：task 名称来自模型生成的
+`task.md` H1，session 名称复用该 task 名称，便于浏览。launcher、模型、
+reasoning、service tier、并发数等执行设置仍保留在独立结构化字段和 session
+文档中。
 
 持久化 git worktree 默认存放在项目目录之外：
 
