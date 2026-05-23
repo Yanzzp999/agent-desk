@@ -35,6 +35,7 @@ If `sessionId` is not available from the user, environment, or current session c
 ## Guardrails
 
 - Never start implementation before `claim_next_task_item` succeeds.
+- Work from the repository-designated working branch. In this AgentDesk workspace, use `agentdesk/next` as the base for new work; do not switch to `master`, create work from `master`, or merge/push `master` unless the user explicitly requests it.
 - Never claim more than one item in this workflow unless the user explicitly asks for another claim after completion.
 - Never complete an item claimed by a different assignee or session id.
 - MCP is the required coordination path. If MCP is unavailable, do not manually edit the task file to simulate a claim.

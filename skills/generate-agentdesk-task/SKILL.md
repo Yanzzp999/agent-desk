@@ -47,6 +47,7 @@ Do not ask for extra detail when the missing information is non-blocking or the 
 - Keep AgentDesk centered on `task.md`; do not reintroduce PRD JSON, Gemini CLI, or Claude Code compatibility flows.
 - Prefer the MCP stdio server and `verunectl` as the supported interfaces.
 - Generate user-facing task content in Chinese by default, including titles, briefs, checklist items, task notes, and final summaries.
-- Prefer explicit session defaults in user-facing notes: `gpt-5.5`, `xhigh`, service tier `fast`, execution mode `auto`, batches of up to 6, and worktree integration into `master`.
+- Prefer explicit session defaults in user-facing notes: `gpt-5.5`, `xhigh`, service tier `fast`, execution mode `auto`, batches of up to 6, and the repository-designated working branch as the base for new work.
+- If the user or repository designates a non-`master` working branch, carry that branch into task notes and do not describe future work as based on or automatically integrated into `master`. In this AgentDesk workspace, use `agentdesk/next` as the working branch and leave any merge to `master` for the user to perform manually.
 - Make clear that before subagent execution, the coordinating model should review task complexity and concurrency-conflict risk, decide a recommended per-batch subagent count within the configured cap, notify the user of that recommendation, and respect any later user-selected concurrency.
 - If task generation fails, preserve the task directory and summarize `stdout.log` / `stderr.log` rather than deleting artifacts.
