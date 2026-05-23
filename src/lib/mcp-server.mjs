@@ -450,6 +450,10 @@ function taskCreateResultSchema() {
     }).passthrough().optional(),
     recoveryMessage: z.string().optional(),
     supersededTaskIds: z.array(z.string()).optional(),
+    supersededTaskErrors: z.array(z.object({
+      taskId: z.string(),
+      message: z.string(),
+    })).optional(),
   }).passthrough();
 }
 

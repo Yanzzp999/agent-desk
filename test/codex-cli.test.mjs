@@ -88,16 +88,26 @@ test("discovers models from injected CLI runner and falls back when discovery fa
     codexCliPath: "/usr/local/bin/codex",
     runCommand: async () => ({
       exitCode: 0,
-      stdout: JSON.stringify({ models: [{ slug: "gpt-5.5", additional_speed_tiers: ["fast"] }] }),
+      stdout: JSON.stringify({
+        models: [
+          {
+            slug: "gpt-5.5",
+            service_tiers: [{ id: "priority", name: "Fast" }],
+          },
+        ],
+      }),
       stderr: "",
     }),
   });
 
   assert.equal(discovered.source, "codex-cli");
   assert.equal(discovered.models[0].slug, "gpt-5.5");
+  assert.equal(discovered.models[0].fast.tier, "priority");
   assert.equal(discovered.fast.supported, true);
+  assert.equal(discovered.fast.tier, "priority");
   assert.equal(discovered.fast.configKey, "service_tier");
   assert.deepEqual(getCodexFastSupportMetadata(discovered.models).supportedModels, ["gpt-5.5"]);
+  assert.equal(getCodexFastSupportMetadata(discovered.models).tier, "priority");
 
   const fallback = await discoverCodexModels({
     codexCliPath: "/missing/codex",

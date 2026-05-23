@@ -124,7 +124,8 @@ npm link
 - `skills/run-agentdesk-subagents/SKILL.md`：基于已有 AgentDesk task 启动或协调 Codex CLI / Codex App 子代理，并把配置的 parallelism 视为最大并发上限。
 - `skills/claim-agentdesk-task/SKILL.md`：让 agent 从 markdown task 中原子领取一个未完成 checklist item，只实现这一项，并用同一个 agent/session 身份完成它。
 
-所有内置 skill 都只在显式点名时使用。它们会让 AgentDesk 保持聚焦在 `task.md`、MCP/CLI 工作流、`gpt-5.5`、`xhigh`、`fast`、每批最多 6 个子代理，以及集成到 `master`。
+所有内置 skill 都只在显式点名时使用。它们会让 AgentDesk 保持聚焦在 `task.md`、MCP/CLI 工作流、`gpt-5.5`、`xhigh`、`fast`、每批最多 6 个子代理，以及仓库指定的工作分支。
+在这个 AgentDesk checkout 中，Codex 开发工作基于 `agentdesk/next`；用户会手动审查并把它合并到 `master`。
 在执行子代理前，协调模型应先评审 task 复杂度和并发编辑冲突风险，决定并告知用户推荐的每批 subagent 数量；之后用户仍可在配置上限内自行选择不同的并发量。
 
 MCP tools：
@@ -187,7 +188,8 @@ agent 应在实现前调用 `claim_next_task_item`，验证通过后调用 `comp
 - 最大 Codex CLI 子代理或 Codex App launch prompt 并发数：`6`
 - 执行模式：`auto`，由主 agent/AgentDesk 判断是否需要 worktree
 - 启动批次大小：`6`
-- 集成分支：`master`
+- 通用目标项目 worktree 集成分支：`master`
+- AgentDesk 仓库 Codex 开发基线：`agentdesk/next`
 
 启动 session 时可以配置模型、思考深度、执行模式、subagent launcher 和并发上限。
 

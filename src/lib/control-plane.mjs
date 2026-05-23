@@ -415,31 +415,24 @@ export async function createTask(context, request = {}) {
     stdio: "ignore",
   });
   child.unref();
-  const supersededTaskIds = normalized.similarTaskAction === "rebuild"
+  const recoveryLinks = normalized.similarTaskAction === "rebuild"
     ? await markFailedSimilarTasksSuperseded(context, similarTasks, taskId)
-    : [];
+    : { supersededTaskIds: [], supersededTaskErrors: [] };
+  const { supersededTaskIds, supersededTaskErrors } = recoveryLinks;
 
   const summary = await enrichTaskSummary(context, {
     ...meta,
     pid: child.pid,
   });
+  const recovery = buildReplacementRecovery(supersededTaskIds, supersededTaskErrors);
   return {
     ...summary,
     requiresConfirmation: false,
     similarTaskAction: normalized.similarTaskAction,
     similarTasks: normalized.similarTaskAction === "rebuild" ? similarTasks : [],
     supersededTaskIds,
-    ...(supersededTaskIds.length > 0
-      ? {
-        recovery: {
-          state: "replacement_started",
-          title: "Replacement started",
-          message: "A replacement task was started. Failed matching tasks remain available for logs and now point to this task.",
-          recommendedAction: "watch_replacement",
-          replacedTaskIds: supersededTaskIds,
-        },
-      }
-      : {}),
+    ...(supersededTaskErrors.length > 0 ? { supersededTaskErrors } : {}),
+    ...(recovery ? { recovery } : {}),
   };
 }
 
@@ -1346,18 +1339,49 @@ function buildTaskRecoverySummary(task) {
 
 async function markFailedSimilarTasksSuperseded(context, similarTasks, replacementTaskId) {
   const supersededTaskIds = [];
+  const supersededTaskErrors = [];
   for (const task of similarTasks) {
     if (task.status !== "failed" || task.taskId === replacementTaskId || task.supersededBy) {
       continue;
     }
-    await updateTaskMeta(context, task.taskId, {
-      supersededBy: replacementTaskId,
-      supersededAt: new Date().toISOString(),
-      supersededReason: "replacement task created from a similar request",
-    }).catch(() => null);
-    supersededTaskIds.push(task.taskId);
+    try {
+      await updateTaskMeta(context, task.taskId, {
+        supersededBy: replacementTaskId,
+        supersededAt: new Date().toISOString(),
+        supersededReason: "replacement task created from a similar request",
+      });
+      supersededTaskIds.push(task.taskId);
+    } catch (error) {
+      supersededTaskErrors.push({
+        taskId: task.taskId,
+        message: error.message || String(error),
+      });
+    }
   }
-  return supersededTaskIds;
+  return { supersededTaskIds, supersededTaskErrors };
+}
+
+function buildReplacementRecovery(supersededTaskIds, supersededTaskErrors) {
+  if (supersededTaskIds.length === 0 && supersededTaskErrors.length === 0) {
+    return null;
+  }
+  if (supersededTaskErrors.length > 0) {
+    return {
+      state: "replacement_started_with_link_errors",
+      title: "Replacement started",
+      message: "A replacement task was started, but AgentDesk could not update every failed matching task to point at it.",
+      recommendedAction: "review_failed_tasks",
+      replacedTaskIds: supersededTaskIds,
+      unlinkedTaskIds: supersededTaskErrors.map((error) => error.taskId),
+    };
+  }
+  return {
+    state: "replacement_started",
+    title: "Replacement started",
+    message: "A replacement task was started. Failed matching tasks remain available for logs and now point to this task.",
+    recommendedAction: "watch_replacement",
+    replacedTaskIds: supersededTaskIds,
+  };
 }
 
 function scoreTaskSimilarity(request, task) {

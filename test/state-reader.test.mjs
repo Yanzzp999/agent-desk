@@ -132,6 +132,59 @@ test("createTask recommends replacement when the similar task failed", async () 
   assert.equal(blocked.confirmationChoices.find((choice) => choice.action === "rebuild")?.recommended, true);
 });
 
+test("createTask reports only failed task links that were actually written", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-failed-link-"));
+  const fakeCodex = path.join(projectRoot, "fake-codex.sh");
+  await fs.writeFile(fakeCodex, "#!/bin/sh\nexit 0\n", "utf8");
+  await fs.chmod(fakeCodex, 0o755);
+  const context = createContext({ projectRoot, codexCli: fakeCodex });
+  const taskDir = path.join(context.tasksRoot, "task-failed-unwritable");
+  const metaJson = path.join(taskDir, "meta.json");
+  await fs.mkdir(taskDir, { recursive: true });
+  await fs.writeFile(metaJson, JSON.stringify({
+    schemaVersion: 2,
+    taskId: "task-failed-unwritable",
+    title: "Checkout flow",
+    brief: "Implement checkout end to end.",
+    status: "failed",
+    createdAt: "2026-05-13T10:00:00.000Z",
+    updatedAt: "2026-05-13T10:05:00.000Z",
+    completedAt: "2026-05-13T10:05:00.000Z",
+    lastError: "task generation failed",
+    subtaskCount: 0,
+    paths: {
+      taskDir,
+      briefMd: path.join(taskDir, "brief.md"),
+      promptMd: path.join(taskDir, "prompt.md"),
+      taskMd: path.join(taskDir, "task.md"),
+      memoryMd: path.join(taskDir, "memory.md"),
+      metaJson,
+      stdoutLog: path.join(taskDir, "stdout.log"),
+      stderrLog: path.join(taskDir, "stderr.log"),
+    },
+  }, null, 2), "utf8");
+
+  await fs.chmod(taskDir, 0o555);
+  try {
+    const rebuilt = await createTask(context, {
+      title: "Checkout flow",
+      brief: "Implement checkout end to end.",
+      similarTaskAction: "rebuild",
+    });
+
+    assert.deepEqual(rebuilt.supersededTaskIds, []);
+    assert.equal(rebuilt.supersededTaskErrors.length, 1);
+    assert.equal(rebuilt.supersededTaskErrors[0].taskId, "task-failed-unwritable");
+    assert.equal(rebuilt.recovery.state, "replacement_started_with_link_errors");
+    assert.deepEqual(rebuilt.recovery.unlinkedTaskIds, ["task-failed-unwritable"]);
+
+    const failedMeta = JSON.parse(await fs.readFile(metaJson, "utf8"));
+    assert.equal(failedMeta.supersededBy, undefined);
+  } finally {
+    await fs.chmod(taskDir, 0o755).catch(() => {});
+  }
+});
+
 test("parses markdown checklist subtasks for subagent fanout", () => {
   const markdown = `
 # Ship session orchestrator

@@ -327,7 +327,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
     assert.equal(entry.model, "gpt-5.5");
     assert.deepEqual(entry.configs, [
       "model_reasoning_effort=\"high\"",
-      "service_tier=\"fast\"",
+      "service_tier=\"priority\"",
     ]);
   }
 

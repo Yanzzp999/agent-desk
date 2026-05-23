@@ -402,7 +402,12 @@ function extractFastSupport(raw) {
     return freezeFastSupport({ supported: true, source: "boolean" });
   }
   if (raw.fast?.supported === true) {
-    return freezeFastSupport({ supported: true, source: raw.fast.source || "fast" });
+    return freezeFastSupport({
+      supported: true,
+      tier: raw.fast.tier,
+      configKey: raw.fast.configKey,
+      source: raw.fast.source || "fast",
+    });
   }
   return freezeFastSupport({ supported: false, source: "" });
 }

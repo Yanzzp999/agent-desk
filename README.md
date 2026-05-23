@@ -103,7 +103,8 @@ The package ships optional Codex skill definitions under `skills/`:
 - `skills/run-agentdesk-subagents/SKILL.md`: runs or coordinates an existing AgentDesk task with Codex CLI or Codex App subagents, treating configured parallelism as a maximum concurrency cap.
 - `skills/claim-agentdesk-task/SKILL.md`: lets an agent atomically claim one open checklist item from a markdown task, implement only that item, and complete it with the same agent/session identity.
 
-All bundled skills are explicit-invocation only. They keep AgentDesk focused on `task.md`, the MCP/CLI workflow, `gpt-5.5`, `xhigh`, `fast`, batches of up to 6, and integration into `master`.
+All bundled skills are explicit-invocation only. They keep AgentDesk focused on `task.md`, the MCP/CLI workflow, `gpt-5.5`, `xhigh`, `fast`, batches of up to 6, and the repository-designated working branch.
+For this AgentDesk checkout, Codex development work is based on `agentdesk/next`; the user reviews and merges that branch into `master` manually.
 Before subagent execution, the coordinating model should review task complexity and concurrent-edit conflict risk, choose and tell the user a recommended per-batch subagent count, and still let the user override the concurrency later within the configured maximum.
 
 ## MCP Tools
@@ -164,7 +165,8 @@ Every session defaults to:
 - Maximum Codex CLI subagent or Codex App launch-prompt parallelism: `6`
 - Execution mode: `auto`
 - Launch batch size: `6`
-- Integration branch: `master`
+- Generic target-project worktree integration branch: `master`
+- AgentDesk repository Codex development baseline: `agentdesk/next`
 
 The model, reasoning effort, execution mode, subagent launcher, and parallelism cap can be changed when a session starts.
 
