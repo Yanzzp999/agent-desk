@@ -500,7 +500,7 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
       assert.equal(entry.model, "gpt-5.5");
       assert.deepEqual(entry.configs, [
         "model_reasoning_effort=\"xhigh\"",
-        "model_provider.service_tier=fast",
+        "service_tier=\"fast\"",
       ]);
     }
   } finally {
@@ -609,17 +609,20 @@ test("MCP create_agentdesk_task requires confirmation for similar tasks", async 
     assert.equal(result.structuredContent.requestedTitle, "MCP duplicate guard");
     assert.equal(result.structuredContent.requestedBrief, "Exercise AgentDesk MCP session orchestration.");
     assert.equal(result.structuredContent.similarTaskAction, "confirm");
-    assert.equal(result.structuredContent.message, "Similar AgentDesk task(s) were found. Confirm whether to continue an existing task or rebuild a fresh task.");
+    assert.equal(result.structuredContent.message, "A similar AgentDesk task already exists. Continue the existing task or create a separate replacement after confirming.");
+    assert.equal(result.structuredContent.recovery.recommendedAction, "continue");
     assert.deepEqual(result.structuredContent.confirmationChoices.map((choice) => choice.action), [
       "continue",
       "rebuild",
     ]);
+    assert.equal(result.structuredContent.confirmationChoices[0].title, "Continue Existing");
+    assert.equal(result.structuredContent.confirmationChoices[0].recommended, true);
     assert.equal(result.structuredContent.similarTasks[0].taskId, "task-mcp-similar");
     assert.equal(result.structuredContent.similarTasks[0].status, "ready");
     assert.equal(result.structuredContent.similarTasks[0].sessionCount, 0);
     assert.ok(result.structuredContent.similarTasks[0].similarityScore >= 0.98);
     assert.match(result.structuredContent.similarTasks[0].similarityReason, /same or near-identical/);
-    assert.match(result.content[0].text, /continue an existing task or rebuild a fresh task/);
+    assert.match(result.content[0].text, /Continue Existing/);
 
     const continued = await client.callTool({
       name: "create_agentdesk_task",
@@ -700,11 +703,89 @@ test("MCP create_agentdesk_task requires confirmation for similar tasks", async 
     assert.equal(generationInvocation.model, "gpt-5.5");
     assert.deepEqual(generationInvocation.configs, [
       "model_reasoning_effort=\"xhigh\"",
-      "model_provider.service_tier=fast",
+      "service_tier=\"fast\"",
     ]);
     assert.match(generationInvocation.prompt, /Write markdown only/);
     assert.match(generationInvocation.prompt, /Task title hint: MCP duplicate guard/);
     assert.match(generationInvocation.prompt, /Exercise AgentDesk MCP session orchestration/);
+  } finally {
+    await client.close();
+  }
+});
+
+test("MCP create_agentdesk_task guides failed similar task replacement and links recovery", { timeout: 60000 }, async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-failed-confirm-")));
+  const projectRoot = path.join(root, "project");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const fakeLog = path.join(root, "fake-log.jsonl");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await initializeGitProject(projectRoot);
+  await writeFailedAgentDeskTask(projectRoot, "task-mcp-failed-similar", "MCP failed duplicate guard");
+  await writeFakeCodex(fakeCodex);
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [MCP_BIN],
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      FAKE_CODEX_LOG: fakeLog,
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-desk-mcp-failed-confirm-test", version: "0.0.0" });
+
+  try {
+    await client.connect(transport);
+    const result = await client.callTool({
+      name: "create_agentdesk_task",
+      arguments: {
+        projectRoot,
+        title: "MCP failed duplicate guard",
+        brief: "Exercise AgentDesk MCP session orchestration.",
+      },
+    });
+
+    assert.equal(result.structuredContent.requiresConfirmation, true);
+    assert.equal(result.structuredContent.similarTasks[0].status, "failed");
+    assert.equal(result.structuredContent.recovery.state, "similar_failed_task");
+    assert.equal(result.structuredContent.recovery.recommendedAction, "rebuild");
+    assert.equal(result.structuredContent.confirmationChoices.find((choice) => choice.action === "rebuild")?.recommended, true);
+    assert.match(result.content[0].text, /did not finish/);
+
+    const rebuilt = await client.callTool({
+      name: "create_agentdesk_task",
+      arguments: {
+        projectRoot,
+        title: "MCP failed duplicate guard",
+        brief: "Exercise AgentDesk MCP session orchestration.",
+        similarTaskAction: "rebuild",
+        codexCli: fakeCodex,
+      },
+    });
+
+    const rebuiltTaskId = rebuilt.structuredContent.taskId;
+    assert.notEqual(rebuiltTaskId, "task-mcp-failed-similar");
+    assert.deepEqual(rebuilt.structuredContent.supersededTaskIds, ["task-mcp-failed-similar"]);
+    assert.equal(rebuilt.structuredContent.recovery.state, "replacement_started");
+    await waitForJson(path.join(projectRoot, ".agent-desk", "tasks", rebuiltTaskId, "meta.json"), (meta) => meta.status === "ready");
+
+    const failedMeta = JSON.parse(await fs.readFile(
+      path.join(projectRoot, ".agent-desk", "tasks", "task-mcp-failed-similar", "meta.json"),
+      "utf8",
+    ));
+    assert.equal(failedMeta.supersededBy, rebuiltTaskId);
+    assert.equal(failedMeta.status, "failed");
+
+    const readFailed = await client.callTool({
+      name: "read_agentdesk_task",
+      arguments: {
+        projectRoot,
+        taskId: "task-mcp-failed-similar",
+      },
+    });
+    assert.equal(readFailed.structuredContent.recovery.state, "superseded");
+    assert.equal(readFailed.structuredContent.recovery.replacementTaskId, rebuiltTaskId);
   } finally {
     await client.close();
   }
@@ -1014,6 +1095,41 @@ async function writeReadyAgentDeskTask(projectRoot, taskId, title, subtasks = [
   }, null, 2)}\n`, "utf8");
 }
 
+async function writeFailedAgentDeskTask(projectRoot, taskId, title) {
+  const taskDir = path.join(projectRoot, ".agent-desk", "tasks", taskId);
+  const taskMd = path.join(taskDir, "task.md");
+  const memoryMd = path.join(taskDir, "memory.md");
+  const metaJson = path.join(taskDir, "meta.json");
+  await fs.mkdir(taskDir, { recursive: true });
+  await fs.writeFile(taskMd, "", "utf8");
+  await fs.writeFile(path.join(taskDir, "brief.md"), "Exercise AgentDesk MCP session orchestration.\n", "utf8");
+  await fs.writeFile(memoryMd, "# Task Memory\n\nFailed task memory.\n", "utf8");
+  await fs.writeFile(path.join(taskDir, "stdout.log"), "", "utf8");
+  await fs.writeFile(path.join(taskDir, "stderr.log"), "task generation failed\n", "utf8");
+  await fs.writeFile(metaJson, `${JSON.stringify({
+    schemaVersion: 2,
+    taskId,
+    title,
+    brief: "Exercise AgentDesk MCP session orchestration.",
+    status: "failed",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    lastError: "task generation failed",
+    subtaskCount: 0,
+    paths: {
+      taskDir,
+      briefMd: path.join(taskDir, "brief.md"),
+      promptMd: path.join(taskDir, "prompt.md"),
+      taskMd,
+      memoryMd,
+      metaJson,
+      stdoutLog: path.join(taskDir, "stdout.log"),
+      stderrLog: path.join(taskDir, "stderr.log"),
+    },
+  }, null, 2)}\n`, "utf8");
+}
+
 async function writeAgentDeskSession(projectRoot, options) {
   const sessionDir = path.join(projectRoot, ".agent-desk", "sessions", options.sessionId);
   const agentDir = path.join(sessionDir, "agents", "agent-01");
@@ -1105,6 +1221,11 @@ const args = process.argv.slice(2);
 
 if (args.includes("--version")) {
   console.log("codex-cli-test 0.0.0");
+  process.exit(0);
+}
+
+if (args[0] === "debug" && args[1] === "models") {
+  console.log(JSON.stringify({ models: [{ slug: "gpt-5.5", default_reasoning_level: "xhigh", supported_reasoning_levels: ["low", "medium", "high", "xhigh"], additional_speed_tiers: ["fast"], service_tiers: [{ id: "priority", name: "Fast" }] }] }));
   process.exit(0);
 }
 

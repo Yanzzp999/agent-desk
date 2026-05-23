@@ -108,7 +108,7 @@ async function handleTasks(context, parsed) {
       return formatTable(result.items, [
         { header: "NAME", value: (row) => row.name || row.title || row.taskId, maxWidth: 36 },
         { header: "TASK ID", value: (row) => row.taskId, maxWidth: 44 },
-        { header: "STATUS", value: (row) => row.status, maxWidth: 14 },
+        { header: "STATUS", value: taskStatusLabel, maxWidth: 18 },
         { header: "SUBTASKS", value: (row) => row.subtaskCount, maxWidth: 10 },
         { header: "SESSIONS", value: (row) => row.sessionCount, maxWidth: 10 },
         { header: "UPDATED", value: (row) => row.updatedAt || "-", maxWidth: 24 },
@@ -123,6 +123,7 @@ async function handleTasks(context, parsed) {
         `Task: ${result.name || result.title || result.taskId}`,
         `Task ID: ${result.taskId}`,
         `Status: ${result.status}`,
+        ...(result.recovery ? [`Recovery: ${result.recovery.message || result.recovery.title}`] : []),
         `Subtasks: ${result.subtaskCount || 0}`,
         `Sessions: ${result.sessions?.length || 0}`,
         "",
@@ -145,6 +146,13 @@ async function handleTasks(context, parsed) {
     return output(parsed, result, () => renderTaskCreateResult(result));
   }
   throw new Error(`unknown tasks command: ${subcommand}`);
+}
+
+function taskStatusLabel(row) {
+  if (row.recovery?.state === "superseded") {
+    return `${row.status} (replaced)`;
+  }
+  return row.status;
 }
 
 async function handleSessions(context, parsed) {
@@ -245,8 +253,14 @@ function taskCreateAction(parsed) {
 
 function renderTaskCreateResult(result) {
   if (result.requiresConfirmation) {
+    const choices = (result.confirmationChoices || [])
+      .map((choice) => {
+        const recommended = choice.recommended ? " (recommended)" : "";
+        return `- ${choice.title || choice.action}${recommended}: ${choice.description}`;
+      })
+      .join("\n");
     return [
-      "Similar AgentDesk task(s) found. Confirm the next step before creating a new task.",
+      result.message || "Similar AgentDesk task(s) found. Confirm the next step before creating a new task.",
       "",
       formatTable(result.similarTasks || [], [
         { header: "NAME", value: (row) => row.name || row.title || row.taskId, maxWidth: 36 },
@@ -255,17 +269,25 @@ function renderTaskCreateResult(result) {
         { header: "SCORE", value: (row) => row.similarityScore, maxWidth: 8 },
       ]),
       "",
-      "Continue an existing task:",
-      `  verunectl sessions start ${(result.similarTasks || [])[0]?.taskId || "<taskId>"}`,
+      choices,
       "",
-      "Rebuild a fresh task from this request:",
+      "Review the existing task:",
+      `  verunectl tasks show ${(result.similarTasks || [])[0]?.taskId || "<taskId>"}`,
+      "",
+      "Create a replacement from this request:",
       "  verunectl tasks create --rebuild --title <title> --brief <brief>",
     ].join("\n");
   }
   if (result.reusedExistingTask) {
-    return `Continuing existing task: ${result.name || result.title || result.taskId} (${result.taskId})`;
+    return [
+      `Continuing existing task: ${result.name || result.title || result.taskId} (${result.taskId})`,
+      result.recoveryMessage,
+    ].filter(Boolean).join("\n");
   }
-  return `Started task generation: ${result.name || result.title || result.taskId} (${result.taskId})`;
+  return [
+    `Started task generation: ${result.name || result.title || result.taskId} (${result.taskId})`,
+    result.recovery?.message,
+  ].filter(Boolean).join("\n");
 }
 
 function parseArgs(argv) {
@@ -337,8 +359,8 @@ Global options:
   --codex-cli PATH       Override the Codex CLI executable path.
 
 Task create options:
-  --rebuild              Create a fresh task even when a similar task exists.
-  --continue-similar     Return the best matching existing task instead of creating a new one.
+  --rebuild              Create a replacement task even when a similar task exists.
+  --continue-similar     Return the best matching existing task instead of creating one.
 
 Session start options:
   --model MODEL          Codex model for subagents. Default: gpt-5.5.
@@ -353,7 +375,7 @@ Session start options:
   --force                 Alias for --allow-duplicate-session.
 
 Workflow defaults:
-  Service tier: fast.
+  Service tier: fast (mapped to the current Codex CLI service_tier id at launch).
   Launch batch size: 6.
   Completed worktree sessions rebase onto and fast-forward master.
 `);

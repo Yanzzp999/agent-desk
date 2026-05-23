@@ -47,6 +47,7 @@ export const CODEX_REASONING_EFFORT_OPTIONS = Object.freeze([
 
 export const CODEX_FAST_SUPPORT_METADATA = Object.freeze({
   tier: FAST_TIER,
+  configKey: "service_tier",
   modelFields: Object.freeze(["additional_speed_tiers", "service_tiers", "speed_tiers"]),
   description: "Codex CLI model catalogs mark fast-capable models with a fast speed or service tier.",
 });
@@ -128,9 +129,13 @@ export function getCodexReasoningEffortOptions(model = null) {
 
 export function getCodexFastSupportMetadata(models = CODEX_FALLBACK_MODELS) {
   const normalizedModels = normalizeModelList(models);
-  const supportedModels = normalizedModels.filter((model) => model.fast.supported).map((model) => model.slug);
+  const supportedFastModels = normalizedModels.filter((model) => model.fast.supported);
+  const supportedModels = supportedFastModels.map((model) => model.slug);
+  const firstFast = supportedFastModels[0]?.fast || {};
   return Object.freeze({
     ...CODEX_FAST_SUPPORT_METADATA,
+    tier: firstFast.tier || CODEX_FAST_SUPPORT_METADATA.tier,
+    configKey: firstFast.configKey || CODEX_FAST_SUPPORT_METADATA.configKey,
     supported: supportedModels.length > 0,
     supportedModels: Object.freeze(supportedModels),
   });
@@ -372,12 +377,25 @@ function reasoningEfforts(values, rawEntries = []) {
 }
 
 function extractFastSupport(raw) {
+  const serviceTier = serviceTierId(raw.service_tiers || raw.serviceTiers);
+  if (serviceTier) {
+    return freezeFastSupport({
+      supported: true,
+      tier: serviceTier,
+      configKey: "service_tier",
+      source: "service_tiers",
+    });
+  }
+
   const tierFields = CODEX_FAST_SUPPORT_METADATA.modelFields;
   for (const field of tierFields) {
+    if (field === "service_tiers") {
+      continue;
+    }
     const snakeField = toSnakeCase(field);
     const value = raw[field] ?? raw[snakeField];
     if (Array.isArray(value) && value.map(speedTierValue).includes(FAST_TIER)) {
-      return freezeFastSupport({ supported: true, source: field });
+      return freezeFastSupport({ supported: true, tier: FAST_TIER, configKey: "service_tier", source: field });
     }
   }
   if (raw.fast === true || raw.supports_fast === true || raw.supportsFast === true) {
@@ -495,6 +513,7 @@ function freezeFastSupport(value) {
   return Object.freeze({
     supported: Boolean(value.supported),
     tier: value.tier || FAST_TIER,
+    configKey: value.configKey || CODEX_FAST_SUPPORT_METADATA.configKey,
     source: value.source || "",
   });
 }
@@ -505,9 +524,32 @@ function titleCase(value) {
 
 function speedTierValue(value) {
   if (value && typeof value === "object") {
-    return String(value.tier || value.name || value.value || "").toLowerCase();
+    return String(value.id || value.tier || value.name || value.value || "").toLowerCase();
   }
   return String(value || "").toLowerCase();
+}
+
+function serviceTierId(value) {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  for (const entry of value) {
+    if (entry && typeof entry === "object") {
+      const id = String(entry.id || entry.tier || entry.value || "").trim();
+      const display = String(entry.name || entry.label || "").trim();
+      const description = String(entry.description || "").trim();
+      const searchable = [id, display, description].join(" ").toLowerCase();
+      if (id && /\bfast\b/.test(searchable)) {
+        return id;
+      }
+      continue;
+    }
+    const text = String(entry || "").trim();
+    if (text && /\bfast\b/i.test(text)) {
+      return text;
+    }
+  }
+  return "";
 }
 
 function toSnakeCase(value) {

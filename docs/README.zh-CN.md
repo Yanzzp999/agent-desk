@@ -135,7 +135,7 @@ MCP tools：
 - `claim_task_items`：为指定 checklist item 写入可见的 AgentDesk claim 标记，便于多 agent 协作
 - `claim_next_task_item`：原子领取第一个未完成且未被领取的 checklist item，并把正在实现的 `agent -> sessionId` 写进 `task.md`
 - `complete_task_items`：原子勾选同一个 assignee 和 session id 已领取的 item
-- `create_agentdesk_task`：通过 Codex CLI 生成 `.agent-desk/tasks/<taskId>/task.md`；若发现相似 task，默认返回候选项并要求用户确认继续已有 task 还是 `rebuild` 新 task
+- `create_agentdesk_task`：通过 Codex CLI 生成 `.agent-desk/tasks/<taskId>/task.md`；若发现相似 task，默认先返回清晰的恢复选项。失败的相似 task 会保留日志，并在 `rebuild` 后关联到 replacement task
 - `list_agentdesk_tasks` / `read_agentdesk_task`：查看 AgentDesk control-plane task、生成的 `task.md` 和共享 `memory.md`
 - `start_subagent_session`：启动或准备 AgentDesk subagent session
 - `list_subagent_sessions` / `read_subagent_session`：查看 session 状态、agent 摘要和日志索引
@@ -253,7 +253,9 @@ npm install
   --brief "Implement the checkout flow end to end"
 ```
 
-如果已有 task 与本次需求相似或一致，创建命令会先返回候选 task，不会直接生成新 task。确认要重新生成时加 `--rebuild`；确认继续已有 task 时用候选 `taskId` 启动 session，或加 `--continue-similar` 让命令返回最佳匹配 task。
+如果已有 task 与本次需求相似或一致，创建命令会先返回候选 task，不会直接生成新 task。可继续的 task 会推荐复用；失败的相似 task 会推荐创建 replacement，同时保留失败 task 的日志并写入 replacement 关联。用 `tasks show <taskId>` 检查已有 task；确认要重新生成时加 `--rebuild`；确认继续已有 task 时加 `--continue-similar` 让命令返回最佳匹配 task。
+
+AgentDesk 对用户展示的默认 service tier 仍是 `fast`。实际启动 Codex CLI 时会先读取当前 model catalog，并传入当前 CLI 兼容的顶层 `service_tier` 值；如果新 CLI 使用 `priority` 之类的 service tier id，也不会再传旧的 `model_provider.service_tier` override。
 
 任务生成会通过 `codex exec` 执行，并把 markdown 写入：
 

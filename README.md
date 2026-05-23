@@ -114,7 +114,7 @@ Before subagent execution, the coordinating model should review task complexity 
 - `claim_task_items`: writes visible AgentDesk claim markers onto selected checklist items so multiple agents can coordinate.
 - `claim_next_task_item`: atomically claims the first open, unclaimed checklist item and writes the implementing `agent -> sessionId` marker into `task.md`.
 - `complete_task_items`: atomically checks off items claimed by the same assignee and session id.
-- `create_agentdesk_task`: uses Codex CLI to generate `.agent-desk/tasks/<taskId>/task.md`; if a similar task already exists, it returns candidates and asks the caller to continue or rebuild.
+- `create_agentdesk_task`: uses Codex CLI to generate `.agent-desk/tasks/<taskId>/task.md`; if a similar task already exists, it returns clear recovery choices before creating another task. Failed matches are kept for logs, and rebuilding links them to the replacement task.
 - `list_agentdesk_tasks` / `read_agentdesk_task`: inspect control-plane tasks, generated `task.md`, and shared `memory.md`.
 - `start_subagent_session`: starts or prepares an AgentDesk subagent session.
 - `list_subagent_sessions` / `read_subagent_session`: inspect session status, agent summaries, and log indexes.
@@ -230,7 +230,9 @@ Create a task:
   --brief "Implement the checkout flow end to end"
 ```
 
-If a similar task already exists, the create command returns candidate tasks instead of immediately generating a new one. Use `--rebuild` to force a fresh task, start a session with the returned `taskId`, or use `--continue-similar` to continue the best match.
+If a similar task already exists, the create command returns candidate tasks instead of immediately generating a new one. Ready matches recommend continuing the existing task. Failed matches recommend creating a replacement while preserving the failed task's logs and linking it to the new task. Use `tasks show <taskId>` to inspect the existing task, `--rebuild` to create the replacement, or `--continue-similar` to return the best match.
+
+AgentDesk keeps the user-facing session default as service tier `fast`. At launch time it asks Codex CLI for the current model catalog and passes the compatible top-level `service_tier` value, so newer CLIs that expose a service tier id such as `priority` do not receive the older `model_provider.service_tier` override.
 
 List and inspect tasks:
 

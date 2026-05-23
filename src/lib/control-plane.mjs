@@ -42,6 +42,7 @@ const SUPPORTED_REASONING_EFFORTS = new Set(
   CODEX_REASONING_EFFORT_OPTIONS.map((option) => option.value).filter(Boolean),
 );
 const SUBAGENT_REPORT_SCHEMA_PATH = path.join(CONTROL_PLANE_ROOT, "src", "lib", "subagent-report.schema.json");
+const CODEX_FAST_METADATA_CACHE = new Map();
 const DIRECTORY_SLUG_STOP_WORDS = new Set([
   "a",
   "an",
@@ -320,6 +321,7 @@ export async function getTask(context, taskId) {
   const meta = await readTaskMeta(context, taskId);
   const sessions = await listSessions(context, { taskId });
   const memoryPath = resolveTaskMemoryPath(context, meta);
+  const recovery = buildTaskRecoverySummary(meta);
   return {
     ...meta,
     name: taskDisplayName(meta),
@@ -327,6 +329,7 @@ export async function getTask(context, taskId) {
     memory: await readTaskMemory(context, meta),
     memoryPath,
     sessions: sessions.items,
+    ...(recovery ? { recovery } : {}),
   };
 }
 
@@ -338,12 +341,15 @@ export async function createTask(context, request = {}) {
       return buildSimilarTaskConfirmation(normalized, similarTasks);
     }
     if (normalized.similarTaskAction === "continue") {
+      const recovery = buildSimilarTaskRecovery(similarTasks);
       return {
         ...similarTasks[0],
         requiresConfirmation: false,
         reusedExistingTask: true,
         similarTaskAction: "continue",
         similarTasks,
+        recovery,
+        recoveryMessage: recovery.message,
       };
     }
   } else if (normalized.similarTaskAction === "continue") {
@@ -409,6 +415,9 @@ export async function createTask(context, request = {}) {
     stdio: "ignore",
   });
   child.unref();
+  const supersededTaskIds = normalized.similarTaskAction === "rebuild"
+    ? await markFailedSimilarTasksSuperseded(context, similarTasks, taskId)
+    : [];
 
   const summary = await enrichTaskSummary(context, {
     ...meta,
@@ -419,6 +428,18 @@ export async function createTask(context, request = {}) {
     requiresConfirmation: false,
     similarTaskAction: normalized.similarTaskAction,
     similarTasks: normalized.similarTaskAction === "rebuild" ? similarTasks : [],
+    supersededTaskIds,
+    ...(supersededTaskIds.length > 0
+      ? {
+        recovery: {
+          state: "replacement_started",
+          title: "Replacement started",
+          message: "A replacement task was started. Failed matching tasks remain available for logs and now point to this task.",
+          recommendedAction: "watch_replacement",
+          replacedTaskIds: supersededTaskIds,
+        },
+      }
+      : {}),
   };
 }
 
@@ -1181,6 +1202,7 @@ export async function snapshotStateStamp(context) {
 async function enrichTaskSummary(context, meta) {
   const sessions = await listSessions(context, { taskId: meta.taskId });
   const latestSession = sessions.items[0] || null;
+  const recovery = buildTaskRecoverySummary(meta);
   return {
     ...meta,
     name: taskDisplayName(meta),
@@ -1188,6 +1210,7 @@ async function enrichTaskSummary(context, meta) {
     latestSessionId: latestSession?.sessionId || "",
     latestSessionStatus: latestSession?.status || "",
     latestSessionAt: latestSession?.updatedAt || "",
+    ...(recovery ? { recovery } : {}),
   };
 }
 
@@ -1243,24 +1266,98 @@ async function findSimilarTasks(context, request) {
 }
 
 function buildSimilarTaskConfirmation(request, similarTasks) {
+  const recovery = buildSimilarTaskRecovery(similarTasks);
   return {
     requiresConfirmation: true,
     requestedTitle: request.title,
     requestedBrief: request.brief,
     similarTaskAction: "confirm",
-    message: "Similar AgentDesk task(s) were found. Confirm whether to continue an existing task or rebuild a fresh task.",
-    confirmationChoices: [
-      {
-        action: "continue",
-        description: "Use an existing task by taskId; no new task will be generated.",
-      },
-      {
-        action: "rebuild",
-        description: "Generate a fresh task from this request; existing tasks are left untouched.",
-      },
-    ],
+    message: recovery.message,
+    recovery,
+    confirmationChoices: buildSimilarTaskConfirmationChoices(recovery),
     similarTasks,
   };
+}
+
+function buildSimilarTaskRecovery(similarTasks) {
+  const failedTasks = similarTasks.filter((task) => task.status === "failed");
+  const topTask = similarTasks[0] || {};
+  if (failedTasks.length > 0 && topTask.status === "failed") {
+    return {
+      state: "similar_failed_task",
+      title: "Previous task did not finish",
+      message: "A matching AgentDesk task exists, but it did not finish. Review the existing logs or create a replacement; no new task has been created yet.",
+      recommendedAction: "rebuild",
+      affectedTaskIds: failedTasks.map((task) => task.taskId),
+    };
+  }
+  return {
+    state: "similar_task_found",
+    title: "Similar task found",
+    message: "A similar AgentDesk task already exists. Continue the existing task or create a separate replacement after confirming.",
+    recommendedAction: "continue",
+    affectedTaskIds: similarTasks.map((task) => task.taskId),
+  };
+}
+
+function buildSimilarTaskConfirmationChoices(recovery) {
+  const replacementRecommended = recovery.recommendedAction === "rebuild";
+  return [
+    {
+      action: "continue",
+      title: replacementRecommended ? "Review Existing" : "Continue Existing",
+      recommended: !replacementRecommended,
+      description: replacementRecommended
+        ? "Return the existing task so its logs and status can be inspected; no retry starts."
+        : "Use the existing task by taskId; no new task will be generated.",
+    },
+    {
+      action: "rebuild",
+      title: replacementRecommended ? "Create Replacement" : "Create New Task",
+      recommended: replacementRecommended,
+      description: replacementRecommended
+        ? "Create a replacement task and link failed matching tasks to it for traceability."
+        : "Generate a new task from this request; existing tasks are left available.",
+    },
+  ];
+}
+
+function buildTaskRecoverySummary(task) {
+  if (task?.supersededBy) {
+    return {
+      state: "superseded",
+      title: "Replacement available",
+      message: `This failed task was replaced by ${task.supersededBy}. Its logs are preserved for review.`,
+      recommendedAction: "open_replacement",
+      replacementTaskId: task.supersededBy,
+      supersededAt: task.supersededAt || "",
+    };
+  }
+  if (task?.status === "failed") {
+    return {
+      state: "failed",
+      title: "Task did not finish",
+      message: "Review stdout.log and stderr.log, or create a replacement task from the same request.",
+      recommendedAction: "rebuild",
+    };
+  }
+  return null;
+}
+
+async function markFailedSimilarTasksSuperseded(context, similarTasks, replacementTaskId) {
+  const supersededTaskIds = [];
+  for (const task of similarTasks) {
+    if (task.status !== "failed" || task.taskId === replacementTaskId || task.supersededBy) {
+      continue;
+    }
+    await updateTaskMeta(context, task.taskId, {
+      supersededBy: replacementTaskId,
+      supersededAt: new Date().toISOString(),
+      supersededReason: "replacement task created from a similar request",
+    }).catch(() => null);
+    supersededTaskIds.push(task.taskId);
+  }
+  return supersededTaskIds;
 }
 
 function scoreTaskSimilarity(request, task) {
@@ -1581,6 +1678,7 @@ function normalizeFastMetadata(fast) {
   return {
     supported: Boolean(fast?.supported || supportedModels.length > 0),
     tier: normalizeOptionalString(fast?.tier) || DEFAULT_SERVICE_TIER,
+    configKey: normalizeOptionalString(fast?.configKey) || "service_tier",
     source: normalizeOptionalString(fast?.source),
     supportedModels,
   };
@@ -2084,6 +2182,7 @@ async function integrateBranchIntoMaster(context, worktreePath, baseCommit, head
 }
 
 export function buildCodexExecArgs(options = {}) {
+  const serviceTierConfig = buildServiceTierConfig(options);
   const args = [
     "-a",
     "never",
@@ -2093,7 +2192,7 @@ export function buildCodexExecArgs(options = {}) {
     "--config",
     `model_reasoning_effort="${options.reasoning || DEFAULT_SUBAGENT_REASONING}"`,
     "--config",
-    `model_provider.service_tier=${options.serviceTier || DEFAULT_SERVICE_TIER}`,
+    `${serviceTierConfig.key}=${tomlString(serviceTierConfig.value)}`,
     "-s",
     options.sandboxMode || "danger-full-access",
     "-C",
@@ -2112,13 +2211,60 @@ export function buildCodexExecArgs(options = {}) {
 }
 
 async function runCodexPrompt(options) {
-  const args = buildCodexExecArgs(options);
+  const serviceTierConfig = await resolveCodexServiceTierConfig(options);
+  const args = buildCodexExecArgs({
+    ...options,
+    serviceTierConfigKey: serviceTierConfig.key,
+    serviceTierConfigValue: serviceTierConfig.value,
+  });
   return spawnStreamingCapture(options.context.codexCli || "codex", args, {
     cwd: options.cwd,
     stdin: options.prompt,
     stdoutLog: options.stdoutLog,
     stderrLog: options.stderrLog,
   });
+}
+
+function buildServiceTierConfig(options = {}) {
+  return {
+    key: normalizeCodexConfigKey(options.serviceTierConfigKey) || "service_tier",
+    value: normalizeOptionalString(options.serviceTierConfigValue)
+      || normalizeOptionalString(options.serviceTier)
+      || DEFAULT_SERVICE_TIER,
+  };
+}
+
+async function resolveCodexServiceTierConfig(options = {}) {
+  const requestedTier = normalizeOptionalString(options.serviceTier) || DEFAULT_SERVICE_TIER;
+  const fast = await getCachedCodexFastMetadata(options.context, options.model);
+  return {
+    key: normalizeCodexConfigKey(fast.configKey) || "service_tier",
+    value: requestedTier === DEFAULT_SERVICE_TIER
+      ? normalizeOptionalString(fast.tier) || requestedTier
+      : requestedTier,
+  };
+}
+
+async function getCachedCodexFastMetadata(context, model) {
+  const codexCli = context?.codexCli || "codex";
+  const cacheKey = `${codexCli}\n${model || DEFAULT_SUBAGENT_MODEL}`;
+  if (!CODEX_FAST_METADATA_CACHE.has(cacheKey)) {
+    CODEX_FAST_METADATA_CACHE.set(cacheKey, discoverCodexModels({
+      codexCliPath: codexCli,
+      timeoutMs: 1000,
+    })
+      .then((discovery) => normalizeFastMetadata(discovery.fast))
+      .catch(() => normalizeFastMetadata(null)));
+  }
+  return CODEX_FAST_METADATA_CACHE.get(cacheKey);
+}
+
+function normalizeCodexConfigKey(value) {
+  const key = normalizeOptionalString(value);
+  if (!key || !/^[A-Za-z0-9_.-]+$/.test(key)) {
+    return "";
+  }
+  return key;
 }
 
 function normalizeSubagentReport(report) {

@@ -93,6 +93,45 @@ test("createTask requires confirmation before duplicating a similar AgentDesk ta
   assert.equal(continued.taskId, "task-existing-checkout-flow");
 });
 
+test("createTask recommends replacement when the similar task failed", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-failed-confirm-"));
+  const context = createContext({ projectRoot });
+  const taskDir = path.join(context.tasksRoot, "task-failed-checkout-flow");
+  await fs.mkdir(taskDir, { recursive: true });
+  await fs.writeFile(path.join(taskDir, "meta.json"), JSON.stringify({
+    schemaVersion: 2,
+    taskId: "task-failed-checkout-flow",
+    title: "Checkout flow",
+    brief: "Implement checkout end to end.",
+    status: "failed",
+    createdAt: "2026-05-13T10:00:00.000Z",
+    updatedAt: "2026-05-13T10:05:00.000Z",
+    completedAt: "2026-05-13T10:05:00.000Z",
+    lastError: "task generation failed",
+    subtaskCount: 0,
+    paths: {
+      taskDir,
+      briefMd: path.join(taskDir, "brief.md"),
+      promptMd: path.join(taskDir, "prompt.md"),
+      taskMd: path.join(taskDir, "task.md"),
+      memoryMd: path.join(taskDir, "memory.md"),
+      metaJson: path.join(taskDir, "meta.json"),
+      stdoutLog: path.join(taskDir, "stdout.log"),
+      stderrLog: path.join(taskDir, "stderr.log"),
+    },
+  }, null, 2), "utf8");
+
+  const blocked = await createTask(context, {
+    title: "Checkout flow",
+    brief: "Implement checkout end to end.",
+  });
+
+  assert.equal(blocked.requiresConfirmation, true);
+  assert.equal(blocked.recovery.state, "similar_failed_task");
+  assert.equal(blocked.recovery.recommendedAction, "rebuild");
+  assert.equal(blocked.confirmationChoices.find((choice) => choice.action === "rebuild")?.recommended, true);
+});
+
 test("parses markdown checklist subtasks for subagent fanout", () => {
   const markdown = `
 # Ship session orchestrator
@@ -457,7 +496,7 @@ test("builds Codex exec args with selected model, reasoning, service tier, and o
     "--config",
     "model_reasoning_effort=\"high\"",
     "--config",
-    "model_provider.service_tier=fast",
+    "service_tier=\"fast\"",
     "-s",
     "danger-full-access",
     "-C",
@@ -468,6 +507,11 @@ test("builds Codex exec args with selected model, reasoning, service tier, and o
     "/tmp/schema.json",
     "-",
   ]);
+  assert.ok(buildCodexExecArgs({
+    cwd: "/tmp/project-worktree",
+    outputFile: "/tmp/report.json",
+    serviceTierConfigValue: "priority",
+  }).includes("service_tier=\"priority\""));
 });
 
 async function writeTaskState(projectRoot, options) {

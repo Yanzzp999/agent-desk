@@ -327,7 +327,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
     assert.equal(entry.model, "gpt-5.5");
     assert.deepEqual(entry.configs, [
       "model_reasoning_effort=\"high\"",
-      "model_provider.service_tier=fast",
+      "service_tier=\"fast\"",
     ]);
   }
 
@@ -909,7 +909,7 @@ if (args.includes("--version")) {
 }
 
 if (args[0] === "debug" && args[1] === "models") {
-  console.log(JSON.stringify({ models: [{ slug: "gpt-5.5", default_reasoning_level: "xhigh", supported_reasoning_levels: ["low", "medium", "high", "xhigh"], additional_speed_tiers: ["fast"] }] }));
+  console.log(JSON.stringify({ models: [{ slug: "gpt-5.5", default_reasoning_level: "xhigh", supported_reasoning_levels: ["low", "medium", "high", "xhigh"], additional_speed_tiers: ["fast"], service_tiers: [{ id: "priority", name: "Fast" }] }] }));
   process.exit(0);
 }
 

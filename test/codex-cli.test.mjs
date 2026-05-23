@@ -40,6 +40,7 @@ test("parses Codex debug models JSON into small normalized model capabilities", 
           { effort: "xhigh", description: "Extra high reasoning" },
         ],
         additional_speed_tiers: ["fast"],
+        service_tiers: [{ id: "priority", name: "Fast", description: "1.5x speed" }],
         supported_in_api: true,
         priority: 0,
         base_instructions: "large field should not leak into normalized metadata",
@@ -54,7 +55,9 @@ test("parses Codex debug models JSON into small normalized model capabilities", 
   assert.equal(models[0].defaultReasoningEffort, "xhigh");
   assert.deepEqual(models[0].reasoningEfforts.map((entry) => entry.value), ["low", "xhigh"]);
   assert.equal(models[0].fast.supported, true);
-  assert.equal(models[0].fast.source, "additional_speed_tiers");
+  assert.equal(models[0].fast.source, "service_tiers");
+  assert.equal(models[0].fast.tier, "priority");
+  assert.equal(models[0].fast.configKey, "service_tier");
   assert.equal("base_instructions" in models[0], false);
 });
 
@@ -93,6 +96,7 @@ test("discovers models from injected CLI runner and falls back when discovery fa
   assert.equal(discovered.source, "codex-cli");
   assert.equal(discovered.models[0].slug, "gpt-5.5");
   assert.equal(discovered.fast.supported, true);
+  assert.equal(discovered.fast.configKey, "service_tier");
   assert.deepEqual(getCodexFastSupportMetadata(discovered.models).supportedModels, ["gpt-5.5"]);
 
   const fallback = await discoverCodexModels({

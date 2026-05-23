@@ -221,11 +221,11 @@ export function createAgentDeskMcpServer(options = {}) {
 
   server.registerTool("create_agentdesk_task", {
     title: "Create AgentDesk Task",
-    description: "Create an AgentDesk control-plane task under <project>/.agent-desk/tasks by asking Codex CLI to generate task.md. If a similar task exists, the default response requires user confirmation before continuing an existing task or rebuilding a fresh one.",
+    description: "Create an AgentDesk control-plane task under <project>/.agent-desk/tasks by asking Codex CLI to generate task.md. If a similar task exists, the default response requires user confirmation before continuing an existing task or creating a replacement.",
     inputSchema: {
       title: z.string().min(1).optional().describe("Task title hint."),
       brief: z.string().min(1).describe("Task brief to turn into task.md."),
-      similarTaskAction: z.enum(["confirm", "continue", "rebuild"]).optional().describe("What to do when a similar task exists. Default 'confirm' returns requiresConfirmation with candidates. Use 'continue' or 'rebuild' only after the user confirms."),
+      similarTaskAction: z.enum(["confirm", "continue", "rebuild"]).optional().describe("What to do when a similar task exists. Default 'confirm' returns requiresConfirmation with candidates and recovery guidance. Use 'continue' or 'rebuild' only after the user confirms."),
       ...contextInputSchema(),
     },
     outputSchema: taskCreateResultSchema(),
@@ -435,8 +435,21 @@ function taskCreateResultSchema() {
     message: z.string().optional(),
     confirmationChoices: z.array(z.object({
       action: z.string(),
+      title: z.string().optional(),
+      recommended: z.boolean().optional(),
       description: z.string(),
     })).optional(),
+    recovery: z.object({
+      state: z.string(),
+      title: z.string().optional(),
+      message: z.string().optional(),
+      recommendedAction: z.string().optional(),
+      affectedTaskIds: z.array(z.string()).optional(),
+      replacedTaskIds: z.array(z.string()).optional(),
+      replacementTaskId: z.string().optional(),
+    }).passthrough().optional(),
+    recoveryMessage: z.string().optional(),
+    supersededTaskIds: z.array(z.string()).optional(),
   }).passthrough();
 }
 
@@ -445,16 +458,29 @@ function taskCreateResultText(result) {
     const matches = (result.similarTasks || [])
       .map((task) => `- ${task.name || task.title || task.taskId} (${task.taskId}, ${task.status}, score ${task.similarityScore})`)
       .join("\n");
+    const choices = (result.confirmationChoices || [])
+      .map((choice) => {
+        const recommended = choice.recommended ? " (recommended)" : "";
+        return `- ${choice.title || choice.action}${recommended}: ${choice.description}`;
+      })
+      .join("\n");
     return [
-      "Similar AgentDesk task(s) found. Ask the user whether to continue an existing task or rebuild a fresh task.",
+      result.message || "Similar AgentDesk task(s) found. Ask the user which recovery action to take.",
       matches,
-      "Use similarTaskAction='continue' to reuse the best match, or similarTaskAction='rebuild' to create a fresh task after confirmation.",
+      choices,
+      "Use similarTaskAction='continue' to inspect or reuse the best match, or similarTaskAction='rebuild' to create a replacement after confirmation.",
     ].filter(Boolean).join("\n");
   }
   if (result.reusedExistingTask) {
-    return `Continuing existing AgentDesk task: ${result.name || result.title || result.taskId} (${result.taskId})`;
+    return [
+      `Continuing existing AgentDesk task: ${result.name || result.title || result.taskId} (${result.taskId})`,
+      result.recoveryMessage,
+    ].filter(Boolean).join("\n");
   }
-  return `Started AgentDesk task generation: ${result.name || result.title || result.taskId} (${result.taskId})`;
+  return [
+    `Started AgentDesk task generation: ${result.name || result.title || result.taskId} (${result.taskId})`,
+    result.recovery?.message,
+  ].filter(Boolean).join("\n");
 }
 
 function taskDetailSchema() {
