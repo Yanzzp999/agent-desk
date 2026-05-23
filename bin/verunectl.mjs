@@ -15,6 +15,27 @@ import {
   writeDefaultAgentDeskConfig,
 } from "../src/lib/control-plane.mjs";
 
+const VALUE_OPTIONS = new Set([
+  "codex-cli",
+  "codex-count",
+  "config",
+  "concurrency",
+  "desk-root",
+  "effort",
+  "execution-mode",
+  "mode",
+  "model",
+  "parallel",
+  "parallelism",
+  "project",
+  "reasoning",
+  "subagent-launcher",
+  "task",
+  "title",
+  "brief",
+  "worktrees-root",
+]);
+
 main().catch((error) => {
   console.error(`verunectl: ${error.message}`);
   process.exit(1);
@@ -243,10 +264,13 @@ function parseArgs(argv) {
       continue;
     }
     const next = argv[index + 1];
-    if (next && !next.startsWith("--")) {
+    if (next !== undefined && !next.startsWith("--")) {
       result[keyValue] = next;
       index += 1;
     } else {
+      if (VALUE_OPTIONS.has(keyValue)) {
+        throw new Error(`--${keyValue} requires a value`);
+      }
       result[keyValue] = true;
     }
   }

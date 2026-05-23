@@ -24,6 +24,42 @@ test("verunectl help exposes CLI-only task and session commands", async () => {
   assert.doesNotMatch(result.stdout, /electron/i);
 });
 
+test("verunectl rejects missing CLI option values before side effects", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-args-"));
+  const projectRoot = path.join(root, "project");
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const missingParallel = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "start",
+    "task-arg-check",
+    "--parallel",
+    "--json",
+  ], { cwd: REPO_ROOT });
+  assert.equal(missingParallel.exitCode, 1);
+  assert.match(missingParallel.stderr, /--parallel requires a value/);
+
+  const emptyBrief = await run(process.execPath, [
+    VERUNECTL,
+    "tasks",
+    "create",
+    "--project",
+    projectRoot,
+    "--title",
+    "",
+    "--brief",
+    "",
+    "--json",
+  ], { cwd: REPO_ROOT });
+  assert.equal(emptyBrief.exitCode, 1);
+  assert.match(emptyBrief.stderr, /brief is required/);
+  await assert.rejects(
+    fs.stat(path.join(projectRoot, ".agent-desk")),
+    (error) => error.code === "ENOENT",
+  );
+});
+
 test("verunectl creates a task and runs configured Codex CLI subagents", { timeout: 60000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-e2e-"));
   const projectRoot = path.join(root, "project");
