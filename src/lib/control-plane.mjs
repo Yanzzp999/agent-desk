@@ -588,11 +588,6 @@ export async function createSession(context, taskId, request = {}) {
   if (sessionRequest.executionMode === "current-branch" && sessionRequest.subagentLauncher === "codex-app") {
     try {
       await prepareCodexAppSession(context, claimedTask, sessionId);
-      await finishTaskActiveSession(context, taskId, sessionId, {
-        status: "succeeded",
-        completedAt: new Date().toISOString(),
-        lastError: "",
-      });
       return enrichSessionSummary(context, await readSessionMeta(context, sessionId));
     } catch (error) {
       const message = error.message || String(error);
@@ -823,14 +818,16 @@ async function prepareCodexAppSession(context, task, sessionId) {
     await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, agent);
   }
 
+  const now = new Date().toISOString();
   await updateSessionMeta(context, sessionId, {
-    status: "succeeded",
-    startedAt: new Date().toISOString(),
-    completedAt: new Date().toISOString(),
+    status: "waiting_for_app",
+    startedAt: now,
+    completedAt: null,
     lastError: "",
     totalAgents: agents.length,
     agents,
   });
+  await updateTaskActiveSessionStatus(context, task.taskId, sessionId, "waiting_for_app");
   await refreshSessionCounts(context, sessionId);
   await writeSessionDocumentation(context, sessionId);
 }
@@ -840,20 +837,22 @@ async function settleCodexAppLaunchPlanSession(context, session) {
     return session;
   }
   const now = new Date().toISOString();
+  let changed = false;
   const agents = (session.agents || []).map((agent) => {
     if (agent.status !== "queued") {
       return agent;
     }
+    changed = true;
     return {
       ...agent,
       status: "prepared_for_app",
       updatedAt: agent.updatedAt || now,
     };
   });
+  if (!changed) {
+    return session;
+  }
   await updateSessionMeta(context, session.sessionId, {
-    status: "succeeded",
-    completedAt: session.completedAt || now,
-    lastError: "",
     agents,
   });
   await refreshSessionCounts(context, session.sessionId);

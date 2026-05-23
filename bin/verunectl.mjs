@@ -7,6 +7,7 @@ import {
   createTask,
   formatTable,
   getAgentLogs,
+  getCodexAppLaunchPlan,
   readAgentDeskConfig,
   getSession,
   getTask,
@@ -167,7 +168,7 @@ async function handleSessions(context, parsed) {
   }
   if (subcommand === "show") {
     const sessionId = required(parsed._[2], "session id");
-    const result = await getSession(context, sessionId);
+    const result = await attachCodexAppLaunchPlan(context, await getSession(context, sessionId));
     return output(parsed, result, () => {
       return [
         `Session: ${result.name || result.sessionId}`,
@@ -185,15 +186,17 @@ async function handleSessions(context, parsed) {
   }
   if (subcommand === "start") {
     const taskId = required(parsed._[2], "task id");
-    const result = await createSession(context, taskId, {
+    const result = await attachCodexAppLaunchPlan(context, await createSession(context, taskId, {
       parallelism: parsed.parallel || parsed.parallelism || parsed.concurrency || parsed["codex-count"],
       model: parsed.model,
       reasoning: parsed.reasoning || parsed.effort,
       executionMode: parsed["execution-mode"] || parsed.mode,
       subagentLauncher: parsed["subagent-launcher"],
       allowDuplicateSession: parsed["allow-duplicate-session"] || parsed.force,
-    });
-    return output(parsed, result, () => `Started session: ${result.name || result.sessionId} (${result.sessionId})`);
+    }));
+    return output(parsed, result, () => result.requiresHostLaunch
+      ? `Prepared ${result.appLaunchPlan.subagents.length} Codex App subagent prompt(s): ${result.name || result.sessionId} (${result.sessionId})`
+      : `Started session: ${result.name || result.sessionId} (${result.sessionId})`);
   }
   if (subcommand === "logs") {
     const sessionId = required(parsed._[2], "session id");
@@ -208,6 +211,18 @@ async function handleSessions(context, parsed) {
     ].join("\n"));
   }
   throw new Error(`unknown sessions command: ${subcommand}`);
+}
+
+async function attachCodexAppLaunchPlan(context, session) {
+  if (session.subagentLauncher !== "codex-app") {
+    return session;
+  }
+  const appLaunchPlan = await getCodexAppLaunchPlan(context, session.sessionId);
+  return {
+    ...session,
+    requiresHostLaunch: appLaunchPlan.requiresHostLaunch,
+    appLaunchPlan,
+  };
 }
 
 function output(parsed, payload, renderText) {

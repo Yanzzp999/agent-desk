@@ -436,15 +436,23 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   ], commandOptions);
   assert.equal(appStartResult.exitCode, 0, appStartResult.stderr);
   const appStart = JSON.parse(appStartResult.stdout);
-  assert.equal(appStart.status, "succeeded");
+  assert.equal(appStart.status, "waiting_for_app");
   assert.equal(appStart.executionMode, "current-branch");
   assert.equal(appStart.subagentLauncher, "codex-app");
   assert.equal(appStart.parallelism, 2);
+  assert.equal(appStart.requiresHostLaunch, true);
+  assert.equal(appStart.appLaunchPlan.requiresHostLaunch, true);
+  assert.equal(appStart.appLaunchPlan.launchTool, "spawn_agent");
+  assert.equal(appStart.appLaunchPlan.subagents.length, 3);
   assert.equal(appStart.totalAgents, 3);
   assert.equal(appStart.succeededAgents, 0);
   assert.equal(appStart.failedAgents, 0);
   assert.deepEqual(
     appStart.agents.map((agent) => agent.status),
+    ["prepared_for_app", "prepared_for_app", "prepared_for_app"],
+  );
+  assert.deepEqual(
+    appStart.appLaunchPlan.subagents.map((agent) => agent.status),
     ["prepared_for_app", "prepared_for_app", "prepared_for_app"],
   );
 
@@ -474,10 +482,13 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   ], commandOptions);
   assert.equal(appShowResult.exitCode, 0, appShowResult.stderr);
   const appShow = JSON.parse(appShowResult.stdout);
-  assert.equal(appShow.status, "succeeded");
+  assert.equal(appShow.status, "waiting_for_app");
   assert.equal(appShow.subagentLauncher, "codex-app");
+  assert.equal(appShow.requiresHostLaunch, true);
+  assert.equal(appShow.appLaunchPlan.subagents.length, 3);
   assert.equal(appShow.succeededAgents, 0);
   assert.match(appShow.docContent, /Subagent launcher: codex-app/);
+  assert.match(appShow.docContent, /- Status: waiting_for_app/);
   assert.match(appShow.docContent, /Status: prepared_for_app/);
 
   const appListResult = await run(process.execPath, [
@@ -496,7 +507,7 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   const appList = JSON.parse(appListResult.stdout);
   assert.equal(appList.items.length, 1);
   assert.equal(appList.items[0].sessionId, appStart.sessionId);
-  assert.equal(appList.items[0].status, "succeeded");
+  assert.equal(appList.items[0].status, "waiting_for_app");
   assert.equal(appList.items[0].subagentLauncher, "codex-app");
   assert.equal(appList.items[0].succeededAgents, 0);
 
@@ -513,6 +524,7 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
     "current-branch",
     "--subagent-launcher",
     "codex-cli",
+    "--allow-duplicate-session",
     "--parallel",
     "2",
     "--json",
@@ -561,6 +573,7 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   const finalList = JSON.parse(finalListResult.stdout);
   assert.equal(finalList.items.length, 2);
   const byLauncher = new Map(finalList.items.map((item) => [item.subagentLauncher, item]));
+  assert.equal(byLauncher.get("codex-app").status, "waiting_for_app");
   assert.equal(byLauncher.get("codex-app").succeededAgents, 0);
   assert.equal(byLauncher.get("codex-cli").succeededAgents, 3);
 
