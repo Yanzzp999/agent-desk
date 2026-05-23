@@ -289,6 +289,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
     const taskSnapshot = await fs.readFile(agent.paths.taskSnapshotMd, "utf8");
     const memorySnapshot = await fs.readFile(agent.paths.memorySnapshotMd, "utf8");
     const prompt = await fs.readFile(agent.paths.promptMd, "utf8");
+    const report = JSON.parse(await fs.readFile(agent.paths.reportJson, "utf8"));
     assert.match(taskSnapshot, /- \[ \] Implement CLI config plumbing/);
     assert.match(memorySnapshot, /# Task Memory/);
     assert.doesNotMatch(memorySnapshot, /completed via fake Codex/);
@@ -302,6 +303,10 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
     assert.match(prompt, new RegExp(`Prompt snapshot: ${escapeRegExp(agent.paths.promptMd)}`));
     assert.match(prompt, /Shared task memory snapshot:/);
     assert.match(prompt, /# Task Memory/);
+    assert.equal(report.summary, `${agent.id} completed via fake Codex`);
+    assert.deepEqual(report.tests_run, ["fake codex"]);
+    assert.deepEqual(report.risks, []);
+    assert.match(report.notes[0], /^Prompt length \d+$/);
     assert.deepEqual(agent.testsRun, ["fake codex"]);
   }
 
@@ -322,12 +327,82 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
     assert.equal(entry.model, "gpt-5.5");
     assert.deepEqual(entry.configs, [
       "model_reasoning_effort=\"high\"",
-      "service_tier=\"fast\"",
+      "model_provider.service_tier=fast",
     ]);
   }
 
   const state = JSON.parse(await fs.readFile(fakeState, "utf8"));
   assert.equal(state.maxActive, 2);
+});
+
+test("verunectl records failed Codex CLI subagents without completing checklist items", { timeout: 60000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-failure-"));
+  const projectRoot = path.join(root, "project");
+  const worktreesRoot = path.join(root, "worktrees");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const taskId = "task-cli-failure-status";
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await writeFakeCodex(fakeCodex);
+  await initializeGitProject(projectRoot);
+  await writeReadyAgentDeskTask(projectRoot, taskId, "CLI failure status");
+
+  const result = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "start",
+    taskId,
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--execution-mode",
+    "worktree",
+    "--subagent-launcher",
+    "codex-cli",
+    "--parallel",
+    "1",
+    "--json",
+  ], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      CODEX_CLI: fakeCodex,
+      FAKE_CODEX_FAIL_MESSAGE: "synthetic fake Codex failure",
+    },
+  });
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  const started = JSON.parse(result.stdout);
+  assert.equal(started.executionMode, "worktree");
+  assert.equal(started.subagentLauncher, "codex-cli");
+  const sessionMeta = await waitForJson(
+    path.join(projectRoot, ".agent-desk", "sessions", started.sessionId, "meta.json"),
+    (meta) => meta.status === "failed" ? meta : null,
+    45000,
+  );
+  assert.equal(sessionMeta.status, "failed");
+  assert.equal(sessionMeta.succeededAgents, 0);
+  assert.equal(sessionMeta.failedAgents, 3);
+  assert.match(sessionMeta.lastError, /synthetic fake Codex failure/);
+  assert.equal(sessionMeta.totalAgents, 3);
+  assert.deepEqual(sessionMeta.agents.map((agent) => agent.status), ["failed", "failed", "failed"]);
+  for (const agent of sessionMeta.agents) {
+    assert.match(agent.lastError, /synthetic fake Codex failure/);
+    assert.match(await fs.readFile(agent.paths.promptMd, "utf8"), /Subagent launcher: codex-cli/);
+  }
+
+  const taskMarkdown = await fs.readFile(
+    path.join(projectRoot, ".agent-desk", "tasks", taskId, "task.md"),
+    "utf8",
+  );
+  assert.equal((taskMarkdown.match(/^- \[x\] /gm) || []).length, 0);
+  assert.equal((taskMarkdown.match(/AgentDesk status: `failed`/g) || []).length, 3);
+
+  const sessionDoc = await fs.readFile(sessionMeta.paths.docMd, "utf8");
+  assert.match(sessionDoc, /Status: failed/);
+  assert.match(sessionDoc, /- Error:/);
+  assert.match(sessionDoc, /synthetic fake Codex failure/);
 });
 
 test("worktree sessions push integrated master to its upstream", { timeout: 60000 }, async () => {
@@ -387,8 +462,11 @@ test("worktree sessions push integrated master to its upstream", { timeout: 6000
   assert.equal(sessionMeta.status, "succeeded", sessionMeta.lastError);
   assert.equal(sessionMeta.executionMode, "worktree");
   assert.equal(sessionMeta.succeededAgents, 3);
+  assert.ok(sessionMeta.agents.every((agent) => agent.mergedCommit));
+  assert.ok(sessionMeta.agents.every((agent) => agent.changedFiles.length === 1));
 
   const localMaster = await run("git", ["rev-parse", "master"], { cwd: projectRoot, check: true });
+  assert.ok(sessionMeta.agents.some((agent) => agent.mergedCommit === localMaster.stdout.trim()));
   const remoteMaster = await run("git", ["--git-dir", remoteRoot, "rev-parse", "refs/heads/master"], {
     cwd: root,
     check: true,
@@ -858,6 +936,9 @@ await appendInvocation({
 await incrementActive();
 try {
   await sleep(Number(process.env.FAKE_CODEX_DELAY_MS || 0));
+  if (process.env.FAKE_CODEX_FAIL_MESSAGE && outputSchemaFile) {
+    throw new Error(process.env.FAKE_CODEX_FAIL_MESSAGE);
+  }
   await fs.mkdir(path.dirname(outputFile), { recursive: true });
   if (outputSchemaFile) {
     const agentId = agentIdFromOutput(outputFile);
@@ -900,7 +981,7 @@ function argAfter(flag, sourceArgs = args) {
 function valuesAfter(flag, sourceArgs = args) {
   const values = [];
   for (let index = 0; index < sourceArgs.length; index += 1) {
-    if (sourceArgs[index] === flag) {
+    if (sourceArgs[index] === flag || (flag === "-c" && sourceArgs[index] === "--config")) {
       values.push(String(sourceArgs[index + 1] || ""));
       index += 1;
     }
