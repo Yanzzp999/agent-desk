@@ -225,6 +225,12 @@ agent 应在实现前调用 `claim_next_task_item`，验证通过后调用 `comp
           stderr.log
 ```
 
+`taskId` 和 `sessionId` 会作为路径、命令、worktree 名称和 MCP 查询的稳定
+引用保留下来。面向用户的列表、详情和结构化 MCP 结果会额外暴露 `name`：
+task 名称来自模型生成的 `task.md` H1，session 名称复用该 task 名称，便于
+浏览。launcher、模型、reasoning、service tier、并发数等执行设置仍保留在独立
+结构化字段和 session 文档中。
+
 持久化 git worktree 默认存放在项目目录之外：
 
 ```text

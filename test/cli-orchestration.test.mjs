@@ -143,7 +143,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   ], { cwd: REPO_ROOT, env });
   assert.equal(sessionStart.exitCode, 0, sessionStart.stderr);
   const sessionSummary = JSON.parse(sessionStart.stdout);
-  assert.equal(sessionSummary.name, "CLI configured orchestration · Codex CLI gpt-5.5 high fast");
+  assert.equal(sessionSummary.name, "CLI configured orchestration");
   const runningTaskMarkdown = await waitForText(
     taskMeta.paths.taskMd,
     (text) => /AgentDesk status: `running`; session: `[^`]+`; agent: `agent-0[12]`/.test(text) ? text : null,
@@ -157,7 +157,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   );
 
   assert.equal(sessionMeta.status, "succeeded", sessionMeta.lastError);
-  assert.equal(sessionMeta.name, "CLI configured orchestration · Codex CLI gpt-5.5 high fast");
+  assert.equal(sessionMeta.name, "CLI configured orchestration");
   assert.equal(sessionMeta.model, "gpt-5.5");
   assert.equal(sessionMeta.reasoning, "high");
   assert.equal(sessionMeta.serviceTier, "fast");
@@ -188,7 +188,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.doesNotMatch(completedTaskMarkdown, /AgentDesk status: `running`/);
 
   const sessionDoc = await fs.readFile(sessionMeta.paths.docMd, "utf8");
-  assert.match(sessionDoc, /^# CLI configured orchestration · Codex CLI gpt-5\.5 high fast/m);
+  assert.match(sessionDoc, /^# CLI configured orchestration/m);
   assert.match(sessionDoc, new RegExp(`Session ID: ${escapeRegExp(sessionSummary.sessionId)}`));
   assert.match(sessionDoc, /- Model: gpt-5\.5/);
   assert.match(sessionDoc, /- Reasoning: high/);

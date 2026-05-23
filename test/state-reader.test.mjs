@@ -208,11 +208,11 @@ test("reads task, session, and agent log state from .agent-desk", async () => {
 
   const sessions = await listSessions(context);
   assert.equal(sessions.items.length, 1);
-  assert.equal(sessions.items[0].name, "Ship AgentDesk orchestration · Codex CLI gpt-5.5 xhigh fast");
+  assert.equal(sessions.items[0].name, "Ship AgentDesk orchestration");
   assert.equal(sessions.items[0].taskTitle, "Ship AgentDesk orchestration");
 
   const sessionDetail = await getSession(context, "session-demo");
-  assert.equal(sessionDetail.name, "Ship AgentDesk orchestration · Codex CLI gpt-5.5 xhigh fast");
+  assert.equal(sessionDetail.name, "Ship AgentDesk orchestration");
   assert.match(sessionDetail.docContent, /Session ID: session-demo/);
 
   const logs = await getAgentLogs(context, "session-demo", "agent-01");
@@ -257,13 +257,13 @@ test("lists historical sessions newest first and reads detail/log summaries", as
     "session-old",
   ]);
   assert.equal(sessions.items[0].status, "succeeded");
-  assert.equal(sessions.items[0].name, "Check session history · Codex CLI gpt-5.5 xhigh fast");
+  assert.equal(sessions.items[0].name, "Check session history");
   assert.equal(sessions.items[0].taskTitle, "Check session history");
   assert.equal(sessions.items[1].lastError, "synthetic historical failure");
 
   const detail = await getSession(context, "session-latest");
   assert.equal(detail.task.title, "Check session history");
-  assert.equal(detail.name, "Check session history · Codex CLI gpt-5.5 xhigh fast");
+  assert.equal(detail.name, "Check session history");
   assert.equal(detail.status, "succeeded");
   assert.equal(detail.agents[0].status, "succeeded");
   assert.equal(detail.agents[0].summary, "Session history detail verified.");

@@ -234,7 +234,7 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     });
 
     assert.equal(started.structuredContent.subagentLauncher, "codex-cli");
-    assert.equal(started.structuredContent.name, "MCP CLI fanout · Codex CLI gpt-5.5 xhigh fast");
+    assert.equal(started.structuredContent.name, "MCP CLI fanout");
     assert.equal(started.structuredContent.requiresHostLaunch, false);
     assert.equal(started.structuredContent.waitedForCompletion, true);
     assert.equal(started.structuredContent.parallelism, 5);
@@ -254,7 +254,7 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
       "utf8",
     ));
     assert.equal(meta.status, "succeeded", meta.lastError);
-    assert.equal(meta.name, "MCP CLI fanout · Codex CLI gpt-5.5 xhigh fast");
+    assert.equal(meta.name, "MCP CLI fanout");
     assert.equal(meta.totalAgents, 7);
     assert.equal(meta.succeededAgents, 7);
     assert.equal(meta.failedAgents, 0);
@@ -503,7 +503,7 @@ test("MCP list/read AgentDesk tasks returns structured task memory and session s
       "session-older",
     ]);
     assert.equal(read.structuredContent.sessions[0].status, "succeeded");
-    assert.equal(read.structuredContent.sessions[0].name, "MCP structured task output · Codex CLI gpt-5.5 xhigh fast");
+    assert.equal(read.structuredContent.sessions[0].name, "MCP structured task output");
     assert.equal(read.structuredContent.sessions[0].taskName, "MCP structured task output");
     assert.equal(read.structuredContent.sessions[0].taskTitle, "MCP structured task output");
     assert.equal(read.structuredContent.sessions[0].totalAgents, 1);

@@ -477,17 +477,24 @@ function taskDisplayName(task) {
 }
 
 function sessionDisplayName(session, task) {
-  return normalizeOptionalString(session?.name)
-    || buildSessionName(task || session, session || {});
+  const taskName = task
+    ? taskDisplayName(task)
+    : normalizeOptionalString(session?.title);
+  if (taskName) {
+    return taskName;
+  }
+  return stripSessionRuntimeSuffix(normalizeOptionalString(session?.name))
+    || normalizeOptionalString(session?.sessionId)
+    || "Untitled session";
 }
 
-function buildSessionName(task, sessionRequest = {}) {
-  const taskName = taskDisplayName(task);
-  const launcher = sessionRequest.subagentLauncher === "codex-app" ? "Codex App" : "Codex CLI";
-  const model = normalizeOptionalString(sessionRequest.model) || DEFAULT_SUBAGENT_MODEL;
-  const reasoning = normalizeOptionalString(sessionRequest.reasoning) || DEFAULT_SUBAGENT_REASONING;
-  const serviceTier = normalizeOptionalString(sessionRequest.serviceTier) || DEFAULT_SERVICE_TIER;
-  return `${taskName} · ${launcher} ${model} ${reasoning} ${serviceTier}`;
+function buildSessionName(task) {
+  return taskDisplayName(task);
+}
+
+function stripSessionRuntimeSuffix(name) {
+  const normalized = normalizeOptionalString(name);
+  return normalized.replace(/\s+·\s+(?:Codex CLI|Codex App)\s+.+$/u, "").trim();
 }
 
 export async function createSession(context, taskId, request = {}) {
@@ -1537,6 +1544,8 @@ function buildTaskGenerationPrompt(task) {
     "Title rules:",
     "- The H1 is the user-facing AgentDesk task name.",
     "- Generate a concise, specific name from the feature brief and task content.",
+    "- Keep it natural for task and session lists, ideally 3 to 8 words.",
+    "- Do not include launcher, model, reasoning, service tier, dates, or counts.",
     "- Do not use generic names such as `Task`, `AgentDesk`, or timestamp-like identifiers.",
     "",
     "Subtask rules:",
