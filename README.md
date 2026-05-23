@@ -297,8 +297,10 @@ Session execution:
 - Respects the configured Codex CLI concurrency limit.
 - Uses `auto` mode to avoid worktrees for simple, serial, or clearly non-conflicting work.
 - Creates isolated git branches and worktrees in `worktree` mode.
+- Commits completed subagent worktree changes before integration.
 - Rebases completed subagent branches onto `master` in `worktree` mode.
 - Fast-forwards `master` to integrate completed work in `worktree` mode.
+- Pushes `master` to its configured upstream after the fast-forward.
 
 `current-branch` mode does not create worktrees. Codex CLI subagents leave unstaged changes in the current checkout for the main agent or caller to review. With `--subagent-launcher codex-app`, AgentDesk writes the session and subagent prompt files, ends the launch-plan preparation as `succeeded`, and lets the Codex App host launch and wait for app subagents.
 

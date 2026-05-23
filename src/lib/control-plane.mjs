@@ -1839,11 +1839,13 @@ async function integrateBranchIntoMaster(context, worktreePath, baseCommit, head
       masterBefore: await gitRevParse(context.projectRoot, "master"),
       masterCommit: await gitRevParse(context.projectRoot, "master"),
       integrated: false,
+      pushed: false,
     };
   }
 
   const lock = await acquireLock(path.join(context.locksRoot, "master-integrate.lock"));
   try {
+    const upstream = await gitMasterUpstream(context.projectRoot);
     const masterBefore = await gitRevParse(context.projectRoot, "master");
     const rebase = await spawnCapture("git", ["rebase", "master"], { cwd: worktreePath });
     if (rebase.exitCode !== 0) {
@@ -1861,10 +1863,18 @@ async function integrateBranchIntoMaster(context, worktreePath, baseCommit, head
     if (update.exitCode !== 0) {
       throw new Error(describeCommandFailure(update, "failed to advance master"));
     }
+    const push = await spawnCapture("git", ["push", upstream.remoteName, `refs/heads/master:${upstream.remoteRef}`], {
+      cwd: context.projectRoot,
+    });
+    if (push.exitCode !== 0) {
+      throw new Error(describeCommandFailure(push, `failed to push master to ${upstream.displayName}`));
+    }
     return {
       masterBefore,
       masterCommit: rebasedHead,
       integrated: true,
+      pushed: true,
+      upstream: upstream.displayName,
     };
   } finally {
     await releaseLock(lock);
@@ -2267,6 +2277,26 @@ async function gitCurrentBranch(cwd) {
 async function gitIsAncestor(cwd, ancestor, descendant) {
   const result = await spawnCapture("git", ["merge-base", "--is-ancestor", ancestor, descendant], { cwd });
   return result.exitCode === 0;
+}
+
+async function gitMasterUpstream(cwd) {
+  const result = await spawnCapture("git", [
+    "for-each-ref",
+    "--format=%(upstream:remotename)%09%(upstream:remoteref)",
+    "refs/heads/master",
+  ], { cwd });
+  if (result.exitCode !== 0) {
+    throw new Error(describeCommandFailure(result, "failed to read master upstream"));
+  }
+  const [remoteName, remoteRef] = result.stdout.trim().split("\t");
+  if (!remoteName || !remoteRef) {
+    throw new Error("master branch does not have an upstream; configure master to track a remote before worktree integration can push");
+  }
+  return {
+    remoteName,
+    remoteRef,
+    displayName: `${remoteName}/${remoteRef.replace(/^refs\/heads\//, "")}`,
+  };
 }
 
 async function listBranchFiles(cwd, baseCommit) {

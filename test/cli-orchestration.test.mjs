@@ -66,6 +66,7 @@ test("verunectl rejects missing CLI option values before side effects", async ()
 test("verunectl creates a task and runs configured Codex CLI subagents", { timeout: 60000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-e2e-"));
   const projectRoot = path.join(root, "project");
+  const remoteRoot = path.join(root, "origin.git");
   const worktreesRoot = path.join(root, "worktrees");
   const fakeCodex = path.join(root, "fake-codex.mjs");
   const fakeState = path.join(root, "fake-state.json");
@@ -73,7 +74,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
 
   await fs.mkdir(projectRoot, { recursive: true });
   await writeFakeCodex(fakeCodex);
-  await initializeGitProject(projectRoot);
+  await initializeGitProject(projectRoot, { remoteRoot });
 
   const env = {
     ...process.env,
@@ -191,6 +192,86 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
 
   const state = JSON.parse(await fs.readFile(fakeState, "utf8"));
   assert.equal(state.maxActive, 2);
+});
+
+test("worktree sessions push integrated master to its upstream", { timeout: 60000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-push-"));
+  const projectRoot = path.join(root, "project");
+  const remoteRoot = path.join(root, "origin.git");
+  const worktreesRoot = path.join(root, "worktrees");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const fakeLog = path.join(root, "fake-log.jsonl");
+  const taskId = "task-cli-worktree-push";
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await writeFakeCodex(fakeCodex);
+  await initializeGitProject(projectRoot, { remoteRoot });
+  await writeReadyAgentDeskTask(projectRoot, taskId, "Worktree push integration");
+
+  const upstream = await run("git", ["rev-parse", "--abbrev-ref", "master@{upstream}"], {
+    cwd: projectRoot,
+    check: true,
+  });
+  assert.equal(upstream.stdout.trim(), "origin/master");
+
+  const result = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "start",
+    taskId,
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--execution-mode",
+    "worktree",
+    "--subagent-launcher",
+    "codex-cli",
+    "--parallel",
+    "2",
+    "--json",
+  ], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      CODEX_CLI: fakeCodex,
+      FAKE_CODEX_LOG: fakeLog,
+      FAKE_CODEX_DELAY_MS: "100",
+    },
+  });
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  const started = JSON.parse(result.stdout);
+  assert.equal(started.executionMode, "worktree");
+  const sessionMeta = await waitForJson(
+    path.join(projectRoot, ".agent-desk", "sessions", started.sessionId, "meta.json"),
+    (meta) => ["succeeded", "failed"].includes(meta.status) ? meta : null,
+    45000,
+  );
+  assert.equal(sessionMeta.status, "succeeded", sessionMeta.lastError);
+  assert.equal(sessionMeta.executionMode, "worktree");
+  assert.equal(sessionMeta.succeededAgents, 3);
+
+  const localMaster = await run("git", ["rev-parse", "master"], { cwd: projectRoot, check: true });
+  const remoteMaster = await run("git", ["--git-dir", remoteRoot, "rev-parse", "refs/heads/master"], {
+    cwd: root,
+    check: true,
+  });
+  assert.equal(remoteMaster.stdout.trim(), localMaster.stdout.trim());
+
+  const remoteFiles = await run("git", ["--git-dir", remoteRoot, "ls-tree", "-r", "--name-only", "master"], {
+    cwd: root,
+    check: true,
+  });
+  assert.match(remoteFiles.stdout, /agent-01\.txt/);
+  assert.match(remoteFiles.stdout, /agent-02\.txt/);
+  assert.match(remoteFiles.stdout, /agent-03\.txt/);
+
+  const log = await run("git", ["--git-dir", remoteRoot, "log", "--format=%s", "-3", "master"], {
+    cwd: root,
+    check: true,
+  });
+  assert.match(log.stdout, /AgentDesk: Prepare handoff prompt/);
 });
 
 test("verunectl sessions start/show/list distinguish Codex App handoff from Codex CLI execution", { timeout: 30000 }, async () => {
@@ -527,13 +608,18 @@ test("verunectl allocates unique task ids and blocks duplicate active sessions",
   assert.equal(finalTaskMeta.activeSessionStatus, "");
 });
 
-async function initializeGitProject(projectRoot) {
+async function initializeGitProject(projectRoot, options = {}) {
   await run("git", ["init", "-b", "master"], { cwd: projectRoot, check: true });
   await run("git", ["config", "user.name", "AgentDesk Test"], { cwd: projectRoot, check: true });
   await run("git", ["config", "user.email", "agentdesk@example.test"], { cwd: projectRoot, check: true });
   await fs.writeFile(path.join(projectRoot, "README.md"), "# Fixture\n");
   await run("git", ["add", "README.md"], { cwd: projectRoot, check: true });
   await run("git", ["commit", "-m", "Initial fixture"], { cwd: projectRoot, check: true });
+  if (options.remoteRoot) {
+    await run("git", ["init", "--bare", options.remoteRoot], { cwd: projectRoot, check: true });
+    await run("git", ["remote", "add", "origin", options.remoteRoot], { cwd: projectRoot, check: true });
+    await run("git", ["push", "-u", "origin", "master"], { cwd: projectRoot, check: true });
+  }
 }
 
 async function writeReadyAgentDeskTask(projectRoot, taskId, title) {

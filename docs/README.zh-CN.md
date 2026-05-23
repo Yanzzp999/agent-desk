@@ -327,8 +327,10 @@ Session 执行：
 - 遵守 session 选择的并发 Codex CLI 上限
 - 默认 `auto` 会先判断是否需要 worktree；简单任务、串行任务或明确无冲突的分文件/分模块任务会直接在当前 checkout 实现
 - `worktree` 模式会为每个子代理创建独立 git branch 和 git worktree
+- 集成前会先提交已完成子代理 worktree 内的改动
 - `worktree` 模式会将完成的子代理分支 rebase 到 `master`
 - `worktree` 模式会通过 fast-forward 更新 `master` 集成完成的工作
+- fast-forward 后会把 `master` 推送到已配置的上游分支
 
 `current-branch` 模式不创建 worktree；Codex CLI 子代理会在当前 checkout 内留下未暂存改动，供主 agent 或调用方复核。它也可以选择 `--subagent-launcher codex-app`，此时 AgentDesk 会创建 session 和每个 subagent 的 prompt 文件，然后以 `succeeded` 状态结束这次 launch-plan 准备；Codex App 宿主按 launch plan 直接启动 app subagents，并负责后续等待。
 
