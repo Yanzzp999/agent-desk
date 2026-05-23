@@ -567,14 +567,23 @@ test("MCP server reports actionable Codex CLI session failures", async () => {
 });
 
 test("MCP create_agentdesk_task requires confirmation for similar tasks", async () => {
-  const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-confirm-")));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-confirm-")));
+  const projectRoot = path.join(root, "project");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const fakeLog = path.join(root, "fake-log.jsonl");
+  await fs.mkdir(projectRoot, { recursive: true });
   await initializeGitProject(projectRoot);
   await writeReadyAgentDeskTask(projectRoot, "task-mcp-similar", "MCP duplicate guard");
+  await writeFakeCodex(fakeCodex);
 
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [MCP_BIN],
     cwd: projectRoot,
+    env: {
+      ...process.env,
+      FAKE_CODEX_LOG: fakeLog,
+    },
     stderr: "pipe",
   });
   const client = new Client({ name: "agent-desk-mcp-confirm-test", version: "0.0.0" });
@@ -605,6 +614,91 @@ test("MCP create_agentdesk_task requires confirmation for similar tasks", async 
     assert.ok(result.structuredContent.similarTasks[0].similarityScore >= 0.98);
     assert.match(result.structuredContent.similarTasks[0].similarityReason, /same or near-identical/);
     assert.match(result.content[0].text, /continue an existing task or rebuild a fresh task/);
+
+    const continued = await client.callTool({
+      name: "create_agentdesk_task",
+      arguments: {
+        projectRoot,
+        title: "MCP duplicate guard",
+        brief: "Exercise AgentDesk MCP session orchestration.",
+        similarTaskAction: "continue",
+      },
+    });
+
+    assert.equal(continued.structuredContent.requiresConfirmation, false);
+    assert.equal(continued.structuredContent.reusedExistingTask, true);
+    assert.equal(continued.structuredContent.similarTaskAction, "continue");
+    assert.equal(continued.structuredContent.taskId, "task-mcp-similar");
+    assert.equal(continued.structuredContent.similarTasks[0].taskId, "task-mcp-similar");
+    assert.match(continued.content[0].text, /Continuing existing AgentDesk task/);
+
+    const rebuilt = await client.callTool({
+      name: "create_agentdesk_task",
+      arguments: {
+        projectRoot,
+        title: "MCP duplicate guard",
+        brief: "Exercise AgentDesk MCP session orchestration.",
+        similarTaskAction: "rebuild",
+        codexCli: fakeCodex,
+      },
+    });
+
+    assert.equal(rebuilt.structuredContent.requiresConfirmation, false);
+    assert.equal(rebuilt.structuredContent.similarTaskAction, "rebuild");
+    assert.equal(rebuilt.structuredContent.similarTasks[0].taskId, "task-mcp-similar");
+    assert.notEqual(rebuilt.structuredContent.taskId, "task-mcp-similar");
+    assert.match(rebuilt.content[0].text, /Started AgentDesk task generation/);
+
+    const rebuiltTaskId = rebuilt.structuredContent.taskId;
+    const rebuiltMetaPath = path.join(projectRoot, ".agent-desk", "tasks", rebuiltTaskId, "meta.json");
+    await waitForJson(rebuiltMetaPath, (meta) => meta.status === "ready" && meta.subtaskCount === 3);
+
+    const listed = await client.callTool({
+      name: "list_agentdesk_tasks",
+      arguments: { projectRoot },
+    });
+
+    assert.equal(listed.structuredContent.items.length, 2);
+    const rebuiltSummary = listed.structuredContent.items.find((item) => item.taskId === rebuiltTaskId);
+    assert.equal(rebuiltSummary.name, "Generated MCP Control Plane Task");
+    assert.equal(rebuiltSummary.status, "ready");
+    assert.equal(rebuiltSummary.subtaskCount, 3);
+
+    const read = await client.callTool({
+      name: "read_agentdesk_task",
+      arguments: {
+        projectRoot,
+        taskId: rebuiltTaskId,
+      },
+    });
+
+    assert.equal(read.structuredContent.taskId, rebuiltTaskId);
+    assert.equal(read.structuredContent.name, "Generated MCP Control Plane Task");
+    assert.equal(read.structuredContent.status, "ready");
+    assert.equal(read.structuredContent.subtaskCount, 3);
+    assert.match(read.structuredContent.markdown, /^# Generated MCP Control Plane Task/m);
+    assert.match(read.structuredContent.markdown, /## Acceptance Criteria/);
+    assert.match(read.structuredContent.markdown, /- \[ \] Inspect create_agentdesk_task generation/);
+    assert.match(read.structuredContent.markdown, /- \[ \] Verify list_agentdesk_tasks summary fields/);
+    assert.match(read.structuredContent.markdown, /- \[ \] Read generated task.md content/);
+    assert.match(read.structuredContent.memory, /# Task Memory/);
+    assert.equal(
+      read.structuredContent.memoryPath,
+      path.join(projectRoot, ".agent-desk", "tasks", rebuiltTaskId, "memory.md"),
+    );
+
+    const invocations = await readJsonLines(fakeLog);
+    const generationInvocation = invocations.find((entry) => entry.outputFile.endsWith("task.md"));
+    assert.ok(generationInvocation, JSON.stringify(invocations, null, 2));
+    assert.equal(generationInvocation.hasOutputSchema, false);
+    assert.equal(generationInvocation.model, "gpt-5.5");
+    assert.deepEqual(generationInvocation.configs, [
+      "model_reasoning_effort=\"xhigh\"",
+      "service_tier=\"fast\"",
+    ]);
+    assert.match(generationInvocation.prompt, /Write markdown only/);
+    assert.match(generationInvocation.prompt, /Task title hint: MCP duplicate guard/);
+    assert.match(generationInvocation.prompt, /Exercise AgentDesk MCP session orchestration/);
   } finally {
     await client.close();
   }
@@ -1025,12 +1119,35 @@ try {
     throw new Error(process.env.FAKE_CODEX_FAIL_MESSAGE);
   }
   await fs.mkdir(path.dirname(outputFile), { recursive: true });
-  await fs.writeFile(outputFile, JSON.stringify({
-    summary: "completed via fake Codex",
-    tests_run: ["fake codex"],
-    risks: [],
-    notes: ["Prompt length " + prompt.length],
-  }, null, 2) + "\\n", "utf8");
+  if (outputSchemaFile) {
+    await fs.writeFile(outputFile, JSON.stringify({
+      summary: "completed via fake Codex",
+      tests_run: ["fake codex"],
+      risks: [],
+      notes: ["Prompt length " + prompt.length],
+    }, null, 2) + "\\n", "utf8");
+  } else {
+    await fs.writeFile(outputFile, [
+      "# Generated MCP Control Plane Task",
+      "",
+      "## Goal",
+      "Validate AgentDesk control-plane task generation from a Codex-produced markdown document.",
+      "",
+      "## Context",
+      "This deterministic fake Codex response exercises create/list/read task behavior without a live Codex dependency.",
+      "",
+      "## Acceptance Criteria",
+      "- Task generation writes task.md.",
+      "- list_agentdesk_tasks reports the generated task as ready.",
+      "- read_agentdesk_task returns the generated markdown and task memory.",
+      "",
+      "## Subtasks",
+      "- [ ] Inspect create_agentdesk_task generation",
+      "- [ ] Verify list_agentdesk_tasks summary fields",
+      "- [ ] Read generated task.md content",
+      "",
+    ].join("\\n"), "utf8");
+  }
 } finally {
   await decrementActive();
 }
