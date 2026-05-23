@@ -240,6 +240,14 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.equal(sessionMeta.serviceTier, "fast");
   assert.equal(sessionMeta.parallelism, 2);
   assert.equal(sessionMeta.batchSize, 6);
+  assert.equal(sessionMeta.requestedExecutionMode, "auto");
+  assert.equal(sessionMeta.executionMode, "worktree");
+  assert.equal(sessionMeta.subagentLauncher, "codex-cli");
+  assert.equal(sessionMeta.worktreeDecision.requiresWorktree, true);
+  assert.equal(sessionMeta.worktreeDecision.signals.parallelism, 2);
+  assert.equal(sessionMeta.worktreeDecision.signals.subtaskCount, 3);
+  assert.equal(sessionMeta.worktreeDecision.signals.subagentLauncher, "codex-cli");
+  assert.match(sessionMeta.worktreeDecision.reason, /broad or shared-scope wording|multiple parallel subtasks/);
   assert.equal(sessionMeta.totalAgents, 3);
   assert.equal(sessionMeta.succeededAgents, 3);
   assert.equal(sessionMeta.failedAgents, 0);
@@ -270,7 +278,12 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.match(sessionDoc, /- Model: gpt-5\.5/);
   assert.match(sessionDoc, /- Reasoning: high/);
   assert.match(sessionDoc, /- Service tier: fast/);
+  assert.match(sessionDoc, /- Execution mode: worktree/);
+  assert.match(sessionDoc, /- Requested execution mode: auto/);
+  assert.match(sessionDoc, new RegExp(`- Worktree decision: ${escapeRegExp(sessionMeta.worktreeDecision.reason)}`));
+  assert.match(sessionDoc, /- Subagent launcher: codex-cli/);
   assert.match(sessionDoc, /- Parallelism: 2/);
+  assert.match(sessionDoc, /- Batch size: 6/);
 
   for (const agent of sessionMeta.agents) {
     const taskSnapshot = await fs.readFile(agent.paths.taskSnapshotMd, "utf8");
@@ -281,6 +294,8 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
     assert.doesNotMatch(memorySnapshot, /completed via fake Codex/);
     assert.match(prompt, /Execution model: gpt-5\.5/);
     assert.match(prompt, /Execution reasoning: high/);
+    assert.match(prompt, /Execution mode: worktree/);
+    assert.match(prompt, /Subagent launcher: codex-cli/);
     assert.match(prompt, new RegExp(`Assigned subtask: ${escapeRegExp(agent.title)}`));
     assert.match(prompt, new RegExp(`Task markdown snapshot: ${escapeRegExp(agent.paths.taskSnapshotMd)}`));
     assert.match(prompt, new RegExp(`Shared memory snapshot: ${escapeRegExp(agent.paths.memorySnapshotMd)}`));

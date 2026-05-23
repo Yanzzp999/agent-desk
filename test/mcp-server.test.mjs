@@ -438,7 +438,7 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
         codexCli: fakeCodex,
         executionMode: "current-branch",
         subagentLauncher: "codex-cli",
-        parallelism: 5,
+        parallelism: 12,
       },
     });
 
@@ -446,7 +446,8 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.equal(started.structuredContent.name, "MCP CLI fanout");
     assert.equal(started.structuredContent.requiresHostLaunch, false);
     assert.equal(started.structuredContent.waitedForCompletion, true);
-    assert.equal(started.structuredContent.parallelism, 5);
+    assert.equal(started.structuredContent.parallelism, 12);
+    assert.equal(started.structuredContent.batchSize, 6);
     assert.equal(started.structuredContent.status, "succeeded", started.structuredContent.lastError);
     assert.equal(started.structuredContent.model, "gpt-5.5");
     assert.equal(started.structuredContent.reasoning, "xhigh");
@@ -470,6 +471,8 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.equal(meta.runningAgents, 0);
     assert.equal(meta.executionMode, "current-branch");
     assert.equal(meta.subagentLauncher, "codex-cli");
+    assert.equal(meta.parallelism, 12);
+    assert.equal(meta.batchSize, 6);
     assert.match(await fs.readFile(meta.agents[0].paths.taskSnapshotMd, "utf8"), /Inspect API surface/);
     assert.match(await fs.readFile(meta.agents[0].paths.memorySnapshotMd, "utf8"), /Existing MCP memory/);
     const firstPrompt = await fs.readFile(meta.agents[0].paths.promptMd, "utf8");
@@ -482,7 +485,8 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.match(firstPrompt, /Existing MCP memory/);
 
     const state = JSON.parse(await fs.readFile(fakeState, "utf8"));
-    assert.equal(state.maxActive <= 5, true);
+    assert.equal(state.maxActive <= 6, true);
+    assert.equal(state.maxActive < 12, true);
     assert.equal(state.maxActive > 1, true);
     const invocations = await readJsonLines(fakeLog);
     const subagentInvocations = invocations.filter((entry) => entry.hasOutputSchema);
