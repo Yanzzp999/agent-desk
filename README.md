@@ -202,6 +202,11 @@ Each project stores orchestration state in:
           stderr.log
 ```
 
+`taskId` and `sessionId` stay stable for paths, commands, worktree names, and
+MCP lookups. User-facing lists, details, and structured MCP results also expose a
+`name`: task names come from the generated `task.md` H1, and session names derive
+from that task name plus the selected launcher/model/reasoning/service tier.
+
 Persistent git worktrees are stored outside the project by default:
 
 ```text

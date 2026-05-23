@@ -309,10 +309,10 @@ export function createAgentDeskMcpServer(options = {}) {
       appLaunchPlan,
     };
     const text = appLaunchPlan.requiresHostLaunch
-      ? `Prepared ${appLaunchPlan.subagents.length} Codex App subagent prompt(s) for session ${result.sessionId}`
+      ? `Prepared ${appLaunchPlan.subagents.length} Codex App subagent prompt(s) for session ${result.name || result.sessionId} (${result.sessionId})`
       : waitForCompletion
-        ? `Completed AgentDesk Codex CLI session ${result.sessionId} with status ${result.status}`
-        : `Started AgentDesk Codex CLI session: ${result.sessionId}`;
+        ? `Completed AgentDesk Codex CLI session ${result.name || result.sessionId} (${result.sessionId}) with status ${result.status}`
+        : `Started AgentDesk Codex CLI session: ${result.name || result.sessionId} (${result.sessionId})`;
     return toolResult(payload, text);
   });
 
@@ -408,6 +408,7 @@ function contextInputSchema() {
 function taskSummarySchema() {
   return z.object({
     taskId: z.string(),
+    name: z.string(),
     title: z.string(),
     status: z.string(),
     subtaskCount: z.number(),
@@ -419,6 +420,7 @@ function taskCreateResultSchema() {
   return z.object({
     requiresConfirmation: z.boolean().optional(),
     taskId: z.string().optional(),
+    name: z.string().optional(),
     title: z.string().optional(),
     status: z.string().optional(),
     subtaskCount: z.number().optional(),
@@ -441,7 +443,7 @@ function taskCreateResultSchema() {
 function taskCreateResultText(result) {
   if (result.requiresConfirmation) {
     const matches = (result.similarTasks || [])
-      .map((task) => `- ${task.taskId} (${task.status}, score ${task.similarityScore}): ${task.title}`)
+      .map((task) => `- ${task.name || task.title || task.taskId} (${task.taskId}, ${task.status}, score ${task.similarityScore})`)
       .join("\n");
     return [
       "Similar AgentDesk task(s) found. Ask the user whether to continue an existing task or rebuild a fresh task.",
@@ -450,9 +452,9 @@ function taskCreateResultText(result) {
     ].filter(Boolean).join("\n");
   }
   if (result.reusedExistingTask) {
-    return `Continuing existing AgentDesk task: ${result.taskId}`;
+    return `Continuing existing AgentDesk task: ${result.name || result.title || result.taskId} (${result.taskId})`;
   }
-  return `Started AgentDesk task generation: ${result.taskId}`;
+  return `Started AgentDesk task generation: ${result.name || result.title || result.taskId} (${result.taskId})`;
 }
 
 function taskDetailSchema() {
@@ -467,6 +469,7 @@ function taskDetailSchema() {
 function sessionSummarySchema() {
   return z.object({
     sessionId: z.string(),
+    name: z.string(),
     taskId: z.string(),
     status: z.string(),
     parallelism: z.number(),

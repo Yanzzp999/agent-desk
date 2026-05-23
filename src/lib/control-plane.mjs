@@ -258,6 +258,7 @@ export async function getTask(context, taskId) {
   const memoryPath = resolveTaskMemoryPath(context, meta);
   return {
     ...meta,
+    name: taskDisplayName(meta),
     markdown: await readTextSafe(meta.paths.taskMd),
     memory: await readTaskMemory(context, meta),
     memoryPath,
@@ -292,6 +293,7 @@ export async function createTask(context, request = {}) {
   const meta = {
     schemaVersion: SCHEMA_VERSION,
     taskId,
+    name: normalized.title,
     title: normalized.title,
     brief: normalized.brief,
     status: "received",
@@ -401,6 +403,7 @@ export async function runTaskGenerationJob(context, taskId) {
   const items = parseTaskMarkdownItems(markdown);
   const title = extractMarkdownTitle(markdown) || meta.title;
   await updateTaskMeta(context, taskId, {
+    name: title,
     title,
     status: "ready",
     completedAt: new Date().toISOString(),
@@ -436,8 +439,11 @@ export async function getSession(context, sessionId) {
   const docContent = await readTextSafe(meta.paths.docMd);
   return {
     ...meta,
+    name: sessionDisplayName(meta, task),
+    taskName: taskDisplayName(task || meta),
     task: task ? {
       taskId: task.taskId,
+      name: taskDisplayName(task),
       title: task.title,
       status: task.status,
       path: task.paths.taskMd,
@@ -461,6 +467,27 @@ function sessionRecencyStamp(session) {
     || session.createdAt
     || session.sessionId
     || "";
+}
+
+function taskDisplayName(task) {
+  return normalizeOptionalString(task?.name)
+    || normalizeOptionalString(task?.title)
+    || normalizeOptionalString(task?.taskId)
+    || "Untitled task";
+}
+
+function sessionDisplayName(session, task) {
+  return normalizeOptionalString(session?.name)
+    || buildSessionName(task || session, session || {});
+}
+
+function buildSessionName(task, sessionRequest = {}) {
+  const taskName = taskDisplayName(task);
+  const launcher = sessionRequest.subagentLauncher === "codex-app" ? "Codex App" : "Codex CLI";
+  const model = normalizeOptionalString(sessionRequest.model) || DEFAULT_SUBAGENT_MODEL;
+  const reasoning = normalizeOptionalString(sessionRequest.reasoning) || DEFAULT_SUBAGENT_REASONING;
+  const serviceTier = normalizeOptionalString(sessionRequest.serviceTier) || DEFAULT_SERVICE_TIER;
+  return `${taskName} · ${launcher} ${model} ${reasoning} ${serviceTier}`;
 }
 
 export async function createSession(context, taskId, request = {}) {
@@ -576,6 +603,7 @@ async function createClaimedSessionMeta(context, taskId, sessionRequest, options
       schemaVersion: SCHEMA_VERSION,
       sessionId,
       taskId: task.taskId,
+      name: buildSessionName(task, sessionRequest),
       title: task.title,
       status: "queued",
       parallelism: sessionRequest.parallelism,
@@ -1085,6 +1113,7 @@ async function enrichTaskSummary(context, meta) {
   const latestSession = sessions.items[0] || null;
   return {
     ...meta,
+    name: taskDisplayName(meta),
     sessionCount: sessions.items.length,
     latestSessionId: latestSession?.sessionId || "",
     latestSessionStatus: latestSession?.status || "",
@@ -1096,7 +1125,9 @@ async function enrichSessionSummary(context, meta) {
   const task = await readTaskMeta(context, meta.taskId).catch(() => null);
   return {
     ...meta,
+    name: sessionDisplayName(meta, task),
     taskTitle: task?.title || meta.title || meta.taskId,
+    taskName: taskDisplayName(task || meta),
   };
 }
 
@@ -1503,6 +1534,11 @@ function buildTaskGenerationPrompt(task) {
     "4. ## Acceptance Criteria",
     "5. ## Subtasks",
     "",
+    "Title rules:",
+    "- The H1 is the user-facing AgentDesk task name.",
+    "- Generate a concise, specific name from the feature brief and task content.",
+    "- Do not use generic names such as `Task`, `AgentDesk`, or timestamp-like identifiers.",
+    "",
     "Subtask rules:",
     "- Use markdown checkboxes like `- [ ] ...`.",
     "- Each subtask should be implementable by one Codex subagent, but do not assume a git worktree is required.",
@@ -1715,10 +1751,13 @@ function uniqueTaskItems(items) {
 }
 
 export function renderSessionDocument(session, task) {
+  const name = sessionDisplayName(session, task);
   const lines = [
-    `# Session ${session.sessionId}`,
+    `# ${name}`,
     "",
-    `- Task: ${task?.title || session.title || session.taskId}`,
+    `- Session ID: ${session.sessionId}`,
+    `- Task: ${taskDisplayName(task || session)}`,
+    `- Task ID: ${session.taskId}`,
     `- Status: ${session.status}`,
     `- Model: ${session.model || DEFAULT_SUBAGENT_MODEL}`,
     `- Reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
@@ -2096,7 +2135,7 @@ function renderInitialTaskMemory(task) {
   return [
     "# Task Memory",
     "",
-    `- Task: ${task.title || task.taskId}`,
+    `- Task: ${taskDisplayName(task)}`,
     `- Task ID: ${task.taskId}`,
     `- Created: ${task.createdAt || "-"}`,
     "",

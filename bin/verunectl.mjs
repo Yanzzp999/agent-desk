@@ -105,7 +105,8 @@ async function handleTasks(context, parsed) {
         return "No AgentDesk tasks found.";
       }
       return formatTable(result.items, [
-        { header: "TASK", value: (row) => row.taskId, maxWidth: 44 },
+        { header: "NAME", value: (row) => row.name || row.title || row.taskId, maxWidth: 36 },
+        { header: "TASK ID", value: (row) => row.taskId, maxWidth: 44 },
         { header: "STATUS", value: (row) => row.status, maxWidth: 14 },
         { header: "SUBTASKS", value: (row) => row.subtaskCount, maxWidth: 10 },
         { header: "SESSIONS", value: (row) => row.sessionCount, maxWidth: 10 },
@@ -118,7 +119,7 @@ async function handleTasks(context, parsed) {
     const result = await getTask(context, taskId);
     return output(parsed, result, () => {
       return [
-        `Task: ${result.title || result.taskId}`,
+        `Task: ${result.name || result.title || result.taskId}`,
         `Task ID: ${result.taskId}`,
         `Status: ${result.status}`,
         `Subtasks: ${result.subtaskCount || 0}`,
@@ -155,9 +156,10 @@ async function handleSessions(context, parsed) {
         return "No AgentDesk sessions found.";
       }
       return formatTable(result.items, [
-        { header: "SESSION", value: (row) => row.sessionId, maxWidth: 44 },
+        { header: "NAME", value: (row) => row.name || row.sessionId, maxWidth: 42 },
+        { header: "SESSION ID", value: (row) => row.sessionId, maxWidth: 44 },
         { header: "STATUS", value: (row) => row.status, maxWidth: 14 },
-        { header: "TASK", value: (row) => row.taskTitle, maxWidth: 28 },
+        { header: "TASK", value: (row) => row.taskName || row.taskTitle, maxWidth: 28 },
         { header: "PAR", value: (row) => row.parallelism, maxWidth: 4 },
         { header: "UPDATED", value: (row) => row.updatedAt || "-", maxWidth: 24 },
       ]);
@@ -168,8 +170,10 @@ async function handleSessions(context, parsed) {
     const result = await getSession(context, sessionId);
     return output(parsed, result, () => {
       return [
-        `Session: ${result.sessionId}`,
-        `Task: ${result.task?.title || result.title || result.taskId}`,
+        `Session: ${result.name || result.sessionId}`,
+        `Session ID: ${result.sessionId}`,
+        `Task: ${result.task?.name || result.task?.title || result.title || result.taskId}`,
+        `Task ID: ${result.taskId}`,
         `Status: ${result.status}`,
         `Parallelism: ${result.parallelism}`,
         `Succeeded: ${result.succeededAgents || 0}`,
@@ -189,7 +193,7 @@ async function handleSessions(context, parsed) {
       subagentLauncher: parsed["subagent-launcher"],
       allowDuplicateSession: parsed["allow-duplicate-session"] || parsed.force,
     });
-    return output(parsed, result, () => `Started session: ${result.sessionId}`);
+    return output(parsed, result, () => `Started session: ${result.name || result.sessionId} (${result.sessionId})`);
   }
   if (subcommand === "logs") {
     const sessionId = required(parsed._[2], "session id");
@@ -230,10 +234,10 @@ function renderTaskCreateResult(result) {
       "Similar AgentDesk task(s) found. Confirm the next step before creating a new task.",
       "",
       formatTable(result.similarTasks || [], [
-        { header: "TASK", value: (row) => row.taskId, maxWidth: 44 },
+        { header: "NAME", value: (row) => row.name || row.title || row.taskId, maxWidth: 36 },
+        { header: "TASK ID", value: (row) => row.taskId, maxWidth: 44 },
         { header: "STATUS", value: (row) => row.status, maxWidth: 14 },
         { header: "SCORE", value: (row) => row.similarityScore, maxWidth: 8 },
-        { header: "TITLE", value: (row) => row.title, maxWidth: 42 },
       ]),
       "",
       "Continue an existing task:",
@@ -244,9 +248,9 @@ function renderTaskCreateResult(result) {
     ].join("\n");
   }
   if (result.reusedExistingTask) {
-    return `Continuing existing task: ${result.taskId}`;
+    return `Continuing existing task: ${result.name || result.title || result.taskId} (${result.taskId})`;
   }
-  return `Started task generation: ${result.taskId}`;
+  return `Started task generation: ${result.name || result.title || result.taskId} (${result.taskId})`;
 }
 
 function parseArgs(argv) {

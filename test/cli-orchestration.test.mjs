@@ -100,14 +100,29 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   ], { cwd: REPO_ROOT, env });
   assert.equal(taskCreate.exitCode, 0, taskCreate.stderr);
   const taskSummary = JSON.parse(taskCreate.stdout);
+  assert.equal(taskSummary.name, "CLI configured orchestration");
   const taskMeta = await waitForJson(
     path.join(projectRoot, ".agent-desk", "tasks", taskSummary.taskId, "meta.json"),
     (meta) => meta.status === "ready" ? meta : null,
   );
+  assert.equal(taskMeta.name, "CLI configured orchestration");
   assert.equal(taskMeta.subtaskCount, 3);
   assert.equal(taskMeta.paths.memoryMd, path.join(projectRoot, ".agent-desk", "tasks", taskSummary.taskId, "memory.md"));
   assert.match(await fs.readFile(taskMeta.paths.taskMd, "utf8"), /- \[ \] Implement CLI config plumbing/);
   assert.match(await fs.readFile(taskMeta.paths.memoryMd, "utf8"), /# Task Memory/);
+
+  const taskList = await run(process.execPath, [
+    VERUNECTL,
+    "tasks",
+    "list",
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+  ], { cwd: REPO_ROOT, env });
+  assert.equal(taskList.exitCode, 0, taskList.stderr);
+  assert.match(taskList.stdout, /NAME\s+TASK ID/);
+  assert.match(taskList.stdout, /CLI configured orchestration/);
 
   const sessionStart = await run(process.execPath, [
     VERUNECTL,
@@ -128,6 +143,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   ], { cwd: REPO_ROOT, env });
   assert.equal(sessionStart.exitCode, 0, sessionStart.stderr);
   const sessionSummary = JSON.parse(sessionStart.stdout);
+  assert.equal(sessionSummary.name, "CLI configured orchestration · Codex CLI gpt-5.5 high fast");
   const runningTaskMarkdown = await waitForText(
     taskMeta.paths.taskMd,
     (text) => /AgentDesk status: `running`; session: `[^`]+`; agent: `agent-0[12]`/.test(text) ? text : null,
@@ -141,6 +157,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   );
 
   assert.equal(sessionMeta.status, "succeeded", sessionMeta.lastError);
+  assert.equal(sessionMeta.name, "CLI configured orchestration · Codex CLI gpt-5.5 high fast");
   assert.equal(sessionMeta.model, "gpt-5.5");
   assert.equal(sessionMeta.reasoning, "high");
   assert.equal(sessionMeta.serviceTier, "fast");
@@ -151,6 +168,19 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.equal(sessionMeta.failedAgents, 0);
   assert.deepEqual(sessionMeta.agents.map((agent) => agent.status), ["succeeded", "succeeded", "succeeded"]);
 
+  const sessionList = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "list",
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+  ], { cwd: REPO_ROOT, env });
+  assert.equal(sessionList.exitCode, 0, sessionList.stderr);
+  assert.match(sessionList.stdout, /NAME\s+SESSION ID/);
+  assert.match(sessionList.stdout, /CLI configured orchestration/);
+
   const completedTaskMarkdown = await fs.readFile(taskMeta.paths.taskMd, "utf8");
   assert.equal((completedTaskMarkdown.match(/^- \[x\] /gm) || []).length, 3);
   assert.equal((completedTaskMarkdown.match(/^- \[ \] /gm) || []).length, 0);
@@ -158,6 +188,8 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.doesNotMatch(completedTaskMarkdown, /AgentDesk status: `running`/);
 
   const sessionDoc = await fs.readFile(sessionMeta.paths.docMd, "utf8");
+  assert.match(sessionDoc, /^# CLI configured orchestration · Codex CLI gpt-5\.5 high fast/m);
+  assert.match(sessionDoc, new RegExp(`Session ID: ${escapeRegExp(sessionSummary.sessionId)}`));
   assert.match(sessionDoc, /- Model: gpt-5\.5/);
   assert.match(sessionDoc, /- Reasoning: high/);
   assert.match(sessionDoc, /- Service tier: fast/);
