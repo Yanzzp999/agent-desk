@@ -159,6 +159,8 @@ test("MCP server runs markdown task tools against the launched project", async (
       },
     });
     assert.equal(completed.structuredContent.completed[0].checked, true);
+    assert.equal(completed.structuredContent.claimedCount, 0);
+    assert.doesNotMatch(completed.structuredContent.markdown, /AgentDesk claim:/);
 
     const noWork = await client.callTool({
       name: "claim_next_task_item",

@@ -5,7 +5,7 @@ import process from "node:process";
 
 export const DEFAULT_TASK_DIRNAME = "task";
 export const DEFAULT_TASK_FILE_SUFFIX = ".task.md";
-const CLAIM_LINE_RE = /^\s*[-*+]\s+AgentDesk claim:\s+`([^`]+)`\s+at\s+([^;]+?)(.*)$/;
+const CLAIM_LINE_RE = /^\s*[-*+]\s+AgentDesk claim:\s+`([^`]+)`\s+at\s+([^;]+)(.*)$/;
 
 export async function createTaskMarkdownFile(options = {}) {
   const projectRoot = resolveProjectRoot(options.projectRoot);
@@ -211,7 +211,12 @@ export async function completeTaskMarkdownItems(options = {}) {
     }
 
     const selected = selectTaskItems(summary.items, selectors);
-    const unauthorized = selected.filter((item) => !isClaimOwnedBy(item, assignee, sessionId));
+    const unauthorized = selected.filter((item) => {
+      if (item.checked && !item.claimedBy) {
+        return false;
+      }
+      return !isClaimOwnedBy(item, assignee, sessionId);
+    });
     if (unauthorized.length > 0) {
       throw new Error(`item(s) not claimed by ${assignee}/${sessionId}: ${unauthorized.map(formatClaimConflict).join(", ")}`);
     }
@@ -556,11 +561,17 @@ function applyTaskItemCompletion(markdown, selectedItems) {
   const lines = String(markdown || "").split(/\r?\n/);
   const editableItems = extractChecklistItemsForEditing(markdown);
   const selectedIndexes = new Set(selectedItems.map((item) => item.index));
-  for (const item of editableItems.filter((candidate) => selectedIndexes.has(candidate.index))) {
+  const itemsToComplete = editableItems
+    .filter((candidate) => selectedIndexes.has(candidate.index))
+    .sort((left, right) => right.lineIndex - left.lineIndex);
+  for (const item of itemsToComplete) {
     lines[item.lineIndex] = lines[item.lineIndex].replace(
       /^(\s*(?:[-*+]|\d+[.)])\s+)\[[ xX]\](\s+.+?)\s*$/,
       "$1[x]$2",
     );
+    if (item.claimLineIndex >= 0) {
+      lines.splice(item.claimLineIndex, 1);
+    }
   }
   return lines.join("\n");
 }

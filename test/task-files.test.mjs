@@ -364,7 +364,7 @@ test("completes only items claimed by the same assignee and session", async () =
   await createTaskMarkdownFile({
     projectRoot,
     title: "Completion claim flow",
-    tasks: ["Implement the API"],
+    tasks: ["Implement the API", "Write docs"],
   });
 
   const claimed = await claimNextTaskMarkdownItem({
@@ -375,6 +375,7 @@ test("completes only items claimed by the same assignee and session", async () =
     claimedAt: "2026-05-14T00:00:00.000Z",
   });
   assert.equal(claimed.claimed[0].checked, false);
+  assert.equal(claimed.claimed[0].claimedAt, "2026-05-14T00:00:00.000Z");
 
   await assert.rejects(
     () => completeTaskMarkdownItems({
@@ -384,7 +385,18 @@ test("completes only items claimed by the same assignee and session", async () =
       assignee: "agent-alpha",
       sessionId: "session-beta",
     }),
-    /not claimed by agent-alpha\/session-beta/,
+    /item\(s\) not claimed by agent-alpha\/session-beta: 1 by agent-alpha\/session-alpha/,
+  );
+
+  await assert.rejects(
+    () => completeTaskMarkdownItems({
+      projectRoot,
+      taskName: "Completion claim flow",
+      items: [2],
+      assignee: "agent-alpha",
+      sessionId: "session-alpha",
+    }),
+    /item\(s\) not claimed by agent-alpha\/session-alpha: 2 by unclaimed/,
   );
 
   const completed = await completeTaskMarkdownItems({
@@ -395,7 +407,21 @@ test("completes only items claimed by the same assignee and session", async () =
     sessionId: "session-alpha",
   });
   assert.equal(completed.completed[0].checked, true);
+  assert.equal(completed.completed[0].claimedBy, "");
+  assert.equal(completed.claimedCount, 0);
   assert.match(completed.markdown, /^- \[x\] Implement the API/m);
+  assert.doesNotMatch(completed.markdown, /AgentDesk claim:/);
+
+  const repeated = await completeTaskMarkdownItems({
+    projectRoot,
+    taskName: "Completion claim flow",
+    items: [1],
+    assignee: "agent-alpha",
+    sessionId: "session-alpha",
+  });
+  assert.equal(repeated.completed[0].checked, true);
+  assert.equal(repeated.claimedCount, 0);
+  assert.doesNotMatch(repeated.markdown, /AgentDesk claim:/);
 });
 
 test("parses legacy claim markers without session ids", async () => {
