@@ -217,6 +217,59 @@ test("reads task, session, and agent log state from .agent-desk", async () => {
   assert.match(logs.stderr, /stderr line/);
 });
 
+test("lists historical sessions newest first and reads detail/log summaries", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-history-"));
+  const context = createContext({ projectRoot });
+  const task = await writeTaskState(projectRoot, {
+    taskId: "task-history",
+    title: "Check session history",
+  });
+
+  await writeSessionState(projectRoot, task, {
+    sessionId: "session-old",
+    status: "failed",
+    updatedAt: "2026-05-15T08:00:00.000Z",
+    completedAt: "2026-05-15T08:00:00.000Z",
+    agentStatus: "failed",
+    agentSummary: "Earlier history read failed.",
+    lastError: "synthetic historical failure",
+    stdout: "old stdout line\n",
+    stderr: "old stderr line\n",
+  });
+  await writeSessionState(projectRoot, task, {
+    sessionId: "session-latest",
+    status: "succeeded",
+    updatedAt: "",
+    completedAt: "2026-05-15T09:00:00.000Z",
+    agentStatus: "succeeded",
+    agentSummary: "Session history detail verified.",
+    stdout: "latest stdout line\n",
+    stderr: "latest stderr line\n",
+    writeDoc: false,
+  });
+
+  const sessions = await listSessions(context, { taskId: "task-history" });
+  assert.deepEqual(sessions.items.map((session) => session.sessionId), [
+    "session-latest",
+    "session-old",
+  ]);
+  assert.equal(sessions.items[0].status, "succeeded");
+  assert.equal(sessions.items[0].taskTitle, "Check session history");
+  assert.equal(sessions.items[1].lastError, "synthetic historical failure");
+
+  const detail = await getSession(context, "session-latest");
+  assert.equal(detail.task.title, "Check session history");
+  assert.equal(detail.status, "succeeded");
+  assert.equal(detail.agents[0].status, "succeeded");
+  assert.equal(detail.agents[0].summary, "Session history detail verified.");
+  assert.match(detail.docContent, /Session session-latest/);
+  assert.match(detail.docContent, /Summary: Session history detail verified\./);
+
+  const logs = await getAgentLogs(context, "session-latest", "agent-01");
+  assert.match(logs.stdout, /latest stdout line/);
+  assert.match(logs.stderr, /latest stderr line/);
+});
+
 test("upserts task memory entries by session and agent marker", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-memory-"));
   const context = createContext({ projectRoot });
@@ -395,3 +448,123 @@ test("builds Codex exec args with selected model, reasoning, service tier, and o
     "-",
   ]);
 });
+
+async function writeTaskState(projectRoot, options) {
+  const taskDir = path.join(projectRoot, ".agent-desk", "tasks", options.taskId);
+  const taskMd = path.join(taskDir, "task.md");
+  const memoryMd = path.join(taskDir, "memory.md");
+  const metaJson = path.join(taskDir, "meta.json");
+  const task = {
+    schemaVersion: 2,
+    taskId: options.taskId,
+    title: options.title,
+    brief: "Verify historical session state.",
+    status: "ready",
+    createdAt: "2026-05-15T07:00:00.000Z",
+    updatedAt: "2026-05-15T07:00:00.000Z",
+    completedAt: "2026-05-15T07:00:00.000Z",
+    lastError: "",
+    subtaskCount: 1,
+    paths: {
+      taskDir,
+      briefMd: path.join(taskDir, "brief.md"),
+      promptMd: path.join(taskDir, "prompt.md"),
+      taskMd,
+      memoryMd,
+      metaJson,
+      stdoutLog: path.join(taskDir, "stdout.log"),
+      stderrLog: path.join(taskDir, "stderr.log"),
+    },
+  };
+  await fs.mkdir(taskDir, { recursive: true });
+  await fs.writeFile(task.paths.briefMd, "Verify historical session state.\n", "utf8");
+  await fs.writeFile(task.paths.taskMd, `# ${options.title}\n\n- [ ] Read historical session\n`, "utf8");
+  await fs.writeFile(task.paths.memoryMd, "# Task Memory\n\nExisting session history context.\n", "utf8");
+  await fs.writeFile(task.paths.stdoutLog, "", "utf8");
+  await fs.writeFile(task.paths.stderrLog, "", "utf8");
+  await fs.writeFile(task.paths.metaJson, `${JSON.stringify(task, null, 2)}\n`, "utf8");
+  return task;
+}
+
+async function writeSessionState(projectRoot, task, options) {
+  const sessionDir = path.join(projectRoot, ".agent-desk", "sessions", options.sessionId);
+  const agentDir = path.join(sessionDir, "agents", "agent-01");
+  const createdAt = options.createdAt || "2026-05-15T07:30:00.000Z";
+  const completedAt = options.completedAt || createdAt;
+  const updatedAt = options.updatedAt ?? completedAt;
+  const metaJson = path.join(sessionDir, "meta.json");
+  const docMd = path.join(sessionDir, "session.md");
+  const stdoutLog = path.join(sessionDir, "stdout.log");
+  const stderrLog = path.join(sessionDir, "stderr.log");
+  const agent = {
+    id: "agent-01",
+    order: 1,
+    title: "Read historical session",
+    detail: "",
+    status: options.agentStatus || options.status,
+    branchName: "current-branch",
+    worktreePath: projectRoot,
+    baseCommit: "abc123",
+    headCommit: "def456",
+    mergedCommit: "",
+    changedFiles: ["src/lib/control-plane.mjs"],
+    testsRun: ["node --test test/state-reader.test.mjs"],
+    risks: [],
+    notes: ["Historical session fixture."],
+    summary: options.agentSummary || "",
+    startedAt: createdAt,
+    updatedAt,
+    completedAt,
+    exitCode: options.status === "failed" ? 1 : 0,
+    lastError: options.lastError || "",
+    paths: {
+      agentDir,
+      promptMd: path.join(agentDir, "prompt.md"),
+      reportJson: path.join(agentDir, "report.json"),
+      stdoutLog: path.join(agentDir, "stdout.log"),
+      stderrLog: path.join(agentDir, "stderr.log"),
+    },
+  };
+  const meta = {
+    schemaVersion: 2,
+    sessionId: options.sessionId,
+    taskId: task.taskId,
+    title: task.title,
+    status: options.status,
+    parallelism: 1,
+    batchSize: 6,
+    model: "gpt-5.5",
+    reasoning: "xhigh",
+    serviceTier: "fast",
+    executionMode: "current-branch",
+    subagentLauncher: "codex-cli",
+    launchPrompt: "",
+    createdAt,
+    updatedAt,
+    startedAt: createdAt,
+    completedAt,
+    lastError: options.lastError || "",
+    totalAgents: 1,
+    succeededAgents: options.status === "succeeded" ? 1 : 0,
+    failedAgents: options.status === "failed" ? 1 : 0,
+    runningAgents: 0,
+    agents: [agent],
+    paths: {
+      sessionDir,
+      metaJson,
+      docMd,
+      stdoutLog,
+      stderrLog,
+    },
+  };
+  await fs.mkdir(agentDir, { recursive: true });
+  await fs.writeFile(metaJson, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
+  if (options.writeDoc !== false) {
+    await fs.writeFile(docMd, renderSessionDocument(meta, task), "utf8");
+  }
+  await fs.writeFile(stdoutLog, "", "utf8");
+  await fs.writeFile(stderrLog, "", "utf8");
+  await fs.writeFile(agent.paths.promptMd, "# Prompt\n", "utf8");
+  await fs.writeFile(agent.paths.stdoutLog, options.stdout || "", "utf8");
+  await fs.writeFile(agent.paths.stderrLog, options.stderr || "", "utf8");
+}

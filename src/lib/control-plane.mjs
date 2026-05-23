@@ -426,13 +426,14 @@ export async function listSessions(context, options = {}) {
     }
     items.push(await enrichSessionSummary(context, await settleCodexAppLaunchPlanSession(context, meta)));
   }
-  items.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+  items.sort(compareSessionsByRecency);
   return { items };
 }
 
 export async function getSession(context, sessionId) {
   const meta = await settleCodexAppLaunchPlanSession(context, await readSessionMeta(context, sessionId));
   const task = await readTaskMeta(context, meta.taskId).catch(() => null);
+  const docContent = await readTextSafe(meta.paths.docMd);
   return {
     ...meta,
     task: task ? {
@@ -441,8 +442,25 @@ export async function getSession(context, sessionId) {
       status: task.status,
       path: task.paths.taskMd,
     } : null,
-    docContent: await readTextSafe(meta.paths.docMd),
+    docContent: docContent.trim() ? docContent : renderSessionDocument(meta, task),
   };
+}
+
+function compareSessionsByRecency(left, right) {
+  const stampOrder = String(sessionRecencyStamp(right)).localeCompare(String(sessionRecencyStamp(left)));
+  if (stampOrder !== 0) {
+    return stampOrder;
+  }
+  return String(right.sessionId || "").localeCompare(String(left.sessionId || ""));
+}
+
+function sessionRecencyStamp(session) {
+  return session.updatedAt
+    || session.completedAt
+    || session.startedAt
+    || session.createdAt
+    || session.sessionId
+    || "";
 }
 
 export async function createSession(context, taskId, request = {}) {
