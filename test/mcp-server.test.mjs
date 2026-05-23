@@ -175,6 +175,98 @@ test("MCP server runs markdown task tools against the launched project", async (
   }
 });
 
+test("MCP markdown task tools honor explicit projectRoot and taskDir", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-scope-")));
+  const serverCwd = path.join(root, "server-cwd");
+  const projectRoot = path.join(root, "scoped-project");
+  await fs.mkdir(serverCwd, { recursive: true });
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [MCP_BIN],
+    cwd: serverCwd,
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-desk-mcp-scope-test", version: "0.0.0" });
+
+  try {
+    await client.connect(transport);
+    const first = await client.callTool({
+      name: "create_task",
+      arguments: {
+        projectRoot,
+        taskDir: "plans/current",
+        title: "MCP scoped task",
+        filename: "scope.md",
+        tasks: ["- [x] Normalize API", "2. Read back task"],
+      },
+    });
+    const second = await client.callTool({
+      name: "create_task",
+      arguments: {
+        projectRoot,
+        taskDir: "plans/current",
+        title: "MCP scoped duplicate",
+        filename: "scope.md",
+        tasks: ["Keep duplicate file"],
+      },
+    });
+
+    assert.equal(first.structuredContent.projectRoot, projectRoot);
+    assert.equal(first.structuredContent.taskDir, path.join(projectRoot, "plans", "current"));
+    assert.equal(first.structuredContent.filename, "scope.md");
+    assert.equal(second.structuredContent.filename, "scope-2.md");
+    assert.match(first.structuredContent.markdown, /^- \[ \] Normalize API/m);
+    assert.match(first.structuredContent.markdown, /^- \[ \] Read back task/m);
+
+    const defaultList = await client.callTool({
+      name: "list_tasks",
+      arguments: {
+        projectRoot,
+      },
+    });
+    assert.equal(defaultList.structuredContent.taskDir, path.join(projectRoot, "task"));
+    assert.deepEqual(defaultList.structuredContent.items, []);
+
+    const scopedList = await client.callTool({
+      name: "list_tasks",
+      arguments: {
+        projectRoot,
+        taskDir: "plans/current",
+      },
+    });
+    assert.equal(scopedList.structuredContent.taskDir, path.join(projectRoot, "plans", "current"));
+    assert.deepEqual(scopedList.structuredContent.items.map((item) => item.filename), ["scope-2.md", "scope.md"]);
+    assert.deepEqual(scopedList.structuredContent.items.map((item) => item.taskCount), [1, 2]);
+
+    const read = await client.callTool({
+      name: "read_task",
+      arguments: {
+        projectRoot,
+        taskDir: "plans/current",
+        taskName: "MCP scoped task",
+      },
+    });
+    assert.equal(read.structuredContent.filename, "scope.md");
+    assert.equal(read.structuredContent.filePath, path.join(projectRoot, "plans", "current", "scope.md"));
+    assert.deepEqual(read.structuredContent.items.map((item) => item.title), ["Normalize API", "Read back task"]);
+    assert.equal(
+      await fs.readFile(path.join(projectRoot, "plans", "current", "scope.md"), "utf8"),
+      read.structuredContent.markdown,
+    );
+
+    const launchedCwdList = await client.callTool({
+      name: "list_tasks",
+      arguments: {},
+    });
+    assert.equal(launchedCwdList.structuredContent.projectRoot, serverCwd);
+    assert.deepEqual(launchedCwdList.structuredContent.items, []);
+  } finally {
+    await client.close();
+  }
+});
+
 test("MCP claim_next_task_item skips completed and claimed items in order", async () => {
   const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-next-")));
   const taskDir = path.join(projectRoot, "task");

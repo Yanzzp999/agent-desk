@@ -9,7 +9,7 @@ const CLAIM_LINE_RE = /^\s*[-*+]\s+AgentDesk claim:\s+`([^`]+)`\s+at\s+([^;]+?)(
 
 export async function createTaskMarkdownFile(options = {}) {
   const projectRoot = resolveProjectRoot(options.projectRoot);
-  const taskDir = path.resolve(projectRoot, options.taskDir || DEFAULT_TASK_DIRNAME);
+  const taskDir = resolveTaskDir(projectRoot, options.taskDir);
   const title = normalizeTitle(options.title || firstSentence(options.brief) || "Task");
   const tasks = normalizeTaskItems(options.tasks || extractTaskItems(options.brief));
   const filename = normalizeTaskFilename(options.filename || `${slug(title)}${DEFAULT_TASK_FILE_SUFFIX}`);
@@ -39,7 +39,7 @@ export async function createTaskMarkdownFile(options = {}) {
 
 export async function listTaskMarkdownFiles(options = {}) {
   const projectRoot = resolveProjectRoot(options.projectRoot);
-  const taskDir = path.resolve(projectRoot, options.taskDir || DEFAULT_TASK_DIRNAME);
+  const taskDir = resolveTaskDir(projectRoot, options.taskDir);
   const entries = await fs.readdir(taskDir, { withFileTypes: true }).catch((error) => {
     if (error.code === "ENOENT") {
       return [];
@@ -65,7 +65,7 @@ export async function listTaskMarkdownFiles(options = {}) {
 
 export async function readTaskMarkdownFile(options = {}) {
   const projectRoot = resolveProjectRoot(options.projectRoot);
-  const taskDir = path.resolve(projectRoot, options.taskDir || DEFAULT_TASK_DIRNAME);
+  const taskDir = resolveTaskDir(projectRoot, options.taskDir);
   const taskName = requiredString(options.filename || options.file || options.taskName, "filename");
   const resolved = await resolveTaskMarkdownFile(taskDir, taskName);
   const filePath = resolved.filePath;
@@ -82,7 +82,7 @@ export async function readTaskMarkdownFile(options = {}) {
 
 export async function claimTaskMarkdownItems(options = {}) {
   const projectRoot = resolveProjectRoot(options.projectRoot);
-  const taskDir = path.resolve(projectRoot, options.taskDir || DEFAULT_TASK_DIRNAME);
+  const taskDir = resolveTaskDir(projectRoot, options.taskDir);
   const taskName = requiredString(options.taskName || options.filename || options.file, "taskName");
   const selectors = normalizeClaimSelectors(options.items || options.item || options.taskItems);
   const assignee = normalizeAssignee(
@@ -138,7 +138,7 @@ export async function claimTaskMarkdownItems(options = {}) {
 
 export async function claimNextTaskMarkdownItem(options = {}) {
   const projectRoot = resolveProjectRoot(options.projectRoot);
-  const taskDir = path.resolve(projectRoot, options.taskDir || DEFAULT_TASK_DIRNAME);
+  const taskDir = resolveTaskDir(projectRoot, options.taskDir);
   const taskName = requiredString(options.taskName || options.filename || options.file, "taskName");
   const assignee = normalizeAssignee(
     options.assignee
@@ -196,7 +196,7 @@ export async function claimNextTaskMarkdownItem(options = {}) {
 
 export async function completeTaskMarkdownItems(options = {}) {
   const projectRoot = resolveProjectRoot(options.projectRoot);
-  const taskDir = path.resolve(projectRoot, options.taskDir || DEFAULT_TASK_DIRNAME);
+  const taskDir = resolveTaskDir(projectRoot, options.taskDir);
   const taskName = requiredString(options.taskName || options.filename || options.file, "taskName");
   const selectors = normalizeClaimSelectors(options.items || options.item || options.taskItems);
   const assignee = normalizeAssignee(options.assignee || options.agent || process.env.AGENT_DESK_AGENT_NAME);
@@ -268,6 +268,19 @@ export function resolveProjectRoot(value) {
       || normalizeOptionalString(process.env.INIT_CWD)
       || process.cwd(),
   );
+}
+
+export function resolveTaskDir(projectRoot, value) {
+  const taskDir = normalizeOptionalString(value) || DEFAULT_TASK_DIRNAME;
+  if (path.isAbsolute(taskDir)) {
+    throw new Error("taskDir must be relative to projectRoot");
+  }
+  const resolved = path.resolve(projectRoot, taskDir);
+  const relative = path.relative(projectRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("taskDir must stay inside projectRoot");
+  }
+  return resolved;
 }
 
 function extractTaskItems(text) {

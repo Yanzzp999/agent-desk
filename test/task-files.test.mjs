@@ -41,6 +41,121 @@ test("creates a named task markdown file in project task directory", async () =>
   assert.equal(listed.items[0].claimedCount, 0);
 });
 
+test("isolates markdown task files by projectRoot and taskDir", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-scope-"));
+  const projectA = path.join(root, "project-a");
+  const projectB = path.join(root, "project-b");
+  await fs.mkdir(projectA, { recursive: true });
+  await fs.mkdir(projectB, { recursive: true });
+
+  const scoped = await createTaskMarkdownFile({
+    projectRoot: projectA,
+    taskDir: "plans/sprint",
+    title: "Scoped work",
+    tasks: ["- [x] Normalize API", "2. Read back task"],
+  });
+  await createTaskMarkdownFile({
+    projectRoot: projectB,
+    title: "Scoped work",
+    tasks: ["Write unrelated task"],
+  });
+
+  assert.equal(scoped.projectRoot, projectA);
+  assert.equal(scoped.taskDir, path.join(projectA, "plans", "sprint"));
+  assert.equal(scoped.filePath, path.join(projectA, "plans", "sprint", "scoped-work.task.md"));
+  assert.deepEqual(scoped.tasks, ["Normalize API", "Read back task"]);
+  assert.match(scoped.markdown, /^- \[ \] Normalize API/m);
+  assert.match(scoped.markdown, /^- \[ \] Read back task/m);
+
+  const defaultListA = await listTaskMarkdownFiles({ projectRoot: projectA });
+  assert.deepEqual(defaultListA.items, []);
+
+  const scopedListA = await listTaskMarkdownFiles({ projectRoot: projectA, taskDir: "plans/sprint" });
+  assert.equal(scopedListA.taskDir, path.join(projectA, "plans", "sprint"));
+  assert.deepEqual(scopedListA.items.map((item) => item.filename), ["scoped-work.task.md"]);
+  assert.equal(scopedListA.items[0].taskCount, 2);
+
+  const readScoped = await readTaskMarkdownFile({
+    projectRoot: projectA,
+    taskDir: "plans/sprint",
+    taskName: "Scoped work",
+  });
+  assert.equal(readScoped.filePath, scoped.filePath);
+  assert.deepEqual(readScoped.items.map((item) => item.title), ["Normalize API", "Read back task"]);
+
+  const defaultListB = await listTaskMarkdownFiles({ projectRoot: projectB });
+  assert.deepEqual(defaultListB.items.map((item) => item.filePath), [
+    path.join(projectB, "task", "scoped-work.task.md"),
+  ]);
+});
+
+test("rejects taskDir values outside projectRoot", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-scope-"));
+
+  await assert.rejects(
+    () => createTaskMarkdownFile({
+      projectRoot,
+      taskDir: "../outside",
+      title: "Escape attempt",
+      tasks: ["Do not write outside the project"],
+    }),
+    /taskDir must stay inside projectRoot/,
+  );
+
+  await assert.rejects(
+    () => listTaskMarkdownFiles({
+      projectRoot,
+      taskDir: path.join(os.tmpdir(), "outside-agent-desk-task-dir"),
+    }),
+    /taskDir must be relative to projectRoot/,
+  );
+
+  await assert.rejects(
+    () => readTaskMarkdownFile({
+      projectRoot,
+      taskDir: "../../outside",
+      taskName: "missing.task.md",
+    }),
+    /taskDir must stay inside projectRoot/,
+  );
+});
+
+test("creates unique duplicate filenames unless overwrite is requested", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-"));
+
+  const first = await createTaskMarkdownFile({
+    projectRoot,
+    title: "Original duplicate",
+    tasks: ["Keep first file"],
+    filename: "duplicate.md",
+  });
+  const second = await createTaskMarkdownFile({
+    projectRoot,
+    title: "Second duplicate",
+    tasks: ["Keep second file"],
+    filename: "duplicate.md",
+  });
+  const replacement = await createTaskMarkdownFile({
+    projectRoot,
+    title: "Replacement duplicate",
+    tasks: ["Replace first file"],
+    filename: "duplicate.md",
+    overwrite: true,
+  });
+
+  assert.equal(first.filename, "duplicate.md");
+  assert.equal(second.filename, "duplicate-2.md");
+  assert.equal(replacement.filename, "duplicate.md");
+
+  const listed = await listTaskMarkdownFiles({ projectRoot });
+  assert.deepEqual(listed.items.map((item) => item.filename), ["duplicate-2.md", "duplicate.md"]);
+  assert.deepEqual(listed.items.map((item) => item.title), ["Second duplicate", "Replacement duplicate"]);
+
+  const readReplacement = await readTaskMarkdownFile({ projectRoot, filename: "duplicate.md" });
+  assert.equal(readReplacement.title, "Replacement duplicate");
+  assert.deepEqual(readReplacement.items.map((item) => item.title), ["Replace first file"]);
+});
+
 test("creates unique task markdown files under concurrent same-name writes", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-files-"));
   const [first, second] = await Promise.all([
