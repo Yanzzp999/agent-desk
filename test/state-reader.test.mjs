@@ -351,6 +351,9 @@ test("normalizes configurable session defaults and overrides", () => {
     serviceTier: "fast",
     executionMode: "auto",
     subagentLauncher: "codex-cli",
+    baseBranch: "",
+    worktreeIntegration: "agent-branch",
+    pushWorktreeIntegration: false,
     launchPrompt: "",
   });
 
@@ -368,6 +371,9 @@ test("normalizes configurable session defaults and overrides", () => {
     serviceTier: "fast",
     executionMode: "current-branch",
     subagentLauncher: "codex-cli",
+    baseBranch: "",
+    worktreeIntegration: "agent-branch",
+    pushWorktreeIntegration: false,
     launchPrompt: "Prefer small patches",
   });
 
@@ -427,6 +433,9 @@ reasoning = "high"
 parallelism = 3
 execution_mode = "current-branch"
 subagent_launcher = "codex-cli"
+base_branch = "agentdesk/next"
+worktree_integration = "fast-forward"
+push_worktree_integration = true
 `);
 
   assert.deepEqual(normalizeSessionRequest(parsed.session), {
@@ -436,6 +445,9 @@ subagent_launcher = "codex-cli"
     serviceTier: "fast",
     executionMode: "current-branch",
     subagentLauncher: "codex-cli",
+    baseBranch: "agentdesk/next",
+    worktreeIntegration: "fast-forward",
+    pushWorktreeIntegration: true,
     launchPrompt: "",
   });
 
@@ -444,6 +456,9 @@ subagent_launcher = "codex-cli"
   assert.match(rendered, /model = "gpt-5\.4"/);
   assert.match(rendered, /execution_mode = "current-branch"/);
   assert.match(rendered, /subagent_launcher = "codex-cli"/);
+  assert.match(rendered, /base_branch = "agentdesk\/next"/);
+  assert.match(rendered, /worktree_integration = "fast-forward"/);
+  assert.match(rendered, /push_worktree_integration = true/);
 });
 
 test("builds Codex exec args with selected model, reasoning, service tier, and output schema", () => {

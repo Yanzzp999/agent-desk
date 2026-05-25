@@ -47,6 +47,7 @@ const VALUE_OPTIONS = new Set([
   "actor",
   "api-base-path",
   "assignee",
+  "base-branch",
   "branch",
   "date",
   "description",
@@ -67,6 +68,7 @@ const VALUE_OPTIONS = new Set([
   "static-dir",
   "status",
   "task-type",
+  "worktree-integration",
   "worktrees-root",
 ]);
 
@@ -333,6 +335,9 @@ async function handleSessions(context, parsed) {
       reasoning: parsed.reasoning || parsed.effort,
       executionMode: parsed["execution-mode"] || parsed.mode,
       subagentLauncher: parsed["subagent-launcher"],
+      baseBranch: parsed["base-branch"] || parsed.branch,
+      worktreeIntegration: parsed["worktree-integration"],
+      pushWorktreeIntegration: parsed["push-worktree-integration"],
       allowDuplicateSession: parsed["allow-duplicate-session"] || parsed.force,
     }));
     return output(parsed, result, () => result.requiresHostLaunch
@@ -551,6 +556,11 @@ Session start options:
   --codex-count N        Alias for --parallel.
   --execution-mode MODE  auto, worktree, or current-branch. Default: auto.
   --subagent-launcher L  codex-cli or codex-app for current-branch mode.
+  --base-branch BRANCH   Local branch used as the base for worktree sessions. Default: current checkout branch.
+  --worktree-integration MODE
+                          agent-branch or fast-forward. Default: agent-branch.
+  --push-worktree-integration
+                          Push the configured base branch after explicit fast-forward integration.
   --allow-duplicate-session
                           Override the active-session guard for this task.
   --force                 Alias for --allow-duplicate-session.
@@ -558,6 +568,6 @@ Session start options:
 Workflow defaults:
   Service tier: fast.
   Launch batch size: 6.
-  Completed worktree sessions rebase onto and fast-forward master.
+  Completed worktree sessions keep subagent branches for review unless fast-forward integration is explicitly configured.
 `);
 }

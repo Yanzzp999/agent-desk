@@ -21,7 +21,7 @@ test("verunectl help exposes CLI-only task and session commands", async () => {
   assert.match(result.stdout, /--parallel N/);
   assert.match(result.stdout, /Service tier: fast/);
   assert.match(result.stdout, /Launch batch size: 6/);
-  assert.match(result.stdout, /fast-forward master/);
+  assert.match(result.stdout, /keep subagent branches/);
   assert.doesNotMatch(result.stdout, /\bgui\b/i);
   assert.doesNotMatch(result.stdout, /\bserve\b/i);
   assert.doesNotMatch(result.stdout, /electron/i);
@@ -426,26 +426,27 @@ test("verunectl records failed Codex CLI subagents without completing checklist 
   assert.match(sessionDoc, /synthetic fake Codex failure/);
 });
 
-test("worktree sessions push integrated master to its upstream", { timeout: 60000 }, async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-push-"));
+test("worktree sessions keep agent branches on the current base branch by default", { timeout: 60000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-worktree-branch-"));
   const projectRoot = path.join(root, "project");
   const remoteRoot = path.join(root, "origin.git");
   const worktreesRoot = path.join(root, "worktrees");
   const fakeCodex = path.join(root, "fake-codex.mjs");
   const fakeLog = path.join(root, "fake-log.jsonl");
   const codexHome = path.join(root, "codex-home");
-  const taskId = "task-cli-worktree-push";
+  const taskId = "task-cli-worktree-agent-branches";
 
   await fs.mkdir(projectRoot, { recursive: true });
   await writeFakeCodex(fakeCodex);
   await initializeGitProject(projectRoot, { remoteRoot });
-  await writeReadyAgentDeskTask(projectRoot, taskId, "Worktree push integration");
-
-  const upstream = await run("git", ["rev-parse", "--abbrev-ref", "master@{upstream}"], {
-    cwd: projectRoot,
+  await run("git", ["switch", "-c", "agentdesk/next"], { cwd: projectRoot, check: true });
+  await run("git", ["push", "-u", "origin", "agentdesk/next"], { cwd: projectRoot, check: true });
+  await writeReadyAgentDeskTask(projectRoot, taskId, "Worktree branch retention");
+  const localBaseBefore = await run("git", ["rev-parse", "agentdesk/next"], { cwd: projectRoot, check: true });
+  const remoteBaseBefore = await run("git", ["--git-dir", remoteRoot, "rev-parse", "refs/heads/agentdesk/next"], {
+    cwd: root,
     check: true,
   });
-  assert.equal(upstream.stdout.trim(), "origin/master");
 
   const result = await run(process.execPath, [
     VERUNECTL,
@@ -479,6 +480,9 @@ test("worktree sessions push integrated master to its upstream", { timeout: 6000
   assert.equal(result.exitCode, 0, result.stderr);
   const started = JSON.parse(result.stdout);
   assert.equal(started.executionMode, "worktree");
+  assert.equal(started.baseBranch, "agentdesk/next");
+  assert.equal(started.worktreeIntegration, "agent-branch");
+  assert.equal(started.pushWorktreeIntegration, false);
   const sessionMeta = await waitForJson(
     path.join(projectRoot, ".agent-desk", "sessions", started.sessionId, "meta.json"),
     (meta) => ["succeeded", "failed"].includes(meta.status) ? meta : null,
@@ -486,31 +490,138 @@ test("worktree sessions push integrated master to its upstream", { timeout: 6000
   );
   assert.equal(sessionMeta.status, "succeeded", sessionMeta.lastError);
   assert.equal(sessionMeta.executionMode, "worktree");
+  assert.equal(sessionMeta.baseBranch, "agentdesk/next");
+  assert.equal(sessionMeta.worktreeIntegration, "agent-branch");
+  assert.equal(sessionMeta.pushWorktreeIntegration, false);
   assert.equal(sessionMeta.succeededAgents, 3);
-  assert.ok(sessionMeta.agents.every((agent) => agent.mergedCommit));
+  assert.ok(sessionMeta.agents.every((agent) => agent.baseBranch === "agentdesk/next"));
+  assert.ok(sessionMeta.agents.every((agent) => agent.mergedCommit === ""));
+  assert.ok(sessionMeta.agents.every((agent) => agent.integrationMode === "agent-branch"));
+  assert.ok(sessionMeta.agents.every((agent) => agent.integrationTarget === agent.branchName));
+  assert.ok(sessionMeta.agents.every((agent) => agent.pushed === false));
   assert.ok(sessionMeta.agents.every((agent) => agent.changedFiles.length === 1));
 
-  const localMaster = await run("git", ["rev-parse", "master"], { cwd: projectRoot, check: true });
-  assert.ok(sessionMeta.agents.some((agent) => agent.mergedCommit === localMaster.stdout.trim()));
-  const remoteMaster = await run("git", ["--git-dir", remoteRoot, "rev-parse", "refs/heads/master"], {
+  const localBaseAfter = await run("git", ["rev-parse", "agentdesk/next"], { cwd: projectRoot, check: true });
+  assert.equal(localBaseAfter.stdout.trim(), localBaseBefore.stdout.trim());
+  const remoteBaseAfter = await run("git", ["--git-dir", remoteRoot, "rev-parse", "refs/heads/agentdesk/next"], {
     cwd: root,
     check: true,
   });
-  assert.equal(remoteMaster.stdout.trim(), localMaster.stdout.trim());
+  assert.equal(remoteBaseAfter.stdout.trim(), remoteBaseBefore.stdout.trim());
 
-  const remoteFiles = await run("git", ["--git-dir", remoteRoot, "ls-tree", "-r", "--name-only", "master"], {
-    cwd: root,
-    check: true,
-  });
-  assert.match(remoteFiles.stdout, /agent-01\.txt/);
-  assert.match(remoteFiles.stdout, /agent-02\.txt/);
-  assert.match(remoteFiles.stdout, /agent-03\.txt/);
+  for (const agent of sessionMeta.agents) {
+    const branchHead = await run("git", ["rev-parse", agent.branchName], { cwd: projectRoot, check: true });
+    assert.equal(branchHead.stdout.trim(), agent.headCommit);
+    const branchFiles = await run("git", ["diff", "--name-only", "agentdesk/next", agent.branchName], {
+      cwd: projectRoot,
+      check: true,
+    });
+    assert.match(branchFiles.stdout, new RegExp(`${agent.id}\\.txt`));
+  }
 
-  const log = await run("git", ["--git-dir", remoteRoot, "log", "--format=%s", "-3", "master"], {
+  const remoteFiles = await run("git", ["--git-dir", remoteRoot, "ls-tree", "-r", "--name-only", "agentdesk/next"], {
     cwd: root,
     check: true,
   });
-  assert.match(log.stdout, /AgentDesk: Prepare handoff prompt/);
+  assert.doesNotMatch(remoteFiles.stdout, /agent-01\.txt/);
+  assert.doesNotMatch(remoteFiles.stdout, /agent-02\.txt/);
+  assert.doesNotMatch(remoteFiles.stdout, /agent-03\.txt/);
+});
+
+test("worktree sessions can fast-forward a configured base branch without pushing", { timeout: 60000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-cli-worktree-ff-"));
+  const projectRoot = path.join(root, "project");
+  const remoteRoot = path.join(root, "origin.git");
+  const worktreesRoot = path.join(root, "worktrees");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const fakeLog = path.join(root, "fake-log.jsonl");
+  const codexHome = path.join(root, "codex-home");
+  const taskId = "task-cli-worktree-fast-forward";
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await writeFakeCodex(fakeCodex);
+  await initializeGitProject(projectRoot, { remoteRoot });
+  await run("git", ["branch", "agentdesk/next"], { cwd: projectRoot, check: true });
+  await run("git", ["push", "-u", "origin", "agentdesk/next"], { cwd: projectRoot, check: true });
+  await writeReadyAgentDeskTask(projectRoot, taskId, "Worktree configured integration");
+  const localBaseBefore = await run("git", ["rev-parse", "agentdesk/next"], { cwd: projectRoot, check: true });
+  const remoteBaseBefore = await run("git", ["--git-dir", remoteRoot, "rev-parse", "refs/heads/agentdesk/next"], {
+    cwd: root,
+    check: true,
+  });
+
+  const result = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "start",
+    taskId,
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--execution-mode",
+    "worktree",
+    "--subagent-launcher",
+    "codex-cli",
+    "--base-branch",
+    "agentdesk/next",
+    "--worktree-integration",
+    "fast-forward",
+    "--parallel",
+    "2",
+    "--json",
+  ], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      CODEX_CLI: fakeCodex,
+      CODEX_HOME: codexHome,
+      FAKE_CODEX_LOG: fakeLog,
+      FAKE_CODEX_DELAY_MS: "100",
+      AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS: "5000",
+      AGENT_DESK_CODEX_REPORT_TIMEOUT_MS: "30000",
+    },
+  });
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  const started = JSON.parse(result.stdout);
+  assert.equal(started.baseBranch, "agentdesk/next");
+  assert.equal(started.worktreeIntegration, "fast-forward");
+  assert.equal(started.pushWorktreeIntegration, false);
+  const sessionMeta = await waitForJson(
+    path.join(projectRoot, ".agent-desk", "sessions", started.sessionId, "meta.json"),
+    (meta) => ["succeeded", "failed"].includes(meta.status) ? meta : null,
+    45000,
+  );
+  assert.equal(sessionMeta.status, "succeeded", sessionMeta.lastError);
+  assert.ok(sessionMeta.agents.every((agent) => agent.integrationMode === "fast-forward"));
+  assert.ok(sessionMeta.agents.every((agent) => agent.integrationTarget === "agentdesk/next"));
+  assert.ok(sessionMeta.agents.every((agent) => agent.mergedCommit));
+  assert.ok(sessionMeta.agents.every((agent) => agent.pushed === false));
+
+  const localBaseAfter = await run("git", ["rev-parse", "agentdesk/next"], { cwd: projectRoot, check: true });
+  assert.notEqual(localBaseAfter.stdout.trim(), localBaseBefore.stdout.trim());
+  assert.ok(sessionMeta.agents.some((agent) => agent.mergedCommit === localBaseAfter.stdout.trim()));
+  const localFiles = await run("git", ["ls-tree", "-r", "--name-only", "agentdesk/next"], {
+    cwd: projectRoot,
+    check: true,
+  });
+  assert.match(localFiles.stdout, /agent-01\.txt/);
+  assert.match(localFiles.stdout, /agent-02\.txt/);
+  assert.match(localFiles.stdout, /agent-03\.txt/);
+
+  const remoteBaseAfter = await run("git", ["--git-dir", remoteRoot, "rev-parse", "refs/heads/agentdesk/next"], {
+    cwd: root,
+    check: true,
+  });
+  assert.equal(remoteBaseAfter.stdout.trim(), remoteBaseBefore.stdout.trim());
+  const remoteFiles = await run("git", ["--git-dir", remoteRoot, "ls-tree", "-r", "--name-only", "agentdesk/next"], {
+    cwd: root,
+    check: true,
+  });
+  assert.doesNotMatch(remoteFiles.stdout, /agent-01\.txt/);
+  assert.doesNotMatch(remoteFiles.stdout, /agent-02\.txt/);
+  assert.doesNotMatch(remoteFiles.stdout, /agent-03\.txt/);
 });
 
 test("verunectl sessions start/show/list distinguish Codex App handoff from Codex CLI execution", { timeout: 30000 }, async () => {

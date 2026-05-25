@@ -17,7 +17,7 @@ flowchart LR
     executable -- "Yes" --> session["Start session<br/>dispatch Codex workers"]
     session --> done{"Agent succeeded?"}
     done -- "Failed" --> error["Record lastError<br/>in session metadata"]
-    done -- "Succeeded" --> finalize["Finalize<br/>worktree integration to master"]
+    done -- "Succeeded" --> finalize["Finalize<br/>worktree branch<br/>or configured integration"]
     error --> summary["Regenerate session.md<br/>latest execution summary"]
     finalize --> summary
     summary --> user["User reviews<br/>auditable status"]
