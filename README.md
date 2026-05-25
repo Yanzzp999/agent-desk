@@ -100,6 +100,7 @@ You can also start the same MCP server through the local CLI:
 The package ships optional Codex skill definitions under `skills/`:
 
 - `skills/generate-agentdesk-task/SKILL.md`: turns an explicit user request into an AgentDesk control-plane task. It reviews whether the request is complete enough for an executable `task.md` and asks a follow-up question before task creation when blocking details are missing.
+- `skills/review-agentdesk-task/SKILL.md`: performs a read-only pre-implementation review of an AgentDesk task or `task.md`, identifying ambiguity, missing acceptance details, scope mismatches, and ways future agents could diverge from the user's intent.
 - `skills/run-agentdesk-subagents/SKILL.md`: runs or coordinates an existing AgentDesk task with Codex CLI or Codex App subagents, treating configured parallelism as a maximum concurrency cap.
 - `skills/claim-agentdesk-task/SKILL.md`: lets an agent atomically claim one open checklist item from a markdown task, implement only that item, and complete it with the same agent/session identity.
 
