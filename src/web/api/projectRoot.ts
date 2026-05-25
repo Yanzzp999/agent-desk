@@ -12,7 +12,7 @@ export function validateProjectRoot(value: string): ProjectRootValidation {
   if (!projectRoot) {
     return {
       valid: false,
-      message: "Enter the absolute coding projectRoot before creating, editing, claiming, or dispatching tasks.",
+      message: "Enter an absolute projectRoot to enable task actions.",
     };
   }
 
@@ -46,6 +46,6 @@ export function validateProjectRoot(value: string): ProjectRootValidation {
 
   return {
     valid: true,
-    message: "projectRoot looks valid for the local HTTP API and Codex subagent worktrees.",
+    message: "projectRoot is ready for local API and Codex worktrees.",
   };
 }

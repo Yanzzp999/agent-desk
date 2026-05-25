@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, FolderGit2, RefreshCw } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  CircleDot,
+  CirclePlay,
+  FolderGit2,
+  ListChecks,
+  RefreshCw,
+  ShieldAlert,
+  Trophy,
+} from "lucide-react";
 
 import { agentDeskApi } from "./api/client";
 import { validateProjectRoot } from "./api/projectRoot";
@@ -36,6 +46,14 @@ const emptySummary: TaskListSummary = {
   blocked: 0,
   succeeded: 0,
 };
+
+const summaryItems = [
+  { key: "total", label: "Total", icon: ListChecks },
+  { key: "ready", label: "Ready", icon: CircleDot },
+  { key: "running", label: "Running", icon: CirclePlay },
+  { key: "blocked", label: "Blocked", icon: ShieldAlert },
+  { key: "succeeded", label: "Succeeded", icon: Trophy },
+] as const;
 
 function readInitialProjectRoot(): string {
   if (typeof window === "undefined") {
@@ -292,9 +310,17 @@ export default function App() {
   return (
     <main className="app-shell">
       <section className="top-strip" aria-label="Project and runtime status">
+        <div className="workspace-title">
+          <span className="app-mark" aria-hidden="true">AD</span>
+          <div>
+            <p className="eyebrow">AgentDesk</p>
+            <h1>Task operations</h1>
+          </div>
+        </div>
+
         <div className="project-root-control">
           <label className="field">
-            <span>Coding projectRoot</span>
+            <span>Project root</span>
             <div className="input-with-icon project-input">
               <FolderGit2 aria-hidden="true" size={17} />
               <input
@@ -310,39 +336,34 @@ export default function App() {
           </p>
         </div>
 
-        <div className="runtime-status">
+        <div className="runtime-status" aria-live="polite">
           <span className={`runtime-pill source-${apiNotice.source}`}>
-            {apiNotice.source === "api" ? "Local API" : "Fixtures"}
+            {apiNotice.source === "api" ? "Local API" : "Demo data"}
           </span>
           <span>{apiNotice.warning || "Node ESM HTTP API is responding."}</span>
-          <button type="button" className="icon-button" onClick={() => void refreshDashboard()} disabled={isLoading}>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Refresh dashboard"
+            title="Refresh dashboard"
+            onClick={() => void refreshDashboard()}
+            disabled={isLoading}
+          >
             <RefreshCw aria-hidden="true" size={17} />
-            <span className="sr-only">Refresh</span>
           </button>
         </div>
       </section>
 
       <section className="summary-strip" aria-label="Overall task list summary">
-        <div>
-          <span>Total</span>
-          <strong>{summary.total}</strong>
-        </div>
-        <div>
-          <span>Ready</span>
-          <strong>{summary.ready}</strong>
-        </div>
-        <div>
-          <span>Running</span>
-          <strong>{summary.running}</strong>
-        </div>
-        <div>
-          <span>Blocked</span>
-          <strong>{summary.blocked}</strong>
-        </div>
-        <div>
-          <span>Succeeded</span>
-          <strong>{summary.succeeded}</strong>
-        </div>
+        {summaryItems.map(({ key, label, icon: Icon }) => (
+          <article key={key} className={`summary-card summary-${key}`}>
+            <span className="summary-icon" aria-hidden="true">
+              <Icon size={18} />
+            </span>
+            <span>{label}</span>
+            <strong>{summary[key]}</strong>
+          </article>
+        ))}
       </section>
 
       <TaskFilters filters={filters} onChange={setFilters} />
@@ -352,7 +373,7 @@ export default function App() {
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Overall task list</p>
-              <h1>Task management</h1>
+              <h2>Tasks</h2>
             </div>
             {isLoading && <span className="loading-pill">Loading</span>}
           </div>

@@ -31,9 +31,21 @@ export function TaskDetail({ task, canMutate, isBusy, onClaim, onDispatch }: Tas
           <p className="eyebrow">Task detail</p>
           <h2>{task.title}</h2>
         </div>
-        <div className="badge-row">
-          <StatusBadge status={task.status} />
-          <PriorityBadge priority={task.priority} />
+        <div className="detail-heading-actions">
+          <div className="badge-row">
+            <StatusBadge status={task.status} />
+            <PriorityBadge priority={task.priority} />
+          </div>
+          <div className="action-row">
+            <button type="button" className="primary-action" disabled={!canMutate || isBusy} onClick={onClaim}>
+              <UserPlus aria-hidden="true" size={17} />
+              Claim
+            </button>
+            <button type="button" className="secondary-action" disabled={!canMutate || isBusy} onClick={onDispatch}>
+              <Send aria-hidden="true" size={17} />
+              Dispatch
+            </button>
+          </div>
         </div>
       </div>
 
@@ -60,17 +72,6 @@ export function TaskDetail({ task, canMutate, isBusy, onClaim, onDispatch }: Tas
 
       <div className="progress-track progress-large" aria-label={`${progress}% complete`}>
         <span className="progress-fill" style={{ width: `${progress}%` }} />
-      </div>
-
-      <div className="action-row">
-        <button type="button" className="primary-action" disabled={!canMutate || isBusy} onClick={onClaim}>
-          <UserPlus aria-hidden="true" size={17} />
-          Claim
-        </button>
-        <button type="button" className="secondary-action" disabled={!canMutate || isBusy} onClick={onDispatch}>
-          <Send aria-hidden="true" size={17} />
-          Dispatch
-        </button>
       </div>
 
       <div className="path-strip">

@@ -14,6 +14,12 @@ interface TaskFormProps {
 
 const priorities: TaskPriority[] = ["low", "normal", "high", "urgent"];
 
+function formatOptionLabel(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export function TaskForm({
   mode,
   value,
@@ -30,9 +36,10 @@ export function TaskForm({
           <p className="eyebrow">Task editor</p>
           <h2>{mode === "create" ? "Create task" : "Edit task"}</h2>
         </div>
-        <div className="segmented-control compact">
+        <div className="segmented-control compact" aria-label="Task editor mode">
           <button
             type="button"
+            aria-pressed={mode === "create"}
             className={mode === "create" ? "is-active" : ""}
             onClick={() => onModeChange("create")}
           >
@@ -41,6 +48,7 @@ export function TaskForm({
           </button>
           <button
             type="button"
+            aria-pressed={mode === "edit"}
             className={mode === "edit" ? "is-active" : ""}
             onClick={() => onModeChange("edit")}
           >
@@ -77,7 +85,7 @@ export function TaskForm({
             onChange={(event) => onChange({ ...value, status: event.target.value as TaskMutationInput["status"] })}
           >
             {TASK_STATUSES.map((status) => (
-              <option key={status} value={status}>{status}</option>
+              <option key={status} value={status}>{formatOptionLabel(status)}</option>
             ))}
           </select>
         </label>
@@ -89,7 +97,7 @@ export function TaskForm({
             onChange={(event) => onChange({ ...value, priority: event.target.value as TaskPriority })}
           >
             {priorities.map((priority) => (
-              <option key={priority} value={priority}>{priority}</option>
+              <option key={priority} value={priority}>{formatOptionLabel(priority)}</option>
             ))}
           </select>
         </label>
@@ -113,6 +121,7 @@ export function TaskForm({
       <button
         type="button"
         className="primary-action wide-action"
+        aria-busy={isBusy}
         disabled={!canSubmit || isBusy}
         onClick={onSubmit}
       >

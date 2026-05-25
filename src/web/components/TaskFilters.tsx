@@ -1,4 +1,4 @@
-import { CalendarDays, Filter, Search } from "lucide-react";
+import { CalendarDays, Filter, RotateCcw, Search, UserRound } from "lucide-react";
 
 import { TASK_STATUSES, type TaskFilters as TaskFiltersValue, type TaskRange } from "../api/types";
 
@@ -13,7 +13,25 @@ const ranges: Array<{ value: TaskRange; label: string }> = [
   { value: "month", label: "Month" },
 ];
 
+const defaultFilters: TaskFiltersValue = {
+  range: "week",
+  status: "all",
+  query: "",
+  assignee: "",
+};
+
+function formatOptionLabel(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export function TaskFilters({ filters, onChange }: TaskFiltersProps) {
+  const hasActiveFilters = filters.range !== defaultFilters.range
+    || filters.status !== defaultFilters.status
+    || filters.query.trim().length > 0
+    || filters.assignee.trim().length > 0;
+
   return (
     <section className="toolbar" aria-label="Task filters">
       <div className="segmented-control" aria-label="Planning range">
@@ -21,6 +39,7 @@ export function TaskFilters({ filters, onChange }: TaskFiltersProps) {
           <button
             key={range.value}
             type="button"
+            aria-pressed={filters.range === range.value}
             className={filters.range === range.value ? "is-active" : ""}
             onClick={() => onChange({ ...filters, range: range.value })}
           >
@@ -36,7 +55,7 @@ export function TaskFilters({ filters, onChange }: TaskFiltersProps) {
           <Search aria-hidden="true" size={16} />
           <input
             value={filters.query}
-            placeholder="task, status, tag"
+            placeholder="Title, brief, tag"
             onChange={(event) => onChange({ ...filters, query: event.target.value })}
           />
         </div>
@@ -53,9 +72,9 @@ export function TaskFilters({ filters, onChange }: TaskFiltersProps) {
               status: event.target.value as TaskFiltersValue["status"],
             })}
           >
-            <option value="all">All</option>
+            <option value="all">All statuses</option>
             {TASK_STATUSES.map((status) => (
-              <option key={status} value={status}>{status}</option>
+              <option key={status} value={status}>{formatOptionLabel(status)}</option>
             ))}
           </select>
         </div>
@@ -63,12 +82,25 @@ export function TaskFilters({ filters, onChange }: TaskFiltersProps) {
 
       <label className="field">
         <span>Assignee</span>
-        <input
-          value={filters.assignee}
-          placeholder="worker-e"
-          onChange={(event) => onChange({ ...filters, assignee: event.target.value })}
-        />
+        <div className="input-with-icon">
+          <UserRound aria-hidden="true" size={16} />
+          <input
+            value={filters.assignee}
+            placeholder="codex-ui"
+            onChange={(event) => onChange({ ...filters, assignee: event.target.value })}
+          />
+        </div>
       </label>
+
+      <button
+        type="button"
+        className="secondary-action toolbar-reset"
+        disabled={!hasActiveFilters}
+        onClick={() => onChange(defaultFilters)}
+      >
+        <RotateCcw aria-hidden="true" size={16} />
+        Reset
+      </button>
     </section>
   );
 }
