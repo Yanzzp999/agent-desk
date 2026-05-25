@@ -38,7 +38,7 @@ If the user later chooses a different concurrency value, respect the user-select
    - `executionMode`: default `auto`; use `current-branch` for `codex-app`; for AgentDesk validation tasks, use `current-branch` unless branch-aware no-push worktree completion has been confirmed
    - For worktree sessions in this repository, pass or verify `baseBranch=agentdesk/next`, `worktreeIntegration=agent-branch`, and `pushWorktreeIntegration=false`
 4. Never launch more subagents at once than `parallelism`. Let the model/task plan decide the useful number of subagents and batches within that cap; if the user specifies a concurrency value, it must be between 1 and the configured maximum.
-5. For `codex-cli`, rely on `start_subagent_session` to block until status is `succeeded` or `failed` unless you explicitly pass `waitForCompletion: false`.
+5. For `codex-cli`, rely on `start_subagent_session` to wait up to 5 minutes for status `succeeded` or `failed` unless you explicitly pass `waitForCompletion: false`. If the result has `waitTimedOut: true` or a non-terminal status, use `read_subagent_session` to continue monitoring the existing session instead of starting a duplicate. Pass `waitTimeoutMs` only when the workflow needs a different MCP wait window.
 6. For `codex-app`, use `appLaunchPlan.subagents`:
    - Confirm the MCP result includes `requiresHostLaunch: true`.
    - Treat `prepared_for_app` as "prompt prepared", not as a running or completed app subagent.

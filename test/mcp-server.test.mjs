@@ -553,6 +553,72 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
   }
 });
 
+test("MCP start_subagent_session returns after the configured codex-cli wait timeout", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-session-wait-")));
+  const projectRoot = path.join(root, "project");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const codexHome = path.join(root, "codex-home");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await initializeGitProject(projectRoot);
+  await writeReadyAgentDeskTask(projectRoot, "task-mcp-wait-timeout", "MCP wait timeout", ["Run slow fake Codex"]);
+  await writeFakeCodex(fakeCodex);
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [MCP_BIN],
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      FAKE_CODEX_DELAY_MS: "1200",
+      AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS: "5000",
+      AGENT_DESK_CODEX_REPORT_TIMEOUT_MS: "30000",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-desk-mcp-session-wait-test", version: "0.0.0" });
+
+  try {
+    await client.connect(transport);
+    const started = await client.callTool({
+      name: "start_subagent_session",
+      arguments: {
+        projectRoot,
+        taskId: "task-mcp-wait-timeout",
+        codexCli: fakeCodex,
+        executionMode: "current-branch",
+        subagentLauncher: "codex-cli",
+        parallelism: 1,
+        waitTimeoutMs: 50,
+      },
+    });
+
+    assert.equal(started.structuredContent.requiresHostLaunch, false);
+    assert.equal(started.structuredContent.waitRequested, true);
+    assert.equal(started.structuredContent.waitedForCompletion, false);
+    assert.equal(started.structuredContent.waitTimedOut, true);
+    assert.equal(started.structuredContent.waitTimeoutMs, 50);
+    assert.match(started.content[0].text, /still (queued|running) after 50 ms/);
+    assert.notEqual(started.structuredContent.status, "succeeded");
+
+    const sessionId = started.structuredContent.sessionId;
+    const metaPath = path.join(projectRoot, ".agent-desk", "sessions", sessionId, "meta.json");
+    await waitForJson(metaPath, (meta) => meta.status === "succeeded" ? meta : null, 15000);
+
+    const read = await client.callTool({
+      name: "read_subagent_session",
+      arguments: {
+        projectRoot,
+        sessionId,
+      },
+    });
+    assert.equal(read.structuredContent.status, "succeeded", read.structuredContent.lastError);
+    assert.equal(read.structuredContent.succeededAgents, 1);
+  } finally {
+    await client.close();
+  }
+});
+
 test("MCP server reports actionable Codex CLI session failures", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-session-fail-")));
   const projectRoot = path.join(root, "project");

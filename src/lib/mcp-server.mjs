@@ -29,6 +29,10 @@ import {
   updateOverallTask,
 } from "./overall-tasks.mjs";
 
+const START_SUBAGENT_SESSION_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
+const START_SUBAGENT_SESSION_WAIT_POLL_MS = 1000;
+const TERMINAL_SESSION_STATUSES = new Set(["succeeded", "failed"]);
+
 export function createAgentDeskMcpServer(options = {}) {
   const server = new McpServer({
     name: "agent-desk",
@@ -415,7 +419,7 @@ export function createAgentDeskMcpServer(options = {}) {
 
   server.registerTool("start_subagent_session", {
     title: "Start Subagent Session",
-    description: "Start an AgentDesk subagent session. The main agent should use auto/current-branch when worktree isolation is unnecessary, and worktree only for parallel work that needs branch isolation. codex-cli sessions are launched by AgentDesk and block until completion by default. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
+    description: "Start an AgentDesk subagent session. The main agent should use auto/current-branch when worktree isolation is unnecessary, and worktree only for parallel work that needs branch isolation. codex-cli sessions are launched by AgentDesk and wait up to 5 minutes for completion by default. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
     inputSchema: {
       taskId: z.string().min(1).describe("Ready AgentDesk task id under <project>/.agent-desk/tasks."),
       parallelism: z.number().optional().describe("Maximum concurrent subagents. Default 6, max 24."),
@@ -428,18 +432,22 @@ export function createAgentDeskMcpServer(options = {}) {
       pushWorktreeIntegration: z.boolean().optional().describe("Whether fast-forward worktree integration should push the configured base branch upstream. Default false."),
       launchPrompt: z.string().optional().describe("Optional extra launch context included in each subagent prompt."),
       waitForCompletion: z.boolean().optional().describe("For codex-cli sessions, wait for all subagents to finish before returning. Default: true."),
+      waitTimeoutMs: z.number().int().positive().optional().describe("Maximum time to keep the MCP call open while waiting for codex-cli completion. Default: 300000 ms (5 minutes). Ignored when waitForCompletion is false or subagentLauncher is codex-app."),
       allowDuplicateSession: z.boolean().optional().describe("Override the active-session guard and allow another session for the same task. Default: false."),
       force: z.boolean().optional().describe("Alias for allowDuplicateSession."),
       ...contextInputSchema(),
     },
     outputSchema: sessionStartSchema(),
-  }, async (args) => {
+  }, async (args, extra) => {
     const context = createMcpContext(args, options);
     const subagentLauncher = args.subagentLauncher || "codex-cli";
     const waitForCompletion = subagentLauncher === "codex-cli"
       ? args.waitForCompletion ?? true
       : false;
-    const result = await createSession(context, args.taskId, {
+    const waitTimeoutMs = waitForCompletion
+      ? args.waitTimeoutMs || START_SUBAGENT_SESSION_WAIT_TIMEOUT_MS
+      : 0;
+    let result = await createSession(context, args.taskId, {
       parallelism: args.parallelism,
       model: args.model,
       reasoning: args.reasoning,
@@ -449,23 +457,37 @@ export function createAgentDeskMcpServer(options = {}) {
       worktreeIntegration: args.worktreeIntegration,
       pushWorktreeIntegration: args.pushWorktreeIntegration,
       launchPrompt: args.launchPrompt,
-      waitForCompletion,
+      waitForCompletion: false,
       allowDuplicateSession: args.allowDuplicateSession || args.force,
     });
+    let waitTimedOut = false;
+    let waitElapsedMs = 0;
+    if (waitForCompletion) {
+      const waitResult = await waitForSessionTerminal(context, result.sessionId, waitTimeoutMs, extra);
+      result = waitResult.session;
+      waitTimedOut = waitResult.timedOut;
+      waitElapsedMs = waitResult.elapsedMs;
+    }
     const appLaunchPlan = subagentLauncher === "codex-app"
       ? await getCodexAppLaunchPlan(context, result.sessionId)
       : emptyAppLaunchPlan(result.sessionId, result.parallelism);
     const payload = {
       ...result,
       requiresHostLaunch: appLaunchPlan.requiresHostLaunch,
-      waitedForCompletion: waitForCompletion,
+      waitRequested: waitForCompletion,
+      waitedForCompletion: waitForCompletion && !waitTimedOut,
+      waitTimedOut,
+      waitTimeoutMs,
+      waitElapsedMs,
       appLaunchPlan,
     };
     const text = appLaunchPlan.requiresHostLaunch
       ? `Prepared ${appLaunchPlan.subagents.length} Codex App subagent prompt(s) for session ${result.name || result.sessionId} (${result.sessionId})`
-      : waitForCompletion
-        ? `Completed AgentDesk Codex CLI session ${result.name || result.sessionId} (${result.sessionId}) with status ${result.status}`
-        : `Started AgentDesk Codex CLI session: ${result.name || result.sessionId} (${result.sessionId})`;
+      : waitTimedOut
+        ? `Started AgentDesk Codex CLI session ${result.name || result.sessionId} (${result.sessionId}); it is still ${result.status} after ${formatDuration(waitTimeoutMs)}. Use read_subagent_session to check progress.`
+        : waitForCompletion
+          ? `Completed AgentDesk Codex CLI session ${result.name || result.sessionId} (${result.sessionId}) with status ${result.status}`
+          : `Started AgentDesk Codex CLI session: ${result.name || result.sessionId} (${result.sessionId})`;
     return toolResult(payload, text);
   });
 
@@ -661,6 +683,10 @@ function sessionStartSchema() {
   return sessionSummarySchema().extend({
     requiresHostLaunch: z.boolean(),
     waitedForCompletion: z.boolean().optional(),
+    waitRequested: z.boolean().optional(),
+    waitTimedOut: z.boolean().optional(),
+    waitTimeoutMs: z.number().optional(),
+    waitElapsedMs: z.number().optional(),
     appLaunchPlan: appLaunchPlanSchema(),
   }).passthrough();
 }
@@ -749,4 +775,61 @@ function emptyAppLaunchPlan(sessionId, parallelism) {
     parallelism,
     subagents: [],
   };
+}
+
+async function waitForSessionTerminal(context, sessionId, timeoutMs, extra) {
+  const startedAt = Date.now();
+  let session = await getSession(context, sessionId);
+  await sendSessionWaitProgress(extra, session, 0, timeoutMs);
+  while (!TERMINAL_SESSION_STATUSES.has(session.status)) {
+    const elapsedMs = Date.now() - startedAt;
+    const remainingMs = timeoutMs - elapsedMs;
+    if (remainingMs <= 0) {
+      return { session, timedOut: true, elapsedMs };
+    }
+    await sleep(Math.min(START_SUBAGENT_SESSION_WAIT_POLL_MS, remainingMs));
+    session = await getSession(context, sessionId);
+    await sendSessionWaitProgress(extra, session, Date.now() - startedAt, timeoutMs);
+  }
+  return {
+    session,
+    timedOut: false,
+    elapsedMs: Date.now() - startedAt,
+  };
+}
+
+async function sendSessionWaitProgress(extra, session, elapsedMs, timeoutMs) {
+  const progressToken = extra?._meta?.progressToken;
+  if (progressToken === undefined || typeof extra?.sendNotification !== "function") {
+    return;
+  }
+  try {
+    await extra.sendNotification({
+      method: "notifications/progress",
+      params: {
+        progressToken,
+        progress: Math.min(elapsedMs, timeoutMs),
+        total: timeoutMs,
+        message: `AgentDesk session ${session.sessionId} is ${session.status}`,
+      },
+    });
+  } catch {
+    // Progress is best-effort; session polling should keep running if a client ignores it.
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatDuration(ms) {
+  if (ms % 60000 === 0) {
+    const minutes = ms / 60000;
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  if (ms % 1000 === 0) {
+    const seconds = ms / 1000;
+    return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  }
+  return `${ms} ms`;
 }
