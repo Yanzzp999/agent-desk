@@ -33,7 +33,9 @@ AgentDesk 围绕三个对象工作：
 
 agent 可以在实现前使用 `claim_next_task_item`；可见 marker 会记录 `agent -> sessionId`，让人和其他 agent 都能看到归属。在执行子代理前，协调模型应先评审 task 复杂度和并发编辑冲突风险，决定推荐的每批 subagent 数量并告知用户；用户仍可在配置上限内自行选择不同的并发量。
 
-AgentDesk 也包含本地 React / Vite / TypeScript task 管理 UI。这个 web runtime 仍然服务同一套 task.md、MCP stdio、`verunectl`、session history 和 Codex subagent 编排模型；它不是 Electron shell、Next.js app，也不是旧兼容入口。
+AgentDesk 的默认使用路径是内置 Codex skills 加 MCP/CLI：生成或读取 `task.md`，领取 checklist 工作，运行或准备 subagent session，并通过 `verunectl` 或 MCP stdio server 查看 session history。
+
+AgentDesk 也包含可选的 beta 本地 React / Vite / TypeScript task 管理 UI。这个 web runtime 仍然服务同一套 task.md、MCP stdio、`verunectl`、session history 和 Codex subagent 编排模型，但它不是正常使用 AgentDesk 的必要入口。它也不是 Electron shell、Next.js app 或旧兼容入口。
 
 ## 本地 MCP 注册
 
@@ -59,9 +61,9 @@ codex mcp add agent-desk-my-project \
 ./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
 ```
 
-## 本地 Web UI
+## Beta 本地 Web UI
 
-Web UI 首屏就是 task 管理。它包含 day/week/month 规划切换、过滤器、总体 task 列表、task 详情、创建/编辑表单、领取和分发动作、coding `projectRoot` 校验，以及最近 session 摘要。
+可选 beta Web UI 首屏就是 task 管理。它包含 day/week/month 规划切换、过滤器、总体 task 列表、task 详情、创建/编辑表单、领取和分发动作、coding `projectRoot` 校验，以及最近 session 摘要。
 
 先启动本地 SQLite-backed API，再运行 Vite：
 
@@ -91,7 +93,7 @@ npm run test:web
 npm run build
 ```
 
-验证 `npm run dev` 时，先检查是否已有可访问 dev server，并优先复用。dev script 存在后，应使用 Computer Use 检查运行中的 UI；除非用户明确要求或 Computer Use 不可用，不默认改用 browser-based validation。
+只有改动 beta Web UI 或其运行时行为时才需要使用这些检查。验证 `npm run dev` 时，先检查是否已有可访问 dev server，并优先复用。应使用 Computer Use 检查运行中的 UI；除非用户明确要求或 Computer Use 不可用，不默认改用 browser-based validation。
 
 ## 常用 CLI
 

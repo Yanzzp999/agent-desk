@@ -2,8 +2,9 @@
 
 ## Verification Workflow
 
-- This repository is currently CLI/MCP-only and does not provide a local GUI, Electron shell, Web app, or `npm run dev` workflow.
-- Only include UI or `npm run dev` validation when a future change explicitly adds a supported dev script and UI/Web source.
+- The default AgentDesk workflow is the bundled Codex skills plus MCP/CLI (`task.md`, session history, `verunectl`, and Codex subagent orchestration).
+- The local Web UI is an optional beta surface. It is not required for normal AgentDesk usage, task execution, or default validation.
+- Only include UI or `npm run dev` validation when a change explicitly touches the beta Web UI, dev server, or Web runtime behavior.
 - When validating UI or runtime behavior served by `npm run dev`, Codex should default to using [@电脑](plugin://computer-use@openai-bundled) to inspect the running app.
 - Before running `npm run dev`, Codex should check whether the dev server is already running and reuse it when available.
 - Only run `npm run dev` when the dev server is not running or cannot be reached.
@@ -32,6 +33,7 @@
 ## Product Direction
 
 - Keep AgentDesk centered on project configuration/selection through CLI/MCP, `task.md` generation, session history, and Codex subagent orchestration.
+- Treat the skills-led MCP/CLI flow as the default product path; keep the Web UI clearly labeled as beta and optional.
 - Do not reintroduce `prd.json`, Gemini CLI, or Claude Code compatibility features.
 - Session execution defaults should remain explicit in user-facing docs: `gpt-5.5`, `xhigh`, `fast`, batched launches of 6, and this repository's Codex development baseline of `agentdesk/next`.
 - Prefer the MCP stdio server and `verunectl` terminal commands as the primary interface.

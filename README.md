@@ -33,7 +33,9 @@ AgentDesk is built around three objects:
 
 Agents can use `claim_next_task_item` before implementation; the visible marker records `agent -> sessionId` so people and other agents can see ownership. Before subagent execution, the coordinating model should review task complexity and concurrent-edit conflict risk, choose a recommended per-batch subagent count, and tell the user; the user can still choose a different concurrency value within the configured maximum.
 
-AgentDesk also includes a local React/Vite/TypeScript task management UI. It is a web runtime for the same task.md, MCP stdio, `verunectl`, session history, and Codex subagent orchestration model. It is not an Electron shell, Next.js app, or legacy compatibility surface.
+The default AgentDesk usage path is the bundled Codex skills plus MCP/CLI: generate or read a `task.md`, claim checklist work, run or prepare subagent sessions, and review session history through `verunectl` or the MCP stdio server.
+
+AgentDesk also includes an optional beta local React/Vite/TypeScript task management UI. The web runtime serves the same task.md, MCP stdio, `verunectl`, session history, and Codex subagent orchestration model, but it is not required for normal AgentDesk usage. It is not an Electron shell, Next.js app, or legacy compatibility surface.
 
 ## Local MCP Setup
 
@@ -59,9 +61,9 @@ You can also start the same MCP server through the local CLI:
 ./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
 ```
 
-## Local Web UI
+## Beta Local Web UI
 
-The web UI opens directly on task management. It includes day/week/month planning, filters, an overall task list, task detail, create/edit form, claim and dispatch actions, coding `projectRoot` validation, and recent session summaries.
+The optional beta web UI opens directly on task management. It includes day/week/month planning, filters, an overall task list, task detail, create/edit form, claim and dispatch actions, coding `projectRoot` validation, and recent session summaries.
 
 Start the local SQLite-backed API first, then run Vite:
 
@@ -91,7 +93,7 @@ npm run test:web
 npm run build
 ```
 
-When validating `npm run dev`, first reuse an already-running dev server when one is reachable. After the dev script exists, use Computer Use to inspect the running UI; only use browser-based validation when explicitly requested or when Computer Use is unavailable.
+Only use these checks for changes that touch the beta web UI or its runtime. When validating `npm run dev`, first reuse an already-running dev server when one is reachable. Use Computer Use to inspect the running UI; only use browser-based validation when explicitly requested or when Computer Use is unavailable.
 
 ## Common CLI
 
