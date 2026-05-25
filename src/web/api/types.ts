@@ -2,6 +2,8 @@ export type TaskRange = "day" | "week" | "month";
 
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 
+export type TaskScope = "project" | "user";
+
 export type TaskStatus =
   | "draft"
   | "ready"
@@ -34,6 +36,8 @@ export interface AgentDeskTask {
   brief: string;
   status: TaskStatus;
   priority: TaskPriority;
+  scope: TaskScope;
+  taskType: string;
   projectRoot: string;
   createdAt: string;
   updatedAt: string;
@@ -100,6 +104,8 @@ export interface TaskListResponse {
 
 export interface TaskMutationInput {
   projectRoot: string;
+  scope: TaskScope;
+  taskType: string;
   title: string;
   brief: string;
   status: TaskStatus;

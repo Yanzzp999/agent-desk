@@ -1,10 +1,11 @@
-import { Edit3, Plus, Save } from "lucide-react";
+import { Edit3, FolderGit2, Plus, Save, UserRound } from "lucide-react";
 
 import { TASK_STATUSES, type TaskMutationInput, type TaskPriority } from "../api/types";
 
 interface TaskFormProps {
   mode: "create" | "edit";
   value: TaskMutationInput;
+  projectRoot: string;
   canSubmit: boolean;
   isBusy: boolean;
   onModeChange: (mode: "create" | "edit") => void;
@@ -23,6 +24,7 @@ function formatOptionLabel(value: string): string {
 export function TaskForm({
   mode,
   value,
+  projectRoot,
   canSubmit,
   isBusy,
   onModeChange,
@@ -76,6 +78,37 @@ export function TaskForm({
           onChange={(event) => onChange({ ...value, brief: event.target.value })}
         />
       </label>
+
+      <div className="segmented-control compact scope-control" aria-label="Task scope">
+        <button
+          type="button"
+          aria-pressed={value.scope === "project"}
+          className={value.scope === "project" ? "is-active" : ""}
+          onClick={() => onChange({
+            ...value,
+            scope: "project",
+            taskType: "coding",
+            projectRoot,
+          })}
+        >
+          <FolderGit2 aria-hidden="true" size={15} />
+          Project
+        </button>
+        <button
+          type="button"
+          aria-pressed={value.scope === "user"}
+          className={value.scope === "user" ? "is-active" : ""}
+          onClick={() => onChange({
+            ...value,
+            scope: "user",
+            taskType: "general",
+            projectRoot: "",
+          })}
+        >
+          <UserRound aria-hidden="true" size={15} />
+          User
+        </button>
+      </div>
 
       <div className="form-grid">
         <label className="field">

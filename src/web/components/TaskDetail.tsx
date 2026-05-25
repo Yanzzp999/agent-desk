@@ -1,4 +1,4 @@
-import { CheckCircle2, FileText, FolderGit2, Play, Send, UserPlus } from "lucide-react";
+import { CheckCircle2, FileText, FolderGit2, Play, Send, UserPlus, UserRound } from "lucide-react";
 
 import type { AgentDeskTaskDetail } from "../api/types";
 import { EmptyState, formatDateTime, formatPercent, PriorityBadge, StatusBadge } from "./ui";
@@ -75,8 +75,10 @@ export function TaskDetail({ task, canMutate, isBusy, onClaim, onDispatch }: Tas
       </div>
 
       <div className="path-strip">
-        <FolderGit2 aria-hidden="true" size={16} />
-        <span>{task.projectRoot}</span>
+        {task.scope === "user"
+          ? <UserRound aria-hidden="true" size={16} />
+          : <FolderGit2 aria-hidden="true" size={16} />}
+        <span>{task.scope === "user" ? "User-level task" : task.projectRoot}</span>
       </div>
 
       <div className="task-md-block">

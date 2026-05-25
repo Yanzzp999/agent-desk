@@ -287,7 +287,7 @@ export function createAgentDeskMcpServer(options = {}) {
       status: overallTaskStatusSchema().optional().describe("Overall task workflow status."),
       priority: z.union([z.string(), z.number()]).optional().describe("Priority label or numeric priority."),
       assignee: z.string().optional().describe("Optional assignee."),
-      projectRoot: z.string().optional().describe("Coding project root. Defaults to the MCP context project root."),
+      projectRoot: z.string().optional().describe("Coding project root. Omit for a user-level non-coding task."),
       branch: z.string().optional().describe("Optional target branch."),
       dueAt: z.string().optional().describe("Optional due date/time."),
       ...contextInputSchema(),
@@ -549,6 +549,8 @@ function createMcpContext(args = {}, options = {}) {
   return createContext({
     projectRoot: args.projectRoot || options.projectRoot,
     deskRoot: args.deskRoot,
+    taskStoreDeskRoot: args.taskStoreDeskRoot || options.taskStoreDeskRoot,
+    taskStoreDbPath: args.taskStoreDbPath || args.sqlitePath || options.taskStoreDbPath || options.sqlitePath,
     worktreesRoot: args.worktreesRoot,
     configPath: args.configPath,
     codexCli: args.codexCli,
@@ -559,6 +561,8 @@ function contextInputSchema() {
   return {
     projectRoot: z.string().optional().describe("Project root. Defaults to AGENT_DESK_PROJECT_ROOT, INIT_CWD, git root, or the MCP server working directory."),
     deskRoot: z.string().optional().describe("Override <project>/.agent-desk."),
+    taskStoreDeskRoot: z.string().optional().describe("Override the overall task store root. Default: ~/.agent-desk."),
+    taskStoreDbPath: z.string().optional().describe("Override the overall task SQLite DB path. Default: ~/.agent-desk/tasks.sqlite."),
     worktreesRoot: z.string().optional().describe("Override the persistent git worktrees root."),
     configPath: z.string().optional().describe("Override the AgentDesk TOML config path."),
     codexCli: z.string().optional().describe("Override the Codex CLI executable path."),

@@ -107,12 +107,14 @@ export async function listOverallTasks(contextLike, filters = {}) {
   return withOverallTaskStore(context, async (store) => {
     await maybeBackfill(store, context, filters);
     const periodType = normalizeOptionalString(filters.periodType || filters.period);
-    const periodKey = normalizeOptionalString(filters.periodKey || periodKeyFromRequest(periodType, filters));
+    const periodKey = normalizeOptionalString(filters.periodKey || (periodType ? periodKeyFromRequest(periodType, filters) : ""));
     const status = normalizeOptionalString(filters.status);
     const assignee = normalizeOptionalString(filters.assignee || filters.owner);
     const query = normalizeOptionalString(filters.q || filters.query).toLowerCase();
+    const hasProjectRootFilter = filters.projectRoot !== undefined;
+    const projectRoot = hasProjectRootFilter ? normalizeProjectRootForStore(filters.projectRoot) : "";
     const items = store.listTasks({
-      projectRoot: context.projectRoot,
+      ...(hasProjectRootFilter ? { projectRoot, includeUserTasks: Boolean(projectRoot) } : {}),
       ...(periodType ? { periodType } : {}),
       ...(periodKey ? { periodKey } : {}),
       ...(status && status !== "all" ? { status: mapUiStatusToStore(status) } : {}),
@@ -147,10 +149,10 @@ export async function getOverallTask(contextLike, overallTaskId) {
 export async function updateOverallTask(contextLike, overallTaskId, patch = {}) {
   const context = normalizeContext(contextLike);
   const parsed = updateOverallTaskSchema.parse(patch);
-  await validateProjectRootForTask(context, parsed);
   return withOverallTaskStore(context, async (store) => {
-    requireTask(store, overallTaskId);
-    const task = store.updateTask(overallTaskId, normalizeStoreTaskPatch(context, parsed), {
+    const before = requireTask(store, overallTaskId);
+    await validateProjectRootForTask(context, parsed, before);
+    const task = store.updateTask(overallTaskId, normalizeStoreTaskPatch(parsed), {
       actor: parsed.actor || parsed.assignee || parsed.owner,
       sessionId: parsed.sessionId,
       message: parsed.note,
@@ -180,6 +182,9 @@ export async function dispatchOverallTask(contextLike, overallTaskId, request = 
   const sessionId = requiredText(parsed.sessionId || parsed.session, "sessionId");
   return withOverallTaskStore(context, async (store) => {
     const before = requireTask(store, overallTaskId);
+    if (before.taskType === "coding" && !before.projectRoot) {
+      throw new Error("coding overall task requires projectRoot before dispatch");
+    }
     const task = store.dispatchTask(overallTaskId, {
       assignee: parsed.assignee || parsed.owner || before.assignee,
       sessionId,
@@ -192,7 +197,7 @@ export async function dispatchOverallTask(contextLike, overallTaskId, request = 
 }
 
 export async function createOverallTaskApiStore(options = {}) {
-  const context = options.context || createContext(options);
+  const context = normalizeContext(options.context, options);
   return {
     context,
     async getStatus() {
@@ -215,11 +220,11 @@ export async function createOverallTaskApiStore(options = {}) {
       return toUiTaskDetail(result.task);
     },
     async createTask(request) {
-      const result = await createOverallTask(context, normalizeApiMutation(request));
+      const result = await createOverallTask(context, normalizeApiMutation(request, { defaults: true }));
       return toUiTaskDetail(result.task);
     },
     async updateTask(taskId, patch) {
-      const result = await updateOverallTask(context, taskId, normalizeApiMutation(patch));
+      const result = await updateOverallTask(context, taskId, normalizeApiMutation(patch, { defaults: false }));
       return toUiTaskDetail(result.task);
     },
     async claimTask(taskId, request) {
@@ -277,12 +282,31 @@ export async function createOverallTaskApiStore(options = {}) {
   };
 }
 
-function normalizeContext(contextLike) {
-  return contextLike?.tasksRoot ? contextLike : createContext(contextLike || {});
+function normalizeContext(contextLike, options = {}) {
+  return normalizeOverallContext(contextLike, options);
+}
+
+function normalizeOverallContext(contextLike, options = {}) {
+  const context = contextLike?.tasksRoot ? contextLike : createContext(contextLike || options || {});
+  const taskStoreDbPath = normalizeOptionalString(
+    options.taskStoreDbPath || options.sqlitePath || options.dbPath || context.taskStoreDbPath,
+  );
+  const taskStoreDeskRoot = normalizeOptionalString(
+    options.taskStoreDeskRoot || options.overallDeskRoot || context.taskStoreDeskRoot || context.deskRoot,
+  );
+  return {
+    ...context,
+    taskStoreDbPath,
+    taskStoreDeskRoot,
+  };
 }
 
 async function withOverallTaskStore(context, callback) {
-  const store = openTaskStore({ projectRoot: context.projectRoot, deskRoot: context.deskRoot });
+  const store = openTaskStore({
+    projectRoot: context.projectRoot,
+    deskRoot: context.taskStoreDeskRoot,
+    dbPath: context.taskStoreDbPath,
+  });
   try {
     return await callback(store);
   } finally {
@@ -294,16 +318,32 @@ async function maybeBackfill(store, context, filters) {
   if (filters.backfill === false || filters.skipBackfill) {
     return;
   }
+  const projectRoot = filters.projectRoot !== undefined
+    ? normalizeProjectRootForStore(filters.projectRoot)
+    : context.projectRoot;
+  if (!projectRoot) {
+    return;
+  }
   await backfillTaskMarkdownSources(store, {
-    projectRoot: context.projectRoot,
-    deskRoot: context.deskRoot,
+    projectRoot,
+    deskRoot: projectRoot === context.projectRoot ? context.deskRoot : path.join(projectRoot, ".agent-desk"),
   });
 }
 
-async function validateProjectRootForTask(context, input) {
+async function validateProjectRootForTask(context, input, existingTask = null) {
+  const taskType = input.taskType !== undefined
+    ? input.taskType || "general"
+    : existingTask?.taskType || "general";
+  const projectRoot = input.projectRoot !== undefined
+    ? normalizeProjectRootForStore(input.projectRoot)
+    : existingTask
+      ? existingTask.projectRoot
+      : taskType === "coding"
+        ? context.projectRoot
+        : "";
   await validateTaskProjectRoot({
-    taskType: input.taskType || "general",
-    projectRoot: input.projectRoot || context.projectRoot,
+    taskType,
+    projectRoot,
   }, {
     checkExists: false,
   });
@@ -312,24 +352,25 @@ async function validateProjectRootForTask(context, input) {
 function normalizeStoreTaskInput(context, input) {
   const periodType = normalizePeriodType(input.periodType || input.period || "day");
   const periodKey = periodKeyFromRequest(periodType, input);
+  const taskType = input.taskType || "general";
   return {
     id: input.id || input.overallTaskId,
     title: input.title,
     description: input.description ?? input.brief ?? "",
-    taskType: input.taskType || "general",
+    taskType,
     periodType,
     periodKey,
     status: mapUiStatusToStore(input.status || "ready"),
     priority: normalizePriority(input.priority),
     assignee: input.assignee || input.owner || "",
-    projectRoot: input.projectRoot || context.projectRoot,
+    projectRoot: effectiveTaskProjectRoot(context, input, taskType),
     branch: input.branch || "",
     sourceType: "overall-task",
     dueAt: input.dueAt || null,
   };
 }
 
-function normalizeStoreTaskPatch(context, input) {
+function normalizeStoreTaskPatch(input) {
   const patch = {};
   if (input.title !== undefined) {
     patch.title = input.title;
@@ -357,7 +398,7 @@ function normalizeStoreTaskPatch(context, input) {
     patch.assignee = input.assignee || input.owner || "";
   }
   if (input.projectRoot !== undefined) {
-    patch.projectRoot = input.projectRoot || context.projectRoot;
+    patch.projectRoot = normalizeProjectRootForStore(input.projectRoot);
   }
   if (input.branch !== undefined) {
     patch.branch = input.branch || "";
@@ -368,24 +409,49 @@ function normalizeStoreTaskPatch(context, input) {
   return patch;
 }
 
-function normalizeApiMutation(request = {}) {
-  return {
-    title: request.title,
-    description: request.description ?? request.brief,
-    taskType: request.taskType || "coding",
-    periodType: request.periodType || request.period || "week",
-    periodKey: request.periodKey,
-    status: request.status || "ready",
-    priority: request.priority || "normal",
-    assignee: request.assignee || request.claimedBy,
-    projectRoot: request.projectRoot,
-    branch: request.branch,
-    dueAt: request.dueAt || null,
-  };
+function normalizeApiMutation(request = {}, options = {}) {
+  const useDefaults = options.defaults !== false;
+  const scope = normalizeOptionalString(request.scope);
+  const taskType = request.taskType || (scope === "user" ? "general" : "coding");
+  const normalized = {};
+  if (request.title !== undefined) {
+    normalized.title = request.title;
+  }
+  if (request.description !== undefined || request.brief !== undefined) {
+    normalized.description = request.description ?? request.brief;
+  }
+  if (request.taskType !== undefined || scope || useDefaults) {
+    normalized.taskType = taskType;
+  }
+  if (request.periodType !== undefined || request.period !== undefined || useDefaults) {
+    normalized.periodType = request.periodType || request.period || "week";
+  }
+  if (request.periodKey !== undefined) {
+    normalized.periodKey = request.periodKey;
+  }
+  if (request.status !== undefined || useDefaults) {
+    normalized.status = request.status || "ready";
+  }
+  if (request.priority !== undefined || useDefaults) {
+    normalized.priority = request.priority || "normal";
+  }
+  if (request.assignee !== undefined || request.claimedBy !== undefined) {
+    normalized.assignee = request.assignee || request.claimedBy;
+  }
+  if (request.projectRoot !== undefined || scope === "user") {
+    normalized.projectRoot = scope === "user" ? "" : request.projectRoot;
+  }
+  if (request.branch !== undefined) {
+    normalized.branch = request.branch;
+  }
+  if (request.dueAt !== undefined || useDefaults) {
+    normalized.dueAt = request.dueAt || null;
+  }
+  return normalized;
 }
 
 function normalizeApiQuery(query = {}) {
-  return {
+  const normalized = {
     periodType: query.periodType || query.period || query.range,
     periodKey: query.periodKey,
     status: query.status,
@@ -393,6 +459,10 @@ function normalizeApiQuery(query = {}) {
     assignee: query.assignee || query.owner,
     limit: query.limit,
   };
+  if (query.projectRoot !== undefined) {
+    normalized.projectRoot = query.projectRoot;
+  }
+  return normalized;
 }
 
 function toOverallTask(store, task, options = {}) {
@@ -401,6 +471,8 @@ function toOverallTask(store, task, options = {}) {
     ...task,
     overallTaskId: task.id,
     taskId: task.id,
+    scope: task.projectRoot ? "project" : "user",
+    isProjectBound: Boolean(task.projectRoot),
     brief: task.description,
     period: task.periodType,
     owner: task.assignee,
@@ -448,10 +520,13 @@ function toUiTaskSummary(task) {
     status: mapStoreStatusToUi(task.status),
     priority: priorityLabel(task.priority),
     projectRoot: task.projectRoot,
+    scope: task.scope || (task.projectRoot ? "project" : "user"),
+    isProjectBound: task.isProjectBound ?? Boolean(task.projectRoot),
+    taskType: task.taskType,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     dueAt: task.dueAt || undefined,
-    tags: [task.periodType, task.taskType].filter(Boolean),
+    tags: [task.projectRoot ? "project" : "user", task.periodType, task.taskType].filter(Boolean),
     subtaskCount: 0,
     completedSubtasks: 0,
     claimedBy: task.claimedBy || undefined,
@@ -562,6 +637,18 @@ function normalizePriority(value) {
   }
   const text = normalizeOptionalString(value || "normal").toLowerCase();
   return PRIORITY_TO_NUMBER[text] ?? PRIORITY_TO_NUMBER.normal;
+}
+
+function effectiveTaskProjectRoot(context, input, taskType) {
+  if (input.projectRoot !== undefined) {
+    return normalizeProjectRootForStore(input.projectRoot);
+  }
+  return taskType === "coding" ? context.projectRoot : "";
+}
+
+function normalizeProjectRootForStore(value) {
+  const text = normalizeOptionalString(value);
+  return text ? path.resolve(text) : "";
 }
 
 function priorityLabel(value) {

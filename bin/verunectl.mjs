@@ -85,7 +85,10 @@ async function main() {
   }
 
   if (command === "mcp") {
-    await startAgentDeskMcpServer({ projectRoot: parsed.project });
+    await startAgentDeskMcpServer({
+      projectRoot: parsed.project,
+      taskStoreDbPath: parsed.sqlite || parsed["sqlite-path"],
+    });
     return;
   }
 
@@ -95,6 +98,7 @@ async function main() {
     worktreesRoot: parsed["worktrees-root"],
     configPath: parsed.config,
     codexCli: parsed["codex-cli"],
+    taskStoreDbPath: parsed.sqlite || parsed["sqlite-path"],
   });
 
   if (command === "tasks") {
@@ -194,6 +198,7 @@ async function handleOverallTasks(context, parsed) {
   const subcommand = parsed._[1] || "list";
   if (subcommand === "list") {
     const result = await listOverallTasks(context, {
+      ...(parsed.project ? { projectRoot: parsed.project } : {}),
       periodType: parsed["period-type"] || parsed.period,
       periodKey: parsed["period-key"],
       date: parsed.date,
@@ -231,7 +236,7 @@ async function handleOverallTasks(context, parsed) {
       status: parsed.status || "ready",
       priority: parsed.priority || "normal",
       assignee: parsed.assignee || parsed.owner,
-      projectRoot: parsed.project,
+      ...(parsed.project ? { projectRoot: parsed.project } : {}),
       branch: parsed.branch,
       actor: parsed.actor || parsed.owner || parsed.assignee,
       sessionId: parsed.session,
@@ -250,7 +255,7 @@ async function handleOverallTasks(context, parsed) {
       status: parsed.status,
       priority: parsed.priority,
       assignee: parsed.assignee || parsed.owner,
-      projectRoot: parsed.project,
+      ...(parsed.project ? { projectRoot: parsed.project } : {}),
       branch: parsed.branch,
       actor: parsed.actor || parsed.owner || parsed.assignee,
       sessionId: parsed.session,
@@ -529,6 +534,7 @@ Usage:
 Global options:
   --project DIR          Project root to inspect. Defaults to the current git root.
   --desk-root DIR        Override the AgentDesk state root. Default: <project>/.agent-desk.
+  --sqlite-path FILE     Override overall task SQLite DB. Default: ~/.agent-desk/tasks.sqlite.
   --config FILE          Override the AgentDesk TOML config path. Default: <desk-root>/config.toml.
   --worktrees-root DIR   Override the persistent git worktrees root.
   --codex-cli PATH       Override the Codex CLI executable path.

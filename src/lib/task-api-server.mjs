@@ -77,6 +77,7 @@ const ListTasksQuerySchema = z.object({
   periodType: z.enum(["day", "week", "month"]).optional(),
   periodKey: z.string().trim().min(1).optional(),
   assignee: z.string().trim().min(1).optional(),
+  projectRoot: z.string().optional(),
 }).passthrough();
 const RecentSessionsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(6),
@@ -145,6 +146,7 @@ const ApiInfoSchema = z.object({
   version: z.string(),
   basePath: z.string(),
   projectRoot: z.string().optional(),
+  taskStoreDbPath: z.string().optional(),
   routes: z.array(RouteInfoSchema),
   viteProxy: z.object({
     path: z.string(),
@@ -648,6 +650,7 @@ function apiInfo(options, request) {
     version: "0.1.0",
     basePath: options.basePath,
     projectRoot: options.projectRoot || options.store?.context?.projectRoot || "",
+    taskStoreDbPath: options.store?.context?.taskStoreDbPath || "",
     routes: ROUTES.map((route) => ({
       ...route,
       path: `${options.basePath}${route.path}`,

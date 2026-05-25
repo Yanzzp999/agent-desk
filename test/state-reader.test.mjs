@@ -27,10 +27,14 @@ import {
 
 test("createContext uses project-scoped .agent-desk roots", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-context-"));
-  const context = createContext({ projectRoot });
+  const userDeskRoot = path.join(projectRoot, "home", AGENT_DESK_STATE_DIRNAME);
+  const context = createContext({ projectRoot, userDeskRoot });
 
   assert.equal(context.projectRoot, projectRoot);
   assert.equal(context.deskRoot, path.join(projectRoot, AGENT_DESK_STATE_DIRNAME));
+  assert.equal(context.userDeskRoot, userDeskRoot);
+  assert.equal(context.taskStoreDeskRoot, userDeskRoot);
+  assert.equal(context.taskStoreDbPath, "");
   assert.equal(context.tasksRoot, path.join(projectRoot, AGENT_DESK_STATE_DIRNAME, "tasks"));
   assert.equal(context.sessionsRoot, path.join(projectRoot, AGENT_DESK_STATE_DIRNAME, "sessions"));
   assert.match(context.worktreesRoot, /agent-desk\/worktrees/);

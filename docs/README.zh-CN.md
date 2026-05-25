@@ -70,7 +70,7 @@ Web UI 首屏就是 task 管理。它包含 day/week/month 规划切换、过滤
 npm run dev
 ```
 
-Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agentdesk` 代理到 `http://127.0.0.1:19731` 上的 Node.js ESM HTTP API；API 会把总体 task 元数据、周期归属、领取/分发状态和审计事件保存在 `<project>/.agent-desk/tasks.sqlite`。
+Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agentdesk` 代理到 `http://127.0.0.1:19731` 上的 Node.js ESM HTTP API；API 默认会把总体 task 元数据、周期归属、领取/分发状态和审计事件保存在用户级 `~/.agent-desk/tasks.sqlite`。单次运行需要覆盖路径时传 `--sqlite-path <file>`。
 
 预期本地 API routes：
 
@@ -82,7 +82,7 @@ Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agen
 - `POST /api/agentdesk/tasks/:taskId/dispatch`
 - `GET /api/agentdesk/sessions/recent`
 
-Task 和 session 请求都会携带 `projectRoot`；dispatch 继续使用文档化默认值：模型 `gpt-5.5`、reasoning `xhigh`、service tier `fast`、启动批次大小 `6`。
+总体 task 可以是用户级任务（`projectRoot` 为空）或项目绑定任务（`projectRoot` 为绝对路径）。coding 任务在 dispatch 前必须绑定项目；按项目过滤时会同时显示该项目任务和用户级规划任务。Task 和 session dispatch 继续使用文档化默认值：模型 `gpt-5.5`、reasoning `xhigh`、service tier `fast`、启动批次大小 `6`。
 
 前端检查：
 

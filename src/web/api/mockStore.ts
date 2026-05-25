@@ -115,7 +115,9 @@ function applyFilters(tasks: AgentDeskTask[], filters: TaskFilters): AgentDeskTa
 }
 
 function taskPath(projectRoot: string, taskId: string, fileName: string): string {
-  return `${projectRoot}/.agent-desk/tasks/${taskId}/${fileName}`;
+  return projectRoot
+    ? `${projectRoot}/.agent-desk/tasks/${taskId}/${fileName}`
+    : `~/.agent-desk/tasks/${taskId}/${fileName}`;
 }
 
 function findTaskOrThrow(taskId: string): AgentDeskTask {
@@ -132,7 +134,7 @@ export const mockAgentDeskApi = {
   async listTasks(projectRoot: string, filters: TaskFilters): Promise<TaskListResponse> {
     const tasks = readTasks().map((task) => ({
       ...task,
-      projectRoot: projectRoot || task.projectRoot,
+      projectRoot: task.scope === "user" ? "" : projectRoot || task.projectRoot,
     }));
     const items = applyFilters(tasks, filters);
 
@@ -160,6 +162,8 @@ export const mockAgentDeskApi = {
       brief: input.brief,
       status: input.status,
       priority: input.priority,
+      scope: input.scope,
+      taskType: input.taskType,
       projectRoot: input.projectRoot,
       createdAt: now,
       updatedAt: now,
@@ -189,6 +193,8 @@ export const mockAgentDeskApi = {
         brief: input.brief,
         status: input.status,
         priority: input.priority,
+        scope: input.scope,
+        taskType: input.taskType,
         projectRoot: input.projectRoot,
         tags: input.tags,
         updatedAt: new Date().toISOString(),
@@ -218,7 +224,7 @@ export const mockAgentDeskApi = {
       claimedTask = {
         ...task,
         status: "claimed",
-        projectRoot: input.projectRoot,
+        projectRoot: task.scope === "user" ? "" : input.projectRoot,
         claimedBy: input.assignee,
         updatedAt: new Date().toISOString(),
       };
@@ -244,7 +250,7 @@ export const mockAgentDeskApi = {
       dispatchedTask = {
         ...task,
         status: "running",
-        projectRoot: input.projectRoot,
+        projectRoot: task.scope === "user" ? "" : input.projectRoot,
         activeSessionId: sessionId,
         activeSessionStatus: "running",
         updatedAt: new Date().toISOString(),

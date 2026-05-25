@@ -66,8 +66,11 @@ function readInitialProjectRoot(): string {
 }
 
 function createBlankDraft(projectRoot: string): TaskMutationInput {
+  const hasProjectRoot = projectRoot.trim().length > 0;
   return {
-    projectRoot,
+    projectRoot: hasProjectRoot ? projectRoot : "",
+    scope: hasProjectRoot ? "project" : "user",
+    taskType: hasProjectRoot ? "coding" : "general",
     title: "",
     brief: "",
     status: "draft",
@@ -77,8 +80,11 @@ function createBlankDraft(projectRoot: string): TaskMutationInput {
 }
 
 function taskToDraft(task: AgentDeskTaskDetail): TaskMutationInput {
+  const scope = task.scope || (task.projectRoot ? "project" : "user");
   return {
     projectRoot: task.projectRoot,
+    scope,
+    taskType: task.taskType || (scope === "project" ? "coding" : "general"),
     title: task.title,
     brief: task.brief,
     status: task.status,
@@ -115,10 +121,11 @@ export default function App() {
   const [isMutating, setIsMutating] = useState(false);
 
   const projectRootValidation = useMemo(() => validateProjectRoot(projectRoot), [projectRoot]);
-  const canMutate = projectRootValidation.valid && !isMutating;
-  const canSubmit = canMutate
+  const canMutate = !isMutating && (!taskDetail || taskDetail.scope === "user" || projectRootValidation.valid);
+  const canSubmit = !isMutating
     && draft.title.trim().length > 0
     && draft.brief.trim().length > 0
+    && (draft.scope === "user" || projectRootValidation.valid)
     && (formMode === "create" || Boolean(selectedTaskId));
 
   useEffect(() => {
@@ -126,10 +133,13 @@ export default function App() {
       window.localStorage.setItem(PROJECT_ROOT_STORAGE_KEY, projectRoot);
     }
 
-    setDraft((current) => ({
-      ...current,
-      projectRoot: projectRoot.trim(),
-    }));
+    setDraft((current) => current.scope === "project"
+      ? {
+        ...current,
+        projectRoot: projectRoot.trim(),
+        taskType: current.taskType || "coding",
+      }
+      : current);
   }, [projectRoot]);
 
   useEffect(() => {
@@ -244,7 +254,8 @@ export default function App() {
 
     const input: TaskMutationInput = {
       ...draft,
-      projectRoot: projectRoot.trim(),
+      projectRoot: draft.scope === "project" ? projectRoot.trim() : "",
+      taskType: draft.scope === "project" ? "coding" : "general",
       title: draft.title.trim(),
       brief: draft.brief.trim(),
     };
@@ -269,7 +280,7 @@ export default function App() {
 
     setIsMutating(true);
     const result = await agentDeskApi.claimTask(taskDetail.taskId, {
-      projectRoot: projectRoot.trim(),
+      projectRoot: taskDetail.projectRoot || projectRoot.trim(),
       assignee: filters.assignee.trim() || "codex-ui",
       sessionId: `ui-${Date.now()}`,
     });
@@ -290,7 +301,7 @@ export default function App() {
 
     setIsMutating(true);
     const result = await agentDeskApi.dispatchTask(taskDetail.taskId, {
-      projectRoot: projectRoot.trim(),
+      projectRoot: taskDetail.projectRoot || projectRoot.trim(),
       model: "gpt-5.5",
       reasoning: "xhigh",
       serviceTier: "fast",
@@ -391,6 +402,7 @@ export default function App() {
         <TaskForm
           mode={formMode}
           value={draft}
+          projectRoot={projectRoot.trim()}
           canSubmit={canSubmit}
           isBusy={isMutating}
           onModeChange={handleFormModeChange}

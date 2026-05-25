@@ -124,15 +124,26 @@ export function findProjectRoot(cwd = process.cwd()) {
 
 export function createContext(options = {}) {
   const projectRoot = path.resolve(options.projectRoot || findProjectRoot(options.cwd || process.cwd()));
+  const explicitDeskRoot = Boolean(normalizeOptionalString(options.deskRoot));
   const deskRoot = path.resolve(options.deskRoot || path.join(projectRoot, AGENT_DESK_STATE_DIRNAME));
+  const userDeskRoot = path.resolve(options.userDeskRoot || path.join(os.homedir(), AGENT_DESK_STATE_DIRNAME));
+  const taskStoreDeskRoot = path.resolve(
+    options.taskStoreDeskRoot || options.overallDeskRoot || (explicitDeskRoot ? deskRoot : userDeskRoot),
+  );
+  const taskStoreDbPath = normalizeOptionalString(
+    options.taskStoreDbPath || options.sqlitePath || options.dbPath,
+  );
   const projectKey = `${slug(path.basename(projectRoot))}-${shortHash(projectRoot)}`;
   const worktreesRoot = path.resolve(
-    options.worktreesRoot || path.join(os.homedir(), ".agent-desk", "worktrees", projectKey),
+    options.worktreesRoot || path.join(userDeskRoot, "worktrees", projectKey),
   );
   const configPath = path.resolve(options.configPath || options.config || path.join(deskRoot, DEFAULT_CONFIG_FILENAME));
   return {
     projectRoot,
     deskRoot,
+    userDeskRoot,
+    taskStoreDeskRoot,
+    taskStoreDbPath,
     configPath,
     tasksRoot: path.join(deskRoot, "tasks"),
     sessionsRoot: path.join(deskRoot, "sessions"),

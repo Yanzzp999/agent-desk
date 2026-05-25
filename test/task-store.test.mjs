@@ -13,15 +13,21 @@ import {
 
 const NOW = "2026-05-25T00:00:00.000Z";
 
-test("opens the task store under .agent-desk and creates audited overall tasks", async () => {
+test("opens the default task store under the user .agent-desk root", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-store-"));
+  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-home-"));
   const store = openTaskStore({
     projectRoot,
+    homeDir,
     now: () => NOW,
   });
   try {
-    assert.equal(store.dbPath, path.join(projectRoot, ".agent-desk", "tasks.sqlite"));
-    assert.equal(resolveTaskStoreDbPath({ projectRoot }), store.dbPath);
+    assert.equal(store.dbPath, path.join(homeDir, ".agent-desk", "tasks.sqlite"));
+    assert.equal(resolveTaskStoreDbPath({ projectRoot, homeDir }), store.dbPath);
+    assert.equal(
+      resolveTaskStoreDbPath({ projectRoot, deskRoot: path.join(projectRoot, ".agent-desk") }),
+      path.join(projectRoot, ".agent-desk", "tasks.sqlite"),
+    );
     assert.equal(store.getSchemaVersion(), TASK_STORE_SCHEMA_VERSION);
     assert.ok(await exists(store.dbPath));
 
@@ -50,6 +56,23 @@ test("opens the task store under .agent-desk and creates audited overall tasks",
 
     const listed = store.listTasks({ projectRoot, status: "ready" });
     assert.deepEqual(listed.map((item) => item.id), ["task-checkout"]);
+
+    const userTask = store.createTask({
+      id: "task-user-planning",
+      title: "User-level planning",
+      periodType: "week",
+      periodKey: "2026-W22",
+      status: "ready",
+      projectRoot: "",
+    });
+    assert.equal(userTask.projectRoot, "");
+    assert.deepEqual(store.listTasks({ projectRoot: "", status: "ready" }).map((item) => item.id), [
+      "task-user-planning",
+    ]);
+    assert.deepEqual(
+      store.listTasks({ projectRoot, includeUserTasks: true, status: "ready" }).map((item) => item.id).sort(),
+      ["task-checkout", "task-user-planning"],
+    );
 
     const audit = store.getAuditEvents("task-checkout");
     assert.deepEqual(audit.map((event) => event.eventType), ["create"]);
@@ -136,7 +159,11 @@ test("claim and dispatch operations are transactional and conflict aware", async
 
 test("updates validate final period state and record audit events", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-task-store-"));
-  const store = openTaskStore({ projectRoot, now: () => NOW });
+  const store = openTaskStore({
+    projectRoot,
+    deskRoot: path.join(projectRoot, ".agent-desk"),
+    now: () => NOW,
+  });
   try {
     store.createTask({
       id: "task-period",
@@ -195,7 +222,11 @@ test("registers and backfills markdown task sources without replacing markdown",
   }, null, 2));
   await fs.writeFile(projectTaskMd, projectMarkdown, "utf8");
 
-  const store = openTaskStore({ projectRoot, now: () => NOW });
+  const store = openTaskStore({
+    projectRoot,
+    deskRoot: path.join(projectRoot, ".agent-desk"),
+    now: () => NOW,
+  });
   try {
     const registered = await registerTaskMarkdown(store, {
       projectRoot,

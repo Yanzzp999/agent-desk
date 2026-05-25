@@ -70,7 +70,7 @@ Start the local SQLite-backed API first, then run Vite:
 npm run dev
 ```
 
-Vite serves the app at `http://127.0.0.1:5173` by default. During development it proxies `/api/agentdesk` to the Node.js ESM HTTP API at `http://127.0.0.1:19731`; the API stores overall task metadata, period assignment, claim/dispatch state, and audit events in `<project>/.agent-desk/tasks.sqlite`.
+Vite serves the app at `http://127.0.0.1:5173` by default. During development it proxies `/api/agentdesk` to the Node.js ESM HTTP API at `http://127.0.0.1:19731`; the API stores overall task metadata, period assignment, claim/dispatch state, and audit events in the user-level `~/.agent-desk/tasks.sqlite` by default. Pass `--sqlite-path <file>` to override it for a run.
 
 Expected local API routes:
 
@@ -82,7 +82,7 @@ Expected local API routes:
 - `POST /api/agentdesk/tasks/:taskId/dispatch`
 - `GET /api/agentdesk/sessions/recent`
 
-Task and session requests carry `projectRoot`; dispatch keeps the documented defaults of model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, and launch batch size `6`.
+Overall tasks can be user-level (`projectRoot` empty) or project-bound (`projectRoot` absolute). Coding tasks require a project root before dispatch; project-filtered views include matching project tasks plus user-level planning tasks. Task and session dispatch keeps the documented defaults of model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, and launch batch size `6`.
 
 Frontend checks:
 

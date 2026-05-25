@@ -19,7 +19,8 @@ const VERUNECTL = path.join(REPO_ROOT, "bin", "verunectl.mjs");
 test("overall task store supports period list, claim, dispatch, and audit state", async () => {
   const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-overall-")));
   await fs.mkdir(path.join(projectRoot, ".agent-desk"), { recursive: true });
-  const context = createContext({ projectRoot });
+  const userDeskRoot = path.join(projectRoot, "home", ".agent-desk");
+  const context = createContext({ projectRoot, userDeskRoot });
 
   const created = await createOverallTask(context, {
     title: "Overall SQLite task",
@@ -37,9 +38,46 @@ test("overall task store supports period list, claim, dispatch, and audit state"
   assert.equal(created.task.periodType, "week");
   assert.equal(created.task.periodKey, "2026-W22");
   assert.equal(created.task.priorityLabel, "high");
+  assert.equal(created.task.scope, "project");
+  assert.ok(await exists(path.join(userDeskRoot, "tasks.sqlite")));
+
+  const userTask = await createOverallTask(context, {
+    title: "User-level planning",
+    description: "Coordinate tasks before choosing a project.",
+    taskType: "general",
+    periodType: "week",
+    periodKey: "2026-W22",
+    status: "ready",
+  });
+  assert.equal(userTask.task.projectRoot, "");
+  assert.equal(userTask.task.scope, "user");
+
+  await assert.rejects(
+    () => createOverallTask(context, {
+      title: "Coding task without project",
+      taskType: "coding",
+      projectRoot: "",
+      periodType: "week",
+      periodKey: "2026-W22",
+    }),
+    /projectRoot is required/,
+  );
 
   const listed = await listOverallTasks(context, { periodType: "week", periodKey: "2026-W22" });
-  assert.deepEqual(listed.items.map((task) => task.overallTaskId), [created.task.overallTaskId]);
+  assert.deepEqual(
+    listed.items.map((task) => task.overallTaskId).sort(),
+    [created.task.overallTaskId, userTask.task.overallTaskId].sort(),
+  );
+
+  const projectListed = await listOverallTasks(context, {
+    projectRoot,
+    periodType: "week",
+    periodKey: "2026-W22",
+  });
+  assert.deepEqual(
+    projectListed.items.map((task) => task.overallTaskId).sort(),
+    [created.task.overallTaskId, userTask.task.overallTaskId].sort(),
+  );
 
   const claimed = await claimOverallTask(context, created.task.overallTaskId, {
     assignee: "worker",
@@ -74,12 +112,15 @@ test("overall task store supports period list, claim, dispatch, and audit state"
 test("verunectl overall-tasks exposes JSON state", async () => {
   const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-overall-cli-")));
   await fs.mkdir(path.join(projectRoot, ".agent-desk"), { recursive: true });
+  const sqlitePath = path.join(projectRoot, "home", ".agent-desk", "tasks.sqlite");
 
   const created = await runJson([
     "overall-tasks",
     "create",
     "--project",
     projectRoot,
+    "--sqlite-path",
+    sqlitePath,
     "--title",
     "CLI overall task",
     "--description",
@@ -101,6 +142,8 @@ test("verunectl overall-tasks exposes JSON state", async () => {
     "list",
     "--project",
     projectRoot,
+    "--sqlite-path",
+    sqlitePath,
     "--period",
     "month",
     "--period-key",
@@ -114,6 +157,10 @@ async function runJson(args) {
   const result = await run(process.execPath, [VERUNECTL, ...args], { cwd: REPO_ROOT });
   assert.equal(result.exitCode, 0, result.stderr);
   return JSON.parse(result.stdout);
+}
+
+async function exists(filePath) {
+  return Boolean(await fs.stat(filePath).catch(() => null));
 }
 
 function run(command, args, options = {}) {

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
@@ -130,16 +131,24 @@ const auditEventSchema = z.object({
 }).strict();
 
 export function resolveTaskStoreDbPath(options = {}) {
-  if (options.dbPath === TASK_STORE_MEMORY_PATH || options.path === TASK_STORE_MEMORY_PATH) {
+  if (
+    options.dbPath === TASK_STORE_MEMORY_PATH
+    || options.path === TASK_STORE_MEMORY_PATH
+    || options.sqlitePath === TASK_STORE_MEMORY_PATH
+    || options.taskStoreDbPath === TASK_STORE_MEMORY_PATH
+  ) {
     return TASK_STORE_MEMORY_PATH;
   }
-  const explicitPath = normalizeOptionalString(options.dbPath || options.path);
+  const explicitPath = normalizeOptionalString(options.dbPath || options.path || options.sqlitePath || options.taskStoreDbPath);
   if (explicitPath) {
     return path.resolve(explicitPath);
   }
-  const projectRoot = resolveProjectRoot(options.projectRoot);
-  const deskRoot = path.resolve(options.deskRoot || path.join(projectRoot, AGENT_DESK_STATE_DIRNAME));
+  const deskRoot = path.resolve(options.deskRoot || options.taskStoreDeskRoot || resolveUserAgentDeskRoot(options));
   return path.join(deskRoot, DEFAULT_TASK_STORE_DB_FILENAME);
+}
+
+export function resolveUserAgentDeskRoot(options = {}) {
+  return path.resolve(options.homeDir || os.homedir(), AGENT_DESK_STATE_DIRNAME);
 }
 
 export function openTaskStore(options = {}) {
@@ -348,9 +357,16 @@ export class TaskStore {
   listTasks(filters = {}) {
     const where = [];
     const params = {};
-    if (filters.projectRoot) {
-      params.projectRoot = path.resolve(String(filters.projectRoot));
-      where.push("project_root = :projectRoot");
+    if (Object.hasOwn(filters, "projectRoot")) {
+      const projectRoot = normalizeProjectRootForStorage(filters.projectRoot);
+      if (projectRoot) {
+        params.projectRoot = projectRoot;
+        where.push(filters.includeUserTasks
+          ? "(project_root = :projectRoot OR project_root = '')"
+          : "project_root = :projectRoot");
+      } else {
+        where.push("project_root = ''");
+      }
     }
     if (filters.status) {
       const statuses = [].concat(filters.status).map((status) => normalizeStatus(status));
@@ -784,7 +800,9 @@ function normalizeTaskForInsert(input, options = {}) {
   const parsed = managedTaskCreateSchema.parse(input);
   const now = normalizeDateString(options.now || new Date().toISOString());
   const title = normalizeTaskTitle(parsed.title);
-  const projectRoot = resolveProjectRoot(parsed.projectRoot || options.projectRoot);
+  const projectRoot = parsed.projectRoot !== undefined
+    ? normalizeProjectRootForStorage(parsed.projectRoot)
+    : normalizeProjectRootForStorage(options.projectRoot);
   const createdAt = normalizeDateString(parsed.createdAt || now);
   const updatedAt = normalizeDateString(parsed.updatedAt || now);
   const normalized = {
@@ -845,7 +863,7 @@ function normalizeTaskPatch(patch) {
     } else if (["claimedAt", "dispatchedAt", "dueAt"].includes(field)) {
       normalized[field] = normalizeNullableDateString(value);
     } else if (field === "projectRoot") {
-      normalized.projectRoot = resolveProjectRoot(value);
+      normalized.projectRoot = normalizeProjectRootForStorage(value);
     } else if (field === "branch") {
       normalized.branch = normalizeBoundedText(value, "branch", MAX_BRANCH_LENGTH);
     } else if (field === "sourceType") {
@@ -1204,6 +1222,11 @@ function resolveProjectRoot(value) {
       || normalizeOptionalString(process.env.INIT_CWD)
       || process.cwd(),
   );
+}
+
+function normalizeProjectRootForStorage(value) {
+  const text = normalizeOptionalString(value);
+  return text ? path.resolve(text) : "";
 }
 
 function clampInteger(value, fallback, min, max) {
