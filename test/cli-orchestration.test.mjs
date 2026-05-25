@@ -871,10 +871,10 @@ test("verunectl allocates unique task ids and blocks duplicate active sessions",
   assert.equal(session.succeededAgents, 3);
   assert.equal(session.failedAgents, 0);
 
-  const finalTaskMeta = JSON.parse(await fs.readFile(
+  const finalTaskMeta = await waitForJson(
     path.join(projectRoot, ".agent-desk", "tasks", baseTaskId, "meta.json"),
-    "utf8",
-  ));
+    (meta) => meta.status === "succeeded" ? meta : null,
+  );
   assert.equal(finalTaskMeta.status, "succeeded");
   assert.equal(finalTaskMeta.activeSessionId, "");
   assert.equal(finalTaskMeta.activeSessionStatus, "");

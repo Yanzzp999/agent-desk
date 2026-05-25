@@ -2219,6 +2219,7 @@ async function runCodexInteractivePrompt(options) {
   const priorSessionFiles = await snapshotCodexSessionFiles(sessionsRoot);
   let terminal;
   try {
+    ensureNodePtySpawnHelperExecutable(options.stderrLog);
     terminal = pty.spawn(ptyCommand.command, ptyCommand.args, {
       name: "xterm-256color",
       cols: 120,
@@ -2506,6 +2507,30 @@ async function killSpawnedProcess(child, exitPromise, isExited) {
     exitPromise,
     sleep(1000),
   ]);
+}
+
+function ensureNodePtySpawnHelperExecutable(stderrLog) {
+  const helperPath = nodePtySpawnHelperPath();
+  if (!helperPath) {
+    return;
+  }
+  try {
+    const stat = fs.statSync(helperPath);
+    if ((stat.mode & 0o111) === 0) {
+      fs.chmodSync(helperPath, stat.mode | 0o111);
+    }
+  } catch (error) {
+    appendFileSyncSafe(stderrLog, `failed to prepare node-pty spawn-helper: ${error.message}\n`);
+  }
+}
+
+function nodePtySpawnHelperPath() {
+  try {
+    const nodePtyEntry = fileURLToPath(import.meta.resolve("node-pty"));
+    return path.resolve(path.dirname(nodePtyEntry), "..", "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
+  } catch {
+    return "";
+  }
 }
 
 function resolvePtyCommand(command, args) {
