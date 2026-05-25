@@ -10,6 +10,7 @@ import {
   chooseExecutionModeForTask,
   createContext,
   createTask,
+  findCodexSessionByLaunchToken,
   getAgentLogs,
   getSession,
   getTask,
@@ -500,6 +501,54 @@ test("builds Codex interactive args for resumable subagents", () => {
     "--no-alt-screen",
     "Implement the assigned task.",
   ]);
+});
+
+test("discovers Codex session only from launch token in user prompt records", async () => {
+  const sessionsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-codex-sessions-"));
+  const launchToken = "agentdesk-session-demo-agent-01-token";
+  const validSessionId = "fake-session-valid";
+  const trapSessionId = "fake-session-trap";
+  const validPath = path.join(sessionsRoot, "rollout-valid.jsonl");
+  const trapPath = path.join(sessionsRoot, "rollout-trap.jsonl");
+  const now = new Date().toISOString();
+
+  await fs.writeFile(validPath, [
+    JSON.stringify({ timestamp: now, type: "session_meta", payload: { id: validSessionId } }),
+    JSON.stringify({
+      timestamp: now,
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: `AgentDesk launch token: ${launchToken}` }],
+      },
+    }),
+    "",
+  ].join("\n"), "utf8");
+  await fs.writeFile(trapPath, [
+    JSON.stringify({ timestamp: now, type: "session_meta", payload: { id: trapSessionId } }),
+    JSON.stringify({
+      timestamp: now,
+      type: "response_item",
+      payload: {
+        type: "function_call_output",
+        output: `sessions show output echoed ${launchToken}`,
+      },
+    }),
+    "",
+  ].join("\n"), "utf8");
+  const newer = new Date(Date.now() + 1000);
+  await fs.utimes(trapPath, newer, newer);
+
+  const discovered = await findCodexSessionByLaunchToken(launchToken, {
+    sessionsRoot,
+    startedAtMs: Date.now() - 5000,
+    priorSessionFiles: new Map(),
+  });
+
+  assert.equal(discovered.codexSessionId, validSessionId);
+  assert.equal(discovered.codexSessionPath, validPath);
+  assert.equal(discovered.codexResumeCommand, `codex resume --all ${validSessionId}`);
 });
 
 async function writeTaskState(projectRoot, options) {

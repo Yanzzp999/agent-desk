@@ -2613,7 +2613,7 @@ async function snapshotCodexSessionFiles(sessionsRoot) {
   return new Map(files.map((file) => [file.filePath, file.mtimeMs]));
 }
 
-async function findCodexSessionByLaunchToken(launchToken, options = {}) {
+export async function findCodexSessionByLaunchToken(launchToken, options = {}) {
   const files = await collectCodexSessionFiles(options.sessionsRoot);
   const candidates = files.filter((file) => {
     const priorMtime = options.priorSessionFiles?.get(file.filePath);
@@ -2624,7 +2624,7 @@ async function findCodexSessionByLaunchToken(launchToken, options = {}) {
   });
   for (const file of candidates) {
     const content = await fsp.readFile(file.filePath, "utf8").catch(() => "");
-    if (!content.includes(launchToken)) {
+    if (!codexRolloutHasLaunchPrompt(content, launchToken)) {
       continue;
     }
     const sessionId = readCodexSessionId(content) || codexSessionIdFromPath(file.filePath);
@@ -2635,6 +2635,55 @@ async function findCodexSessionByLaunchToken(launchToken, options = {}) {
     };
   }
   return null;
+}
+
+function codexRolloutHasLaunchPrompt(content, launchToken) {
+  const token = String(launchToken || "");
+  if (!token) {
+    return false;
+  }
+  for (const line of String(content || "").split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      if (codexEventHasLaunchPrompt(JSON.parse(line), token)) {
+        return true;
+      }
+    } catch {
+      // Ignore partial or malformed rollout lines.
+    }
+  }
+  return false;
+}
+
+function codexEventHasLaunchPrompt(event, launchToken) {
+  if (event?.type === "response_item" && event.payload?.type === "message" && event.payload.role === "user") {
+    return codexMessageText(event.payload.content).includes(launchToken);
+  }
+  if (event?.type === "event_msg" && event.payload?.type === "user_message") {
+    return String(event.payload.message || event.payload.text || "").includes(launchToken)
+      || event.payload.launchToken === launchToken;
+  }
+  if (event?.type === "message" && event.role === "user") {
+    return codexMessageText(event.content).includes(launchToken);
+  }
+  return false;
+}
+
+function codexMessageText(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content.map((part) => {
+    if (typeof part === "string") {
+      return part;
+    }
+    return String(part?.text || part?.message || part?.content || "");
+  }).join("\n");
 }
 
 async function collectCodexSessionFiles(sessionsRoot) {
