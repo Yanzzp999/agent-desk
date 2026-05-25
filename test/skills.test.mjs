@@ -14,7 +14,12 @@ test("npm package includes bundled Codex skills", async () => {
   assert.ok(pkg.files.includes("skills/"));
   assert.ok(pkg.files.includes("scripts/sync-codex-skills.sh"));
 
-  for (const skillName of ["claim-agentdesk-task", "generate-agentdesk-task", "run-agentdesk-subagents"]) {
+  for (const skillName of [
+    "claim-agentdesk-task",
+    "generate-agentdesk-task",
+    "review-agentdesk-task",
+    "run-agentdesk-subagents",
+  ]) {
     const skillPath = path.join(REPO_ROOT, "skills", skillName, "SKILL.md");
     const text = await fs.readFile(skillPath, "utf8");
     assert.match(text, new RegExp(`name: ${skillName}`));
@@ -40,9 +45,14 @@ test("sync-codex-skills copies bundled skills to CODEX_HOME", async () => {
   });
 
   assert.equal(result.exitCode, 0, result.stderr);
-  assert.match(result.stdout, /Synced 3 Codex skill\(s\)/);
+  assert.match(result.stdout, /Synced 4 Codex skill\(s\)/);
 
-  for (const skillName of ["claim-agentdesk-task", "generate-agentdesk-task", "run-agentdesk-subagents"]) {
+  for (const skillName of [
+    "claim-agentdesk-task",
+    "generate-agentdesk-task",
+    "review-agentdesk-task",
+    "run-agentdesk-subagents",
+  ]) {
     const source = await fs.readFile(path.join(REPO_ROOT, "skills", skillName, "SKILL.md"), "utf8");
     const installed = await fs.readFile(path.join(codexHome, "skills", skillName, "SKILL.md"), "utf8");
     assert.equal(installed, source);
@@ -77,6 +87,21 @@ test("generate-agentdesk-task skill requires task brief completeness review", as
   assert.match(skill, /complete enough to produce an executable `task\.md`/);
   assert.match(skill, /ask the user a concise follow-up question/);
   assert.match(skill, /before calling `create_agentdesk_task`/);
+});
+
+test("review-agentdesk-task skill documents read-only pre-implementation task review", async () => {
+  const skill = await fs.readFile(
+    path.join(REPO_ROOT, "skills", "review-agentdesk-task", "SKILL.md"),
+    "utf8",
+  );
+
+  assert.match(skill, /read-only pre-implementation review/);
+  assert.match(skill, /aligned with the user's intent/);
+  assert.match(skill, /Never call `claim_next_task_item`/);
+  assert.match(skill, /Never edit task files/);
+  assert.match(skill, /Needs clarification/);
+  assert.match(skill, /Blocked/);
+  assert.match(skill, /Suggested task edits/);
 });
 
 test("run-agentdesk-subagents skill documents bounded concurrency and app handoff", async () => {

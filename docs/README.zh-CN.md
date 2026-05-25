@@ -118,9 +118,10 @@ npm link
 
 ## 内置 Codex Skills
 
-这个包会随 npm 发布三个可选 Codex skill 定义，位于 `skills/`：
+这个包会随 npm 发布四个可选 Codex skill 定义，位于 `skills/`：
 
 - `skills/generate-agentdesk-task/SKILL.md`：把显式用户需求转成 AgentDesk control-plane task。它会先审查需求是否足以生成可执行的 `task.md`；如果目标、范围、验收或关键约束等阻塞信息缺失，会先反问用户补充，再创建 task。
+- `skills/review-agentdesk-task/SKILL.md`：对某个 AgentDesk task 或 `task.md` 做实现前只读审查，找出歧义、缺失验收、范围偏差，以及后续 agent 可能偏离用户意图的地方。
 - `skills/run-agentdesk-subagents/SKILL.md`：基于已有 AgentDesk task 启动或协调 Codex CLI / Codex App 子代理，并把配置的 parallelism 视为最大并发上限。
 - `skills/claim-agentdesk-task/SKILL.md`：让 agent 从 markdown task 中原子领取一个未完成 checklist item，只实现这一项，并用同一个 agent/session 身份完成它。
 
