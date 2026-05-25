@@ -31,44 +31,16 @@ AgentDesk is built around three concepts:
 
 ## Quick Start
 
-AgentDesk requires Node.js 22.12 or newer and a working Codex CLI.
+AgentDesk currently runs from a local checkout. It requires Node.js 22.12 or newer and a working Codex CLI.
 
-Install the MCP server in Codex without cloning this repository:
-
-```sh
-codex mcp add agent-desk -- npx -y --package @pavee/agent-desk agent-desk-mcp
-```
-
-This setup is useful across many projects. Pass `projectRoot` when calling MCP tools, and each project gets its own `task/` and `.agent-desk/` state directories.
-
-Bind one MCP server to a fixed project:
-
-```sh
-codex mcp add agent-desk-my-project \
-  --env AGENT_DESK_PROJECT_ROOT=/absolute/path/to/your/project \
-  -- npx -y --package @pavee/agent-desk agent-desk-mcp
-```
-
-Install with the helper script:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/Yanzzp999/agent-desk/master/scripts/install-mcp.sh | sh
-```
-
-Install for a fixed project:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/Yanzzp999/agent-desk/master/scripts/install-mcp.sh | sh -s -- /absolute/path/to/your/project
-```
-
-For local development:
+Install dependencies and register the local MCP server:
 
 ```sh
 npm install
 codex mcp add agent-desk -- node "$(pwd)/bin/agent-desk-mcp.mjs"
 ```
 
-For local development with a fixed project:
+Bind one MCP server to a fixed project:
 
 ```sh
 codex mcp add agent-desk-my-project \
@@ -83,13 +55,7 @@ codex mcp get agent-desk
 npm test
 ```
 
-To expose `verunectl` and `agent-desk-mcp` directly in your shell from a local checkout:
-
-```sh
-npm link
-```
-
-You can also start the same MCP server through the local CLI:
+You can also start the MCP server through the local CLI:
 
 ```sh
 ./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
@@ -97,7 +63,7 @@ You can also start the same MCP server through the local CLI:
 
 ## Bundled Codex Skills
 
-The package ships optional Codex skill definitions under `skills/`:
+This repository includes optional Codex skill definitions under `skills/`:
 
 - `skills/generate-agentdesk-task/SKILL.md`: turns an explicit user request into an AgentDesk control-plane task. It reviews whether the request is complete enough for an executable `task.md` and asks a follow-up question before task creation when blocking details are missing.
 - `skills/review-agentdesk-task/SKILL.md`: performs a read-only pre-implementation review of an AgentDesk task or `task.md`, identifying ambiguity, missing acceptance details, scope mismatches, and ways future agents could diverge from the user's intent.

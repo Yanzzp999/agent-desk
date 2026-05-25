@@ -41,43 +41,16 @@ AgentDesk 提供 `agent-desk-mcp` stdio server，可以被 Codex 或其他 MCP �
 
 ### 推荐安装到 Codex
 
-不需要 clone 本仓库时，可以直接通过 npm 包注册 MCP server：
-
-```sh
-codex mcp add agent-desk -- npx -y --package @pavee/agent-desk agent-desk-mcp
-```
-
-这个方式适合多项目使用：调用 MCP tools 时显式传入 `projectRoot`，每个项目都会使用
-自己的 `<project>/task/` 和 `<project>/.agent-desk/` 状态目录。
-
-如果希望某个 MCP server 默认绑定到一个固定项目，可以注册时加上环境变量：
-
-```sh
-codex mcp add agent-desk-my-project \
-  --env AGENT_DESK_PROJECT_ROOT=/absolute/path/to/your/project \
-  -- npx -y --package @pavee/agent-desk agent-desk-mcp
-```
-
-也可以用一键安装脚本：
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/Yanzzp999/agent-desk/master/scripts/install-mcp.sh | sh
-```
-
-固定项目：
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/Yanzzp999/agent-desk/master/scripts/install-mcp.sh | sh -s -- /absolute/path/to/your/project
-```
-
-本地开发时，在本仓库执行一次依赖安装，然后把本地 MCP server 注册到 Codex：
+AgentDesk 目前先按本地 checkout 使用。先安装依赖，然后把本地 MCP server 注册到 Codex：
 
 ```sh
 npm install
 codex mcp add agent-desk -- node "$(pwd)/bin/agent-desk-mcp.mjs"
 ```
 
-本地开发固定项目：
+这个方式适合多项目使用：调用 MCP tools 时显式传入 `projectRoot`，每个项目都会使用自己的 `<project>/task/` 和 `<project>/.agent-desk/` 状态目录。
+
+如果希望某个 MCP server 默认绑定到一个固定项目，可以注册时加上环境变量：
 
 ```sh
 codex mcp add agent-desk-my-project \
@@ -90,12 +63,6 @@ codex mcp add agent-desk-my-project \
 ```sh
 codex mcp get agent-desk
 npm test
-```
-
-如果想让本机 shell 也能直接运行 `verunectl` 和 `agent-desk-mcp`，可以在本仓库执行：
-
-```sh
-npm link
 ```
 
 ```json
@@ -118,7 +85,7 @@ npm link
 
 ## 内置 Codex Skills
 
-这个包会随 npm 发布四个可选 Codex skill 定义，位于 `skills/`：
+本仓库内置四个可选 Codex skill 定义，位于 `skills/`：
 
 - `skills/generate-agentdesk-task/SKILL.md`：把显式用户需求转成 AgentDesk control-plane task。它会先审查需求是否足以生成可执行的 `task.md`；如果目标、范围、验收或关键约束等阻塞信息缺失，会先反问用户补充，再创建 task。
 - `skills/review-agentdesk-task/SKILL.md`：对某个 AgentDesk task 或 `task.md` 做实现前只读审查，找出歧义、缺失验收、范围偏差，以及后续 agent 可能偏离用户意图的地方。
