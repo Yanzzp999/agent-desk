@@ -19,6 +19,15 @@ import {
   listTaskMarkdownFiles,
   readTaskMarkdownFile,
 } from "./task-files.mjs";
+import {
+  claimOverallTask,
+  createOverallTask,
+  dispatchOverallTask,
+  getOverallTask,
+  listOverallTasks,
+  serializeAgentDeskError,
+  updateOverallTask,
+} from "./overall-tasks.mjs";
 
 export function createAgentDeskMcpServer(options = {}) {
   const server = new McpServer({
@@ -266,6 +275,144 @@ export function createAgentDeskMcpServer(options = {}) {
     return toolResult(result, result.markdown || `Read AgentDesk task: ${result.taskId}`);
   });
 
+  server.registerTool("create_overall_task", {
+    title: "Create Overall Task",
+    description: "Create a day/week/month overall task backed by SQLite. This is separate from markdown checklist item claims.",
+    inputSchema: {
+      title: z.string().min(1).describe("Overall task title."),
+      description: z.string().optional().describe("Optional overall task description."),
+      taskType: z.string().optional().describe("Task type. Use coding when projectRoot is required."),
+      periodType: z.enum(["day", "week", "month"]).optional().describe("Overall task period type."),
+      periodKey: z.string().optional().describe("Canonical period key: YYYY-MM-DD, YYYY-Www, or YYYY-MM."),
+      status: overallTaskStatusSchema().optional().describe("Overall task workflow status."),
+      priority: z.union([z.string(), z.number()]).optional().describe("Priority label or numeric priority."),
+      assignee: z.string().optional().describe("Optional assignee."),
+      projectRoot: z.string().optional().describe("Coding project root. Defaults to the MCP context project root."),
+      branch: z.string().optional().describe("Optional target branch."),
+      dueAt: z.string().optional().describe("Optional due date/time."),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await createOverallTask(context, args);
+    return {
+      payload: result,
+      text: `Created overall task ${result.task.title} (${result.task.overallTaskId})`,
+    };
+  }));
+
+  server.registerTool("list_overall_tasks", {
+    title: "List Overall Tasks",
+    description: "List day/week/month overall tasks with UI-ready SQLite state.",
+    inputSchema: {
+      periodType: z.enum(["day", "week", "month"]).optional().describe("Optional period type filter."),
+      periodKey: z.string().optional().describe("Optional canonical period key filter."),
+      status: overallTaskStatusSchema().optional().describe("Optional overall task status filter."),
+      assignee: z.string().optional().describe("Optional assignee filter."),
+      q: z.string().optional().describe("Optional text search."),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskListResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await listOverallTasks(context, args);
+    return {
+      payload: result,
+      text: `Found ${result.items.length} overall task(s)`,
+    };
+  }));
+
+  server.registerTool("read_overall_task", {
+    title: "Read Overall Task",
+    description: "Read one overall task, including claim, dispatch, session, and audit state.",
+    inputSchema: {
+      overallTaskId: z.string().min(1).describe("Overall task id."),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await getOverallTask(context, args.overallTaskId);
+    return {
+      payload: result,
+      text: `Read overall task ${result.task.title} (${result.task.overallTaskId})`,
+    };
+  }));
+
+  server.registerTool("update_overall_task", {
+    title: "Update Overall Task",
+    description: "Update overall task metadata or workflow status. This does not change markdown checklist item status.",
+    inputSchema: {
+      overallTaskId: z.string().min(1).describe("Overall task id."),
+      title: z.string().optional(),
+      description: z.string().optional(),
+      taskType: z.string().optional(),
+      periodType: z.enum(["day", "week", "month"]).optional(),
+      periodKey: z.string().optional(),
+      status: overallTaskStatusSchema().optional(),
+      priority: z.union([z.string(), z.number()]).optional(),
+      assignee: z.string().optional(),
+      projectRoot: z.string().optional(),
+      branch: z.string().optional(),
+      dueAt: z.string().optional(),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await updateOverallTask(context, args.overallTaskId, args);
+    return {
+      payload: result,
+      text: `Updated overall task ${result.task.title} (${result.task.overallTaskId})`,
+    };
+  }));
+
+  server.registerTool("claim_overall_task", {
+    title: "Claim Overall Task",
+    description: "Claim ownership of an overall task. Checklist item claim tools remain separate.",
+    inputSchema: {
+      overallTaskId: z.string().min(1).describe("Overall task id."),
+      assignee: z.string().min(1).describe("Assignee claiming the overall task."),
+      sessionId: z.string().optional().describe("Optional session id."),
+      note: z.string().optional(),
+      force: z.boolean().optional(),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await claimOverallTask(context, args.overallTaskId, args);
+    return {
+      payload: result,
+      text: `Claimed overall task ${result.task.title} for ${result.task.assignee}`,
+    };
+  }));
+
+  server.registerTool("dispatch_overall_task", {
+    title: "Dispatch Overall Task",
+    description: "Record dispatch/session state for an overall task without modifying markdown checklist item status.",
+    inputSchema: {
+      overallTaskId: z.string().min(1).describe("Overall task id."),
+      assignee: z.string().optional().describe("Optional dispatch assignee."),
+      sessionId: z.string().min(1).describe("Dispatch/session id."),
+      branch: z.string().optional().describe("Optional target branch."),
+      target: z.string().optional().describe("Optional dispatch target."),
+      agentdeskTaskId: z.string().optional().describe("Optional AgentDesk control-plane task id."),
+      note: z.string().optional(),
+      force: z.boolean().optional(),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await dispatchOverallTask(context, args.overallTaskId, args);
+    return {
+      payload: result,
+      text: `Dispatched overall task ${result.task.title} (${result.task.overallTaskId})`,
+    };
+  }));
+
   server.registerTool("start_subagent_session", {
     title: "Start Subagent Session",
     description: "Start an AgentDesk subagent session. The main agent should use auto/current-branch when worktree isolation is unnecessary, and worktree only for parallel work that needs branch isolation. codex-cli sessions are launched by AgentDesk and block until completion by default. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
@@ -369,6 +516,19 @@ function toolResult(structuredContent, text) {
     content: [{ type: "text", text }],
     structuredContent,
   };
+}
+
+async function overallToolResult(callback) {
+  try {
+    const result = await callback();
+    return toolResult(result.payload, result.text);
+  } catch (error) {
+    const payload = {
+      ok: false,
+      error: serializeAgentDeskError(error),
+    };
+    return toolResult(payload, payload.error.message);
+  }
 }
 
 function taskItemSchema() {
@@ -519,6 +679,56 @@ function appLaunchPlanSchema() {
       prompt: z.string(),
     })),
   });
+}
+
+function overallTaskStatusSchema() {
+  return z.enum(["draft", "backlog", "ready", "claimed", "dispatched", "running", "blocked", "done", "succeeded", "failed", "canceled"]);
+}
+
+function overallTaskResultSchema() {
+  return z.object({
+    ok: z.boolean().optional(),
+    task: overallTaskSchema().optional(),
+    error: z.object({
+      code: z.string(),
+      message: z.string(),
+      details: z.object({}).passthrough().optional(),
+    }).optional(),
+  }).passthrough();
+}
+
+function overallTaskListResultSchema() {
+  return z.object({
+    ok: z.boolean().optional(),
+    period: z.string().optional(),
+    periodKey: z.string().optional(),
+    items: z.array(overallTaskSchema()).optional(),
+    summary: z.object({}).passthrough().optional(),
+    error: z.object({
+      code: z.string(),
+      message: z.string(),
+      details: z.object({}).passthrough().optional(),
+    }).optional(),
+  }).passthrough();
+}
+
+function overallTaskSchema() {
+  return z.object({
+    id: z.string(),
+    overallTaskId: z.string(),
+    taskId: z.string(),
+    title: z.string(),
+    description: z.string(),
+    taskType: z.string(),
+    periodType: z.string(),
+    periodKey: z.string(),
+    status: z.string(),
+    priority: z.number(),
+    assignee: z.string(),
+    projectRoot: z.string(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  }).passthrough();
 }
 
 function emptyAppLaunchPlan(sessionId, parallelism) {

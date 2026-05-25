@@ -26,17 +26,23 @@ test("MCP server runs markdown task tools against the launched project", async (
     await client.connect(transport);
     const expectedTools = [
       "claim_next_task_item",
+      "claim_overall_task",
       "claim_task_items",
       "complete_task_items",
       "create_agentdesk_task",
+      "create_overall_task",
       "create_task",
+      "dispatch_overall_task",
       "list_agentdesk_tasks",
+      "list_overall_tasks",
       "list_subagent_sessions",
       "list_tasks",
       "read_agentdesk_task",
+      "read_overall_task",
       "read_subagent_session",
       "read_task",
       "start_subagent_session",
+      "update_overall_task",
     ];
     const tools = await client.listTools();
     assert.deepEqual(
@@ -477,8 +483,12 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.equal(meta.subagentLauncher, "codex-cli");
     assert.equal(meta.parallelism, 12);
     assert.equal(meta.batchSize, 6);
+    const launchTokens = new Set(meta.agents.map((agent) => agent.launchToken));
+    assert.equal(launchTokens.size, meta.agents.length);
+    assert.ok(meta.agents.every((agent) => agent.launchToken.startsWith(`agentdesk-${sessionId}-${agent.id}-`)));
     assert.ok(meta.agents.every((agent) => /^fake-session-/.test(agent.codexSessionId)));
     assert.ok(meta.agents.every((agent) => agent.codexResumeCommand === `codex resume --all ${agent.codexSessionId}`));
+    assert.ok(meta.agents.every((agent) => agent.codexSessionPath.includes("rollout-")));
     assert.match(await fs.readFile(meta.agents[0].paths.taskSnapshotMd, "utf8"), /Inspect API surface/);
     assert.match(await fs.readFile(meta.agents[0].paths.memorySnapshotMd, "utf8"), /Existing MCP memory/);
     const firstPrompt = await fs.readFile(meta.agents[0].paths.promptMd, "utf8");
@@ -491,6 +501,29 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.match(firstPrompt, /Assigned subtask: Inspect API surface/);
     assert.match(firstPrompt, /Shared task memory snapshot:/);
     assert.match(firstPrompt, /Existing MCP memory/);
+    assert.match(
+      firstPrompt,
+      new RegExp(`Write valid JSON to ${escapeRegExp(meta.agents[0].paths.reportJson)} with exactly these top-level fields: summary, tests_run, risks, notes\\.`),
+    );
+    assert.match(firstPrompt, /Use a concise string for summary and arrays of strings for tests_run, risks, and notes\./);
+    assert.match(firstPrompt, /AgentDesk treats a valid report as your completion signal\./);
+
+    const read = await client.callTool({
+      name: "read_subagent_session",
+      arguments: {
+        projectRoot,
+        sessionId,
+      },
+    });
+    assert.equal(read.structuredContent.subagentLauncher, "codex-cli");
+    assert.match(read.structuredContent.docContent, /Codex resume: codex resume --all fake-session-/);
+    assert.match(read.content[0].text, /Codex resume: codex resume --all fake-session-/);
+    assert.equal(read.structuredContent.agents.length, 7);
+    for (const agent of read.structuredContent.agents) {
+      assert.match(agent.codexSessionId, /^fake-session-/);
+      assert.equal(agent.codexResumeCommand, `codex resume --all ${agent.codexSessionId}`);
+      assert.match(agent.codexSessionPath, /rollout-/);
+    }
 
     const state = JSON.parse(await fs.readFile(fakeState, "utf8"));
     assert.equal(state.maxActive <= 6, true);

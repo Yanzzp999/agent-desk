@@ -33,7 +33,7 @@ AgentDesk 围绕三个对象工作：
 
 agent 可以在实现前使用 `claim_next_task_item`；可见 marker 会记录 `agent -> sessionId`，让人和其他 agent 都能看到归属。在执行子代理前，协调模型应先评审 task 复杂度和并发编辑冲突风险，决定推荐的每批 subagent 数量并告知用户；用户仍可在配置上限内自行选择不同的并发量。
 
-AgentDesk 目前没有 GUI、Electron app 或 web runtime。受支持入口是 MCP stdio 和 `verunectl`。
+AgentDesk 也包含本地 React / Vite / TypeScript task 管理 UI。这个 web runtime 仍然服务同一套 task.md、MCP stdio、`verunectl`、session history 和 Codex subagent 编排模型；它不是 Electron shell、Next.js app，也不是旧兼容入口。
 
 ## 本地 MCP 注册
 
@@ -58,6 +58,40 @@ codex mcp add agent-desk-my-project \
 ```sh
 ./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
 ```
+
+## 本地 Web UI
+
+Web UI 首屏就是 task 管理。它包含 day/week/month 规划切换、过滤器、总体 task 列表、task 详情、创建/编辑表单、领取和分发动作、coding `projectRoot` 校验，以及最近 session 摘要。
+
+先启动本地 SQLite-backed API，再运行 Vite：
+
+```sh
+./scripts/verunectl.sh api --project /absolute/path/to/project
+npm run dev
+```
+
+Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agentdesk` 代理到 `http://127.0.0.1:19731` 上的 Node.js ESM HTTP API；API 会把总体 task 元数据、周期归属、领取/分发状态和审计事件保存在 `<project>/.agent-desk/tasks.sqlite`。
+
+预期本地 API routes：
+
+- `GET /api/agentdesk/tasks`
+- `GET /api/agentdesk/tasks/:taskId`
+- `POST /api/agentdesk/tasks`
+- `PATCH /api/agentdesk/tasks/:taskId`
+- `POST /api/agentdesk/tasks/:taskId/claim`
+- `POST /api/agentdesk/tasks/:taskId/dispatch`
+- `GET /api/agentdesk/sessions/recent`
+
+Task 和 session 请求都会携带 `projectRoot`；dispatch 继续使用文档化默认值：模型 `gpt-5.5`、reasoning `xhigh`、service tier `fast`、启动批次大小 `6`。
+
+前端检查：
+
+```sh
+npm run test:web
+npm run build
+```
+
+验证 `npm run dev` 时，先检查是否已有可访问 dev server，并优先复用。dev script 存在后，应使用 Computer Use 检查运行中的 UI；除非用户明确要求或 Computer Use 不可用，不默认改用 browser-based validation。
 
 ## 常用 CLI
 

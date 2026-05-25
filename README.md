@@ -33,7 +33,7 @@ AgentDesk is built around three objects:
 
 Agents can use `claim_next_task_item` before implementation; the visible marker records `agent -> sessionId` so people and other agents can see ownership. Before subagent execution, the coordinating model should review task complexity and concurrent-edit conflict risk, choose a recommended per-batch subagent count, and tell the user; the user can still choose a different concurrency value within the configured maximum.
 
-AgentDesk currently has no GUI, Electron app, or web runtime. The supported interfaces are MCP stdio and `verunectl`.
+AgentDesk also includes a local React/Vite/TypeScript task management UI. It is a web runtime for the same task.md, MCP stdio, `verunectl`, session history, and Codex subagent orchestration model. It is not an Electron shell, Next.js app, or legacy compatibility surface.
 
 ## Local MCP Setup
 
@@ -58,6 +58,40 @@ You can also start the same MCP server through the local CLI:
 ```sh
 ./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
 ```
+
+## Local Web UI
+
+The web UI opens directly on task management. It includes day/week/month planning, filters, an overall task list, task detail, create/edit form, claim and dispatch actions, coding `projectRoot` validation, and recent session summaries.
+
+Start the local SQLite-backed API first, then run Vite:
+
+```sh
+./scripts/verunectl.sh api --project /absolute/path/to/project
+npm run dev
+```
+
+Vite serves the app at `http://127.0.0.1:5173` by default. During development it proxies `/api/agentdesk` to the Node.js ESM HTTP API at `http://127.0.0.1:19731`; the API stores overall task metadata, period assignment, claim/dispatch state, and audit events in `<project>/.agent-desk/tasks.sqlite`.
+
+Expected local API routes:
+
+- `GET /api/agentdesk/tasks`
+- `GET /api/agentdesk/tasks/:taskId`
+- `POST /api/agentdesk/tasks`
+- `PATCH /api/agentdesk/tasks/:taskId`
+- `POST /api/agentdesk/tasks/:taskId/claim`
+- `POST /api/agentdesk/tasks/:taskId/dispatch`
+- `GET /api/agentdesk/sessions/recent`
+
+Task and session requests carry `projectRoot`; dispatch keeps the documented defaults of model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, and launch batch size `6`.
+
+Frontend checks:
+
+```sh
+npm run test:web
+npm run build
+```
+
+When validating `npm run dev`, first reuse an already-running dev server when one is reachable. After the dev script exists, use Computer Use to inspect the running UI; only use browser-based validation when explicitly requested or when Computer Use is unavailable.
 
 ## Common CLI
 
