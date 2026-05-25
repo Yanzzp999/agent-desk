@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   AGENT_DESK_STATE_DIRNAME,
   buildCodexExecArgs,
+  buildCodexInteractiveArgs,
   chooseExecutionModeForTask,
   createContext,
   createTask,
@@ -467,6 +468,37 @@ test("builds Codex exec args with selected model, reasoning, service tier, and o
     "--output-schema",
     "/tmp/schema.json",
     "-",
+  ]);
+});
+
+test("builds Codex interactive args for resumable subagents", () => {
+  const args = buildCodexInteractiveArgs({
+    cwd: "/tmp/project-worktree",
+    model: "gpt-5.5",
+    reasoning: "high",
+    serviceTier: "fast",
+    sandboxMode: "workspace-write",
+    prompt: "Implement the assigned task.",
+  });
+
+  assert.equal(args.includes("exec"), false);
+  assert.equal(args.includes("-o"), false);
+  assert.equal(args.includes("--output-schema"), false);
+  assert.deepEqual(args, [
+    "-a",
+    "never",
+    "-m",
+    "gpt-5.5",
+    "--config",
+    "model_reasoning_effort=\"high\"",
+    "--config",
+    "model_provider.service_tier=fast",
+    "-s",
+    "workspace-write",
+    "-C",
+    "/tmp/project-worktree",
+    "--no-alt-screen",
+    "Implement the assigned task.",
   ]);
 });
 

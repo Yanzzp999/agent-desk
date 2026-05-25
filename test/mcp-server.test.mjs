@@ -390,6 +390,7 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
   const fakeCodex = path.join(root, "fake-codex.mjs");
   const fakeState = path.join(root, "fake-state.json");
   const fakeLog = path.join(root, "fake-log.jsonl");
+  const codexHome = path.join(root, "codex-home");
   await fs.mkdir(projectRoot, { recursive: true });
   await initializeGitProject(projectRoot);
   await writeReadyAgentDeskTask(projectRoot, "task-mcp-cli", "MCP CLI fanout", [
@@ -409,9 +410,12 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     cwd: projectRoot,
     env: {
       ...process.env,
+      CODEX_HOME: codexHome,
       FAKE_CODEX_STATE: fakeState,
       FAKE_CODEX_LOG: fakeLog,
       FAKE_CODEX_DELAY_MS: "700",
+      AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS: "5000",
+      AGENT_DESK_CODEX_REPORT_TIMEOUT_MS: "30000",
     },
     stderr: "pipe",
   });
@@ -473,6 +477,8 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.equal(meta.subagentLauncher, "codex-cli");
     assert.equal(meta.parallelism, 12);
     assert.equal(meta.batchSize, 6);
+    assert.ok(meta.agents.every((agent) => /^fake-session-/.test(agent.codexSessionId)));
+    assert.ok(meta.agents.every((agent) => agent.codexResumeCommand === `codex resume --all ${agent.codexSessionId}`));
     assert.match(await fs.readFile(meta.agents[0].paths.taskSnapshotMd, "utf8"), /Inspect API surface/);
     assert.match(await fs.readFile(meta.agents[0].paths.memorySnapshotMd, "utf8"), /Existing MCP memory/);
     const firstPrompt = await fs.readFile(meta.agents[0].paths.promptMd, "utf8");
@@ -480,6 +486,8 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.match(firstPrompt, /Execution reasoning: xhigh/);
     assert.match(firstPrompt, /Execution mode: current-branch/);
     assert.match(firstPrompt, /Subagent launcher: codex-cli/);
+    assert.match(firstPrompt, /AgentDesk launch token: agentdesk-/);
+    assert.match(firstPrompt, /Report JSON path:/);
     assert.match(firstPrompt, /Assigned subtask: Inspect API surface/);
     assert.match(firstPrompt, /Shared task memory snapshot:/);
     assert.match(firstPrompt, /Existing MCP memory/);
@@ -489,14 +497,18 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.equal(state.maxActive < 12, true);
     assert.equal(state.maxActive > 1, true);
     const invocations = await readJsonLines(fakeLog);
-    const subagentInvocations = invocations.filter((entry) => entry.hasOutputSchema);
+    const subagentInvocations = invocations.filter((entry) => entry.interactive);
     assert.equal(subagentInvocations.length, 7);
     const invocationsByOutput = new Map(subagentInvocations.map((entry) => [entry.outputFile, entry]));
     for (const agent of meta.agents) {
       const prompt = await fs.readFile(agent.paths.promptMd, "utf8");
-      assert.equal(invocationsByOutput.get(agent.paths.reportJson)?.prompt, `${prompt}\n`);
+      assert.equal(invocationsByOutput.get(agent.paths.reportJson)?.prompt, prompt);
     }
     for (const entry of subagentInvocations) {
+      assert.equal(entry.args.includes("exec"), false);
+      assert.equal(entry.args.includes("-o"), false);
+      assert.equal(entry.args.includes("--output-schema"), false);
+      assert.equal(entry.args.includes("--no-alt-screen"), true);
       assert.equal(entry.model, "gpt-5.5");
       assert.deepEqual(entry.configs, [
         "model_reasoning_effort=\"xhigh\"",
@@ -512,6 +524,7 @@ test("MCP server reports actionable Codex CLI session failures", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-session-fail-")));
   const projectRoot = path.join(root, "project");
   const fakeCodex = path.join(root, "fake-codex.mjs");
+  const codexHome = path.join(root, "codex-home");
   await fs.mkdir(projectRoot, { recursive: true });
   await initializeGitProject(projectRoot);
   await writeReadyAgentDeskTask(projectRoot, "task-mcp-failure", "MCP failed fanout", ["Trigger fake Codex failure"]);
@@ -523,7 +536,10 @@ test("MCP server reports actionable Codex CLI session failures", async () => {
     cwd: projectRoot,
     env: {
       ...process.env,
+      CODEX_HOME: codexHome,
       FAKE_CODEX_FAIL_MESSAGE: "synthetic fake Codex failure",
+      AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS: "5000",
+      AGENT_DESK_CODEX_REPORT_TIMEOUT_MS: "30000",
     },
     stderr: "pipe",
   });
@@ -1109,63 +1125,140 @@ if (args.includes("--version")) {
 }
 
 const execIndex = args.indexOf("exec");
-if (execIndex === -1) {
-  console.error("unsupported fake codex command: " + args.join(" "));
-  process.exit(2);
+if (execIndex !== -1) {
+  await runExecInvocation(args.slice(execIndex));
+} else {
+  await runInteractiveInvocation();
 }
 
-const execArgs = args.slice(execIndex);
-const outputFile = argAfter("-o", execArgs);
-const outputSchemaFile = argAfter("--output-schema", execArgs);
-const prompt = await readStdin();
-await appendInvocation({
-  args,
-  cwd: process.cwd(),
-  model: argAfter("-m", execArgs),
-  configs: valuesAfter("-c", execArgs),
-  outputFile,
-  hasOutputSchema: Boolean(outputSchemaFile),
-  prompt,
-});
+async function runExecInvocation(execArgs) {
+  const outputFile = argAfter("-o", execArgs);
+  const outputSchemaFile = argAfter("--output-schema", execArgs);
+  const prompt = await readStdin();
+  await appendInvocation({
+    args,
+    cwd: process.cwd(),
+    model: argAfter("-m", execArgs),
+    configs: valuesAfter("-c", execArgs),
+    outputFile,
+    hasOutputSchema: Boolean(outputSchemaFile),
+    interactive: false,
+    prompt,
+  });
 
-await incrementActive();
-try {
-  await sleep(Number(process.env.FAKE_CODEX_DELAY_MS || 200));
-  if (process.env.FAKE_CODEX_FAIL_MESSAGE) {
-    throw new Error(process.env.FAKE_CODEX_FAIL_MESSAGE);
+  await incrementActive();
+  try {
+    await sleep(Number(process.env.FAKE_CODEX_DELAY_MS || 200));
+    if (process.env.FAKE_CODEX_FAIL_MESSAGE && outputSchemaFile) {
+      throw new Error(process.env.FAKE_CODEX_FAIL_MESSAGE);
+    }
+    await fs.mkdir(path.dirname(outputFile), { recursive: true });
+    if (outputSchemaFile) {
+      await writeFakeSubagentReport(outputFile, prompt);
+    } else {
+      await fs.writeFile(outputFile, [
+        "# Generated MCP Control Plane Task",
+        "",
+        "## Goal",
+        "Validate AgentDesk control-plane task generation from a Codex-produced markdown document.",
+        "",
+        "## Context",
+        "This deterministic fake Codex response exercises create/list/read task behavior without a live Codex dependency.",
+        "",
+        "## Acceptance Criteria",
+        "- Task generation writes task.md.",
+        "- list_agentdesk_tasks reports the generated task as ready.",
+        "- read_agentdesk_task returns the generated markdown and task memory.",
+        "",
+        "## Subtasks",
+        "- [ ] Inspect create_agentdesk_task generation",
+        "- [ ] Verify list_agentdesk_tasks summary fields",
+        "- [ ] Read generated task.md content",
+        "",
+      ].join("\\n"), "utf8");
+    }
+  } finally {
+    await decrementActive();
   }
-  await fs.mkdir(path.dirname(outputFile), { recursive: true });
-  if (outputSchemaFile) {
-    await fs.writeFile(outputFile, JSON.stringify({
-      summary: "completed via fake Codex",
-      tests_run: ["fake codex"],
-      risks: [],
-      notes: ["Prompt length " + prompt.length],
-    }, null, 2) + "\\n", "utf8");
-  } else {
-    await fs.writeFile(outputFile, [
-      "# Generated MCP Control Plane Task",
-      "",
-      "## Goal",
-      "Validate AgentDesk control-plane task generation from a Codex-produced markdown document.",
-      "",
-      "## Context",
-      "This deterministic fake Codex response exercises create/list/read task behavior without a live Codex dependency.",
-      "",
-      "## Acceptance Criteria",
-      "- Task generation writes task.md.",
-      "- list_agentdesk_tasks reports the generated task as ready.",
-      "- read_agentdesk_task returns the generated markdown and task memory.",
-      "",
-      "## Subtasks",
-      "- [ ] Inspect create_agentdesk_task generation",
-      "- [ ] Verify list_agentdesk_tasks summary fields",
-      "- [ ] Read generated task.md content",
-      "",
-    ].join("\\n"), "utf8");
+}
+
+async function runInteractiveInvocation() {
+  const prompt = String(args[args.length - 1] || "");
+  const outputFile = reportPathFromPrompt(prompt);
+  const launchToken = launchTokenFromPrompt(prompt);
+  const agentId = agentIdFromOutput(outputFile);
+  const codexSessionId = await writeFakeRollout(prompt, launchToken, agentId);
+  await appendInvocation({
+    args,
+    cwd: process.cwd(),
+    model: argAfter("-m", args),
+    configs: valuesAfter("-c", args),
+    outputFile,
+    hasOutputSchema: false,
+    interactive: true,
+    codexSessionId,
+    prompt,
+  });
+
+  await incrementActive();
+  try {
+    await sleep(Number(process.env.FAKE_CODEX_DELAY_MS || 200));
+    if (process.env.FAKE_CODEX_FAIL_MESSAGE) {
+      throw new Error(process.env.FAKE_CODEX_FAIL_MESSAGE);
+    }
+    await fs.mkdir(path.dirname(outputFile), { recursive: true });
+    await writeFakeSubagentReport(outputFile, prompt);
+  } finally {
+    await decrementActive();
   }
-} finally {
-  await decrementActive();
+}
+
+async function writeFakeSubagentReport(outputFile, prompt) {
+  await fs.writeFile(outputFile, JSON.stringify({
+    summary: "completed via fake Codex",
+    tests_run: ["fake codex"],
+    risks: [],
+    notes: ["Prompt length " + prompt.length],
+  }, null, 2) + "\\n", "utf8");
+}
+
+function reportPathFromPrompt(prompt) {
+  const match = String(prompt || "").match(/^Report JSON path:\\s*(.+)$/m);
+  return match ? match[1].trim() : "";
+}
+
+function launchTokenFromPrompt(prompt) {
+  const match = String(prompt || "").match(/^AgentDesk launch token:\\s*(\\S+)$/m);
+  return match ? match[1] : "";
+}
+
+function agentIdFromOutput(outputFile) {
+  const parts = String(outputFile || "").split(path.sep);
+  const index = parts.lastIndexOf("agents");
+  return index === -1 ? "agent-unknown" : parts[index + 1] || "agent-unknown";
+}
+
+async function writeFakeRollout(prompt, launchToken, agentId) {
+  const now = new Date();
+  const iso = now.toISOString();
+  const sessionId = "fake-session-" + agentId + "-" + process.pid + "-" + now.getTime();
+  const home = process.env.CODEX_HOME || path.join(process.cwd(), ".fake-codex-home");
+  const dir = path.join(
+    home,
+    "sessions",
+    String(now.getUTCFullYear()),
+    String(now.getUTCMonth() + 1).padStart(2, "0"),
+    String(now.getUTCDate()).padStart(2, "0"),
+  );
+  const file = path.join(dir, "rollout-" + now.getTime() + "-" + sessionId + ".jsonl");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(file, [
+    JSON.stringify({ timestamp: iso, type: "session_meta", payload: { id: sessionId, cwd: process.cwd(), originator: "codex-tui", timestamp: iso } }),
+    JSON.stringify({ timestamp: iso, type: "turn_context", payload: { cwd: process.cwd() } }),
+    JSON.stringify({ timestamp: iso, type: "event_msg", payload: { type: "user_message", message: prompt, launchToken } }),
+    "",
+  ].join("\\n"), "utf8");
+  return sessionId;
 }
 
 function argAfter(flag, sourceArgs = args) {

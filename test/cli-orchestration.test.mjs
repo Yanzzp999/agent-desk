@@ -68,6 +68,7 @@ test("verunectl uses readable English directory ids for Chinese task and session
   const projectRoot = path.join(root, "project");
   const worktreesRoot = path.join(root, "worktrees");
   const fakeCodex = path.join(root, "fake-codex.mjs");
+  const codexHome = path.join(root, "codex-home");
   const fakeState = path.join(root, "fake-state.json");
   const fakeLog = path.join(root, "fake-log.jsonl");
 
@@ -78,6 +79,7 @@ test("verunectl uses readable English directory ids for Chinese task and session
   const env = {
     ...process.env,
     CODEX_CLI: fakeCodex,
+    CODEX_HOME: codexHome,
     FAKE_CODEX_STATE: fakeState,
     FAKE_CODEX_LOG: fakeLog,
   };
@@ -148,6 +150,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   const fakeCodex = path.join(root, "fake-codex.mjs");
   const fakeState = path.join(root, "fake-state.json");
   const fakeLog = path.join(root, "fake-log.jsonl");
+  const codexHome = path.join(root, "codex-home");
 
   await fs.mkdir(projectRoot, { recursive: true });
   await writeFakeCodex(fakeCodex);
@@ -156,9 +159,12 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   const env = {
     ...process.env,
     CODEX_CLI: fakeCodex,
+    CODEX_HOME: codexHome,
     FAKE_CODEX_STATE: fakeState,
     FAKE_CODEX_LOG: fakeLog,
     FAKE_CODEX_DELAY_MS: "2500",
+    AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS: "5000",
+    AGENT_DESK_CODEX_REPORT_TIMEOUT_MS: "30000",
   };
 
   const taskCreate = await run(process.execPath, [
@@ -284,6 +290,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.match(sessionDoc, /- Subagent launcher: codex-cli/);
   assert.match(sessionDoc, /- Parallelism: 2/);
   assert.match(sessionDoc, /- Batch size: 6/);
+  assert.match(sessionDoc, /- Codex resume: codex resume --all fake-session-/);
 
   for (const agent of sessionMeta.agents) {
     const taskSnapshot = await fs.readFile(agent.paths.taskSnapshotMd, "utf8");
@@ -297,6 +304,9 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
     assert.match(prompt, /Execution reasoning: high/);
     assert.match(prompt, /Execution mode: worktree/);
     assert.match(prompt, /Subagent launcher: codex-cli/);
+    assert.match(prompt, /AgentDesk launch token: agentdesk-/);
+    assert.match(prompt, new RegExp(`Report JSON path: ${escapeRegExp(agent.paths.reportJson)}`));
+    assert.match(prompt, /Write valid JSON/);
     assert.match(prompt, new RegExp(`Assigned subtask: ${escapeRegExp(agent.title)}`));
     assert.match(prompt, new RegExp(`Task markdown snapshot: ${escapeRegExp(agent.paths.taskSnapshotMd)}`));
     assert.match(prompt, new RegExp(`Shared memory snapshot: ${escapeRegExp(agent.paths.memorySnapshotMd)}`));
@@ -308,6 +318,9 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
     assert.deepEqual(report.risks, []);
     assert.match(report.notes[0], /^Prompt length \d+$/);
     assert.deepEqual(agent.testsRun, ["fake codex"]);
+    assert.match(agent.codexSessionId, /^fake-session-/);
+    assert.equal(agent.codexResumeCommand, `codex resume --all ${agent.codexSessionId}`);
+    assert.match(agent.codexSessionPath, /rollout-/);
   }
 
   const taskMemory = await fs.readFile(taskMeta.paths.memoryMd, "utf8");
@@ -316,14 +329,18 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.match(taskMemory, /Notes: Prompt length/);
 
   const invocations = await readJsonLines(fakeLog);
-  const subagentInvocations = invocations.filter((entry) => entry.hasOutputSchema);
+  const subagentInvocations = invocations.filter((entry) => entry.interactive);
   assert.equal(subagentInvocations.length, 3);
   const invocationsByOutput = new Map(subagentInvocations.map((entry) => [entry.outputFile, entry]));
   for (const agent of sessionMeta.agents) {
     const prompt = await fs.readFile(agent.paths.promptMd, "utf8");
-    assert.equal(invocationsByOutput.get(agent.paths.reportJson)?.prompt, `${prompt}\n`);
+    assert.equal(invocationsByOutput.get(agent.paths.reportJson)?.prompt, prompt);
   }
   for (const entry of subagentInvocations) {
+    assert.equal(entry.args.includes("exec"), false);
+    assert.equal(entry.args.includes("-o"), false);
+    assert.equal(entry.args.includes("--output-schema"), false);
+    assert.equal(entry.args.includes("--no-alt-screen"), true);
     assert.equal(entry.model, "gpt-5.5");
     assert.deepEqual(entry.configs, [
       "model_reasoning_effort=\"high\"",
@@ -340,6 +357,7 @@ test("verunectl records failed Codex CLI subagents without completing checklist 
   const projectRoot = path.join(root, "project");
   const worktreesRoot = path.join(root, "worktrees");
   const fakeCodex = path.join(root, "fake-codex.mjs");
+  const codexHome = path.join(root, "codex-home");
   const taskId = "task-cli-failure-status";
 
   await fs.mkdir(projectRoot, { recursive: true });
@@ -368,7 +386,10 @@ test("verunectl records failed Codex CLI subagents without completing checklist 
     env: {
       ...process.env,
       CODEX_CLI: fakeCodex,
+      CODEX_HOME: codexHome,
       FAKE_CODEX_FAIL_MESSAGE: "synthetic fake Codex failure",
+      AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS: "5000",
+      AGENT_DESK_CODEX_REPORT_TIMEOUT_MS: "30000",
     },
   });
 
@@ -412,6 +433,7 @@ test("worktree sessions push integrated master to its upstream", { timeout: 6000
   const worktreesRoot = path.join(root, "worktrees");
   const fakeCodex = path.join(root, "fake-codex.mjs");
   const fakeLog = path.join(root, "fake-log.jsonl");
+  const codexHome = path.join(root, "codex-home");
   const taskId = "task-cli-worktree-push";
 
   await fs.mkdir(projectRoot, { recursive: true });
@@ -446,8 +468,11 @@ test("worktree sessions push integrated master to its upstream", { timeout: 6000
     env: {
       ...process.env,
       CODEX_CLI: fakeCodex,
+      CODEX_HOME: codexHome,
       FAKE_CODEX_LOG: fakeLog,
       FAKE_CODEX_DELAY_MS: "100",
+      AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS: "5000",
+      AGENT_DESK_CODEX_REPORT_TIMEOUT_MS: "30000",
     },
   });
 
@@ -494,6 +519,7 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   const worktreesRoot = path.join(root, "worktrees");
   const fakeCodex = path.join(root, "fake-codex.mjs");
   const fakeLog = path.join(root, "fake-log.jsonl");
+  const codexHome = path.join(root, "codex-home");
   const taskId = "task-cli-fallback";
 
   await fs.mkdir(projectRoot, { recursive: true });
@@ -504,8 +530,11 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   const env = {
     ...process.env,
     CODEX_CLI: fakeCodex,
+    CODEX_HOME: codexHome,
     FAKE_CODEX_LOG: fakeLog,
     FAKE_CODEX_DELAY_MS: "100",
+    AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS: "5000",
+    AGENT_DESK_CODEX_REPORT_TIMEOUT_MS: "30000",
   };
   const commandOptions = { cwd: REPO_ROOT, env };
   const realProjectRoot = await fs.realpath(projectRoot);
@@ -649,6 +678,12 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   );
   assert.match(cliShow.docContent, /Subagent launcher: codex-cli/);
   assert.match(cliShow.docContent, /Status: succeeded/);
+  assert.match(cliShow.docContent, /Codex resume: codex resume --all fake-session-/);
+  for (const agent of cliShow.agents) {
+    assert.match(agent.codexSessionId, /^fake-session-/);
+    assert.equal(agent.codexResumeCommand, `codex resume --all ${agent.codexSessionId}`);
+    assert.match(agent.codexSessionPath, /rollout-/);
+  }
 
   const finalListResult = await run(process.execPath, [
     VERUNECTL,
@@ -671,15 +706,21 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   assert.equal(byLauncher.get("codex-cli").succeededAgents, 3);
 
   const invocations = await readJsonLines(fakeLog);
-  const subagentInvocations = invocations.filter((entry) => entry.hasOutputSchema);
+  const subagentInvocations = invocations.filter((entry) => entry.interactive);
   assert.equal(subagentInvocations.length, 3);
   assert.deepEqual(
     subagentInvocations.map((entry) => entry.cwd),
     [realProjectRoot, realProjectRoot, realProjectRoot],
   );
   for (const entry of subagentInvocations) {
+    assert.equal(entry.args.includes("exec"), false);
+    assert.equal(entry.args.includes("-o"), false);
+    assert.equal(entry.args.includes("--output-schema"), false);
+    assert.equal(entry.args.includes("--no-alt-screen"), true);
     assert.equal(entry.model, "gpt-5.5");
     assert.match(entry.prompt, /Subagent launcher: codex-cli/);
+    assert.match(entry.prompt, /Report JSON path:/);
+    assert.match(entry.prompt, /AgentDesk launch token: agentdesk-/);
     assert.match(entry.prompt, /You are one AgentDesk implementation subagent running in the shared current checkout\./);
     assert.match(entry.prompt, /No separate git worktree was created/);
   }
@@ -690,6 +731,7 @@ test("verunectl allocates unique task ids and blocks duplicate active sessions",
   const projectRoot = path.join(root, "project");
   const worktreesRoot = path.join(root, "worktrees");
   const fakeCodex = path.join(root, "fake-codex.mjs");
+  const codexHome = path.join(root, "codex-home");
 
   await fs.mkdir(projectRoot, { recursive: true });
   await writeFakeCodex(fakeCodex);
@@ -698,7 +740,10 @@ test("verunectl allocates unique task ids and blocks duplicate active sessions",
   const env = {
     ...process.env,
     CODEX_CLI: fakeCodex,
+    CODEX_HOME: codexHome,
     FAKE_CODEX_DELAY_MS: "300",
+    AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS: "5000",
+    AGENT_DESK_CODEX_REPORT_TIMEOUT_MS: "30000",
   };
 
   const taskCreates = await Promise.all([
@@ -914,63 +959,134 @@ if (args[0] === "debug" && args[1] === "models") {
 }
 
 const execIndex = args.indexOf("exec");
-if (execIndex === -1) {
-  console.error("unsupported fake codex command: " + args.join(" "));
-  process.exit(2);
+if (execIndex !== -1) {
+  await runExecInvocation(args.slice(execIndex));
+} else {
+  await runInteractiveInvocation();
 }
 
-const execArgs = args.slice(execIndex);
-const outputFile = argAfter("-o", execArgs);
-const outputSchemaFile = argAfter("--output-schema", execArgs);
-const prompt = await readStdin();
-await appendInvocation({
-  args,
-  cwd: process.cwd(),
-  model: argAfter("-m", execArgs),
-  configs: valuesAfter("-c", execArgs),
-  outputFile,
-  hasOutputSchema: Boolean(outputSchemaFile),
-  prompt,
-});
+async function runExecInvocation(execArgs) {
+  const outputFile = argAfter("-o", execArgs);
+  const outputSchemaFile = argAfter("--output-schema", execArgs);
+  const prompt = await readStdin();
+  await appendInvocation({
+    args,
+    cwd: process.cwd(),
+    model: argAfter("-m", execArgs),
+    configs: valuesAfter("-c", execArgs),
+    outputFile,
+    hasOutputSchema: Boolean(outputSchemaFile),
+    interactive: false,
+    prompt,
+  });
 
-await incrementActive();
-try {
-  await sleep(Number(process.env.FAKE_CODEX_DELAY_MS || 0));
-  if (process.env.FAKE_CODEX_FAIL_MESSAGE && outputSchemaFile) {
-    throw new Error(process.env.FAKE_CODEX_FAIL_MESSAGE);
+  await incrementActive();
+  try {
+    await sleep(Number(process.env.FAKE_CODEX_DELAY_MS || 0));
+    if (process.env.FAKE_CODEX_FAIL_MESSAGE && outputSchemaFile) {
+      throw new Error(process.env.FAKE_CODEX_FAIL_MESSAGE);
+    }
+    await fs.mkdir(path.dirname(outputFile), { recursive: true });
+    if (outputSchemaFile) {
+      const agentId = agentIdFromOutput(outputFile);
+      await writeFakeSubagentReport(outputFile, agentId, prompt);
+    } else {
+      await fs.writeFile(outputFile, [
+        "# CLI configured orchestration",
+        "",
+        "## Goal",
+        "Prove AgentDesk runs as a CLI-only Codex orchestrator.",
+        "",
+        "## Context",
+        "Generated by fake Codex for deterministic tests.",
+        "",
+        "## Acceptance Criteria",
+        "- Configured model, reasoning, and concurrency are honored.",
+        "",
+        "## Subtasks",
+        "- [ ] Implement CLI config plumbing",
+        "- [ ] Persist session config",
+        "- [ ] Verify concurrent Codex CLI cap",
+        "",
+      ].join("\\n"), "utf8");
+    }
+  } finally {
+    await decrementActive();
   }
-  await fs.mkdir(path.dirname(outputFile), { recursive: true });
-  if (outputSchemaFile) {
-    const agentId = agentIdFromOutput(outputFile);
-    await fs.writeFile(path.join(process.cwd(), agentId + ".txt"), "completed " + agentId + "\\n", "utf8");
-    await fs.writeFile(outputFile, JSON.stringify({
-      summary: agentId + " completed via fake Codex",
-      tests_run: ["fake codex"],
-      risks: [],
-      notes: ["Prompt length " + prompt.length],
-    }, null, 2) + "\\n", "utf8");
-  } else {
-    await fs.writeFile(outputFile, [
-      "# CLI configured orchestration",
-      "",
-      "## Goal",
-      "Prove AgentDesk runs as a CLI-only Codex orchestrator.",
-      "",
-      "## Context",
-      "Generated by fake Codex for deterministic tests.",
-      "",
-      "## Acceptance Criteria",
-      "- Configured model, reasoning, and concurrency are honored.",
-      "",
-      "## Subtasks",
-      "- [ ] Implement CLI config plumbing",
-      "- [ ] Persist session config",
-      "- [ ] Verify concurrent Codex CLI cap",
-      "",
-    ].join("\\n"), "utf8");
+}
+
+async function runInteractiveInvocation() {
+  const prompt = String(args[args.length - 1] || "");
+  const outputFile = reportPathFromPrompt(prompt);
+  const agentId = agentIdFromOutput(outputFile);
+  const launchToken = launchTokenFromPrompt(prompt);
+  const codexSessionId = await writeFakeRollout(prompt, launchToken, agentId);
+  await appendInvocation({
+    args,
+    cwd: process.cwd(),
+    model: argAfter("-m", args),
+    configs: valuesAfter("-c", args),
+    outputFile,
+    hasOutputSchema: false,
+    interactive: true,
+    codexSessionId,
+    prompt,
+  });
+
+  await incrementActive();
+  try {
+    await sleep(Number(process.env.FAKE_CODEX_DELAY_MS || 0));
+    if (process.env.FAKE_CODEX_FAIL_MESSAGE) {
+      throw new Error(process.env.FAKE_CODEX_FAIL_MESSAGE);
+    }
+    await fs.mkdir(path.dirname(outputFile), { recursive: true });
+    await writeFakeSubagentReport(outputFile, agentId, prompt);
+  } finally {
+    await decrementActive();
   }
-} finally {
-  await decrementActive();
+}
+
+async function writeFakeSubagentReport(outputFile, agentId, prompt) {
+  await fs.writeFile(path.join(process.cwd(), agentId + ".txt"), "completed " + agentId + "\\n", "utf8");
+  await fs.writeFile(outputFile, JSON.stringify({
+    summary: agentId + " completed via fake Codex",
+    tests_run: ["fake codex"],
+    risks: [],
+    notes: ["Prompt length " + prompt.length],
+  }, null, 2) + "\\n", "utf8");
+}
+
+function reportPathFromPrompt(prompt) {
+  const match = String(prompt || "").match(/^Report JSON path:\\s*(.+)$/m);
+  return match ? match[1].trim() : "";
+}
+
+function launchTokenFromPrompt(prompt) {
+  const match = String(prompt || "").match(/^AgentDesk launch token:\\s*(\\S+)$/m);
+  return match ? match[1] : "";
+}
+
+async function writeFakeRollout(prompt, launchToken, agentId) {
+  const now = new Date();
+  const iso = now.toISOString();
+  const sessionId = "fake-session-" + agentId + "-" + process.pid + "-" + now.getTime();
+  const home = process.env.CODEX_HOME || path.join(process.cwd(), ".fake-codex-home");
+  const dir = path.join(
+    home,
+    "sessions",
+    String(now.getUTCFullYear()),
+    String(now.getUTCMonth() + 1).padStart(2, "0"),
+    String(now.getUTCDate()).padStart(2, "0"),
+  );
+  const file = path.join(dir, "rollout-" + now.getTime() + "-" + sessionId + ".jsonl");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(file, [
+    JSON.stringify({ timestamp: iso, type: "session_meta", payload: { id: sessionId, cwd: process.cwd(), originator: "codex-tui", timestamp: iso } }),
+    JSON.stringify({ timestamp: iso, type: "turn_context", payload: { cwd: process.cwd() } }),
+    JSON.stringify({ timestamp: iso, type: "event_msg", payload: { type: "user_message", message: prompt, launchToken } }),
+    "",
+  ].join("\\n"), "utf8");
+  return sessionId;
 }
 
 function argAfter(flag, sourceArgs = args) {

@@ -3,8 +3,10 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import pty from "node-pty";
 import {
   CODEX_REASONING_EFFORT_OPTIONS,
   discoverCodexModels,
@@ -42,6 +44,9 @@ const SUPPORTED_REASONING_EFFORTS = new Set(
   CODEX_REASONING_EFFORT_OPTIONS.map((option) => option.value).filter(Boolean),
 );
 const SUBAGENT_REPORT_SCHEMA_PATH = path.join(CONTROL_PLANE_ROOT, "src", "lib", "subagent-report.schema.json");
+const CODEX_SESSION_DISCOVERY_TIMEOUT_MS = 15 * 1000;
+const CODEX_SUBAGENT_REPORT_TIMEOUT_MS = 30 * 60 * 1000;
+const CODEX_INTERACTIVE_EXIT_GRACE_MS = 1500;
 const DIRECTORY_SLUG_STOP_WORDS = new Set([
   "a",
   "an",
@@ -792,9 +797,13 @@ async function prepareCodexAppSession(context, task, sessionId) {
       title: item.title,
       detail: item.detail,
       status: "prepared_for_app",
+      launchToken: buildAgentLaunchToken(sessionId, agentId),
       branchName,
       worktreePath: context.projectRoot,
       baseCommit,
+      codexSessionId: "",
+      codexSessionPath: "",
+      codexResumeCommand: "",
       headCommit: "",
       mergedCommit: "",
       changedFiles: [],
@@ -896,9 +905,13 @@ export async function runSessionJob(context, sessionId) {
       title: item.title,
       detail: item.detail,
       status: "queued",
+      launchToken: buildAgentLaunchToken(sessionId, agentId),
       branchName,
       worktreePath,
       baseCommit: "",
+      codexSessionId: "",
+      codexSessionPath: "",
+      codexResumeCommand: "",
       headCommit: "",
       mergedCommit: "",
       changedFiles: [],
@@ -993,11 +1006,14 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
     await fsp.mkdir(agent.paths.agentDir, { recursive: true });
     await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
     await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
+    await fsp.rm(agent.paths.reportJson, { force: true });
 
     created = await prepareAgentWorktree(context, agent);
+    const launchToken = agent.launchToken || buildAgentLaunchToken(sessionId, agent.id);
     const { taskMarkdown, taskMemory } = await readAgentContextSnapshots(context, task, agent);
     await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, {
       ...agent,
+      launchToken,
       worktreePath: created.worktreePath,
       branchName: created.branchName,
       baseCommit: created.baseCommit,
@@ -1009,22 +1025,29 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
       worktreePath: created.worktreePath,
       branchName: created.branchName,
       baseCommit: created.baseCommit,
+      launchToken,
       startedAt: new Date().toISOString(),
       lastError: "",
     });
     await refreshSessionCounts(context, sessionId);
 
-    const result = await runCodexPrompt({
+    const result = await runCodexInteractivePrompt({
       context,
+      sessionId,
+      agentId: agent.id,
+      launchToken,
       cwd: created.worktreePath,
       model: session.model || DEFAULT_SUBAGENT_MODEL,
       reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
       serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
       prompt,
-      outputFile: agent.paths.reportJson,
+      reportJson: agent.paths.reportJson,
       stdoutLog: agent.paths.stdoutLog,
       stderrLog: agent.paths.stderrLog,
-      outputSchemaFile: SUBAGENT_REPORT_SCHEMA_PATH,
+      onSessionDiscovered: async (codexSession) => {
+        await patchSessionAgent(context, sessionId, agent.id, codexSession);
+        await writeSessionDocumentation(context, sessionId);
+      },
     });
     if (result.exitCode !== 0) {
       throw new Error(describeCommandFailure(result, `subagent ${agent.id} failed`));
@@ -1040,6 +1063,9 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
       status: "succeeded",
       completedAt: new Date().toISOString(),
       exitCode: result.exitCode,
+      codexSessionId: result.codexSessionId || "",
+      codexSessionPath: result.codexSessionPath || "",
+      codexResumeCommand: result.codexResumeCommand || "",
       summary: normalizedReport.summary,
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
@@ -1077,13 +1103,16 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
     await fsp.mkdir(agent.paths.agentDir, { recursive: true });
     await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
     await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
+    await fsp.rm(agent.paths.reportJson, { force: true });
 
     const baseCommit = await gitRevParse(context.projectRoot, "HEAD");
     const branchName = await gitCurrentBranch(context.projectRoot).catch(() => "current-branch");
     const filesBefore = await listCurrentBranchChangedFiles(context.projectRoot);
+    const launchToken = agent.launchToken || buildAgentLaunchToken(sessionId, agent.id);
     const { taskMarkdown, taskMemory } = await readAgentContextSnapshots(context, task, agent);
     await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, {
       ...agent,
+      launchToken,
       branchName,
       worktreePath: context.projectRoot,
       baseCommit,
@@ -1095,22 +1124,29 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
       worktreePath: context.projectRoot,
       branchName,
       baseCommit,
+      launchToken,
       startedAt: new Date().toISOString(),
       lastError: "",
     });
     await refreshSessionCounts(context, sessionId);
 
-    const result = await runCodexPrompt({
+    const result = await runCodexInteractivePrompt({
       context,
+      sessionId,
+      agentId: agent.id,
+      launchToken,
       cwd: context.projectRoot,
       model: session.model || DEFAULT_SUBAGENT_MODEL,
       reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
       serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
       prompt,
-      outputFile: agent.paths.reportJson,
+      reportJson: agent.paths.reportJson,
       stdoutLog: agent.paths.stdoutLog,
       stderrLog: agent.paths.stderrLog,
-      outputSchemaFile: SUBAGENT_REPORT_SCHEMA_PATH,
+      onSessionDiscovered: async (codexSession) => {
+        await patchSessionAgent(context, sessionId, agent.id, codexSession);
+        await writeSessionDocumentation(context, sessionId);
+      },
     });
     if (result.exitCode !== 0) {
       throw new Error(describeCommandFailure(result, `current-branch subagent ${agent.id} failed`));
@@ -1125,6 +1161,9 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
       status: "succeeded",
       completedAt: new Date().toISOString(),
       exitCode: result.exitCode,
+      codexSessionId: result.codexSessionId || "",
+      codexSessionPath: result.codexSessionPath || "",
+      codexResumeCommand: result.codexResumeCommand || "",
       summary: normalizedReport.summary,
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
@@ -1638,6 +1677,10 @@ function buildAgentPaths(agentDir) {
   };
 }
 
+function buildAgentLaunchToken(sessionId, agentId) {
+  return `agentdesk-${sessionId}-${agentId}-${crypto.randomUUID()}`;
+}
+
 async function writeAgentContextSnapshots(agent, taskMarkdown, taskMemory) {
   await fsp.mkdir(agent.paths.agentDir, { recursive: true });
   await Promise.all([
@@ -1668,11 +1711,13 @@ async function writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session,
 }
 
 function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent) {
+  const launchToken = agent.launchToken || buildAgentLaunchToken(sessionId, agent.id);
   return [
     "You are one AgentDesk execution subagent working in your own git worktree.",
     "",
     `Task ID: ${task.taskId}`,
     `Session ID: ${sessionId}`,
+    `AgentDesk launch token: ${launchToken}`,
     `Execution model: ${session.model || DEFAULT_SUBAGENT_MODEL}`,
     `Execution reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
     `Execution mode: ${getSessionExecutionMode(session)}`,
@@ -1680,6 +1725,7 @@ function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId,
     `Assigned subtask: ${agent.title}`,
     `Branch: ${agent.branchName}`,
     `Worktree: ${agent.worktreePath}`,
+    `Report JSON path: ${agent.paths.reportJson}`,
     "",
     "Context snapshot files:",
     `- Task markdown snapshot: ${agent.paths.taskSnapshotMd}`,
@@ -1697,7 +1743,10 @@ function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId,
     "",
     "Before you finish:",
     "- Leave the branch ready for the orchestrator to integrate.",
-    "- Include concise notes about tests and remaining risks in the final response.",
+    `- Write valid JSON to ${agent.paths.reportJson} with exactly these top-level fields: summary, tests_run, risks, notes.`,
+    "- Use a concise string for summary and arrays of strings for tests_run, risks, and notes.",
+    "- Write the report only after implementation and validation are complete; AgentDesk treats a valid report as your completion signal.",
+    "- After writing the report, give a brief final response with tests and remaining risks.",
     "",
     ...(session.launchPrompt
       ? [
@@ -1715,11 +1764,13 @@ function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId,
 }
 
 function buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent) {
+  const launchToken = agent.launchToken || buildAgentLaunchToken(sessionId, agent.id);
   return [
     "You are one AgentDesk implementation subagent running in the shared current checkout.",
     "",
     `Task ID: ${task.taskId}`,
     `Session ID: ${sessionId}`,
+    `AgentDesk launch token: ${launchToken}`,
     `Execution model: ${session.model || DEFAULT_SUBAGENT_MODEL}`,
     `Execution reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
     `Execution mode: ${getSessionExecutionMode(session)}`,
@@ -1727,6 +1778,7 @@ function buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, sessio
     `Assigned subtask: ${agent.title}`,
     `Current branch: ${agent.branchName}`,
     `Project root: ${agent.worktreePath}`,
+    `Report JSON path: ${agent.paths.reportJson}`,
     "",
     "Context snapshot files:",
     `- Task markdown snapshot: ${agent.paths.taskSnapshotMd}`,
@@ -1738,7 +1790,7 @@ function buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, sessio
     "- No separate git worktree was created because the main agent judged worktree isolation unnecessary for this session.",
     "- Do not create or switch branches, stage files, commit, rebase, merge, or delete worktrees.",
     "- Avoid files outside the assigned subtask scope, especially when other subagents may be running in the same checkout.",
-    "- Do not edit .agent-desk state files; AgentDesk owns snapshots, logs, and report output.",
+    `- Do not edit .agent-desk state files except the required report JSON path: ${agent.paths.reportJson}`,
     "- Treat the context snapshots in this prompt as the complete launch context; do not resume a parent Codex conversation.",
     "- Run the narrowest meaningful self-tests before finishing.",
     "- Keep your changes scoped and production-oriented.",
@@ -1746,7 +1798,10 @@ function buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, sessio
     "",
     "Before you finish:",
     "- Leave current-branch changes unstaged for the main agent or caller to review.",
-    "- Include concise notes about tests, changed areas, and remaining risks in the final response.",
+    `- Write valid JSON to ${agent.paths.reportJson} with exactly these top-level fields: summary, tests_run, risks, notes.`,
+    "- Use a concise string for summary and arrays of strings for tests_run, risks, and notes.",
+    "- Write the report only after implementation and validation are complete; AgentDesk treats a valid report as your completion signal.",
+    "- After writing the report, give a brief final response with tests, changed areas, and remaining risks.",
     "",
     ...(session.launchPrompt
       ? [
@@ -1868,6 +1923,15 @@ export function renderSessionDocument(session, task) {
     }
     if (agent.paths?.promptMd) {
       lines.push(`- Prompt snapshot: ${agent.paths.promptMd}`);
+    }
+    if (agent.codexSessionId) {
+      lines.push(`- Codex session: ${agent.codexSessionId}`);
+    }
+    if (agent.codexResumeCommand) {
+      lines.push(`- Codex resume: ${agent.codexResumeCommand}`);
+    }
+    if (agent.codexSessionPath) {
+      lines.push(`- Codex session file: ${agent.codexSessionPath}`);
     }
     lines.push(`- Started: ${agent.startedAt || "-"}`);
     lines.push(`- Completed: ${agent.completedAt || "-"}`);
@@ -2111,6 +2175,25 @@ export function buildCodexExecArgs(options = {}) {
   return args;
 }
 
+export function buildCodexInteractiveArgs(options = {}) {
+  return [
+    "-a",
+    "never",
+    "-m",
+    options.model || DEFAULT_SUBAGENT_MODEL,
+    "--config",
+    `model_reasoning_effort="${options.reasoning || DEFAULT_SUBAGENT_REASONING}"`,
+    "--config",
+    `model_provider.service_tier=${options.serviceTier || DEFAULT_SERVICE_TIER}`,
+    "-s",
+    options.sandboxMode || "danger-full-access",
+    "-C",
+    options.cwd,
+    "--no-alt-screen",
+    String(options.prompt || ""),
+  ];
+}
+
 async function runCodexPrompt(options) {
   const args = buildCodexExecArgs(options);
   return spawnStreamingCapture(options.context.codexCli || "codex", args, {
@@ -2119,6 +2202,503 @@ async function runCodexPrompt(options) {
     stdoutLog: options.stdoutLog,
     stderrLog: options.stderrLog,
   });
+}
+
+async function runCodexInteractivePrompt(options) {
+  const command = options.context.codexCli || "codex";
+  const args = buildCodexInteractiveArgs(options);
+  const ptyCommand = resolvePtyCommand(command, args);
+  const startedAtMs = Date.now();
+  const discoveryTimeoutMs = envDurationMs(
+    "AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS",
+    CODEX_SESSION_DISCOVERY_TIMEOUT_MS,
+  );
+  const reportTimeoutMs = envDurationMs("AGENT_DESK_CODEX_REPORT_TIMEOUT_MS", CODEX_SUBAGENT_REPORT_TIMEOUT_MS);
+  const sessionsRoot = path.join(codexHomeDir(), "sessions");
+  const launchToken = String(options.launchToken || "");
+  const priorSessionFiles = await snapshotCodexSessionFiles(sessionsRoot);
+  let terminal;
+  try {
+    terminal = pty.spawn(ptyCommand.command, ptyCommand.args, {
+      name: "xterm-256color",
+      cols: 120,
+      rows: 30,
+      cwd: options.cwd || process.cwd(),
+      env: {
+        ...process.env,
+        TERM: process.env.TERM || "xterm-256color",
+      },
+    });
+  } catch (error) {
+    const message = `failed to launch Codex PTY session: ${error.message}; falling back to non-PTY spawn`;
+    appendFileSyncSafe(options.stderrLog, `${message}\n`);
+    return runCodexInteractiveSpawnFallback({
+      ...options,
+      args: ptyCommand.args,
+      command: ptyCommand.command,
+      startedAtMs,
+      discoveryTimeoutMs,
+      reportTimeoutMs,
+      sessionsRoot,
+      priorSessionFiles,
+      initialStderr: message,
+    });
+  }
+
+  let stdout = "";
+  let stderr = "";
+  let exited = false;
+  let exitInfo = { exitCode: null, signal: null };
+  let codexSession = null;
+  let sessionDiscoveryExpired = false;
+  let checking = false;
+  let settled = false;
+
+  terminal.onData((data) => {
+    stdout += data;
+    appendFileSyncSafe(options.stdoutLog, data);
+  });
+
+  const exitPromise = new Promise((resolve) => {
+    terminal.onExit((event) => {
+      exited = true;
+      exitInfo = {
+        exitCode: event.exitCode ?? 0,
+        signal: event.signal ?? null,
+      };
+      resolve(exitInfo);
+    });
+  });
+
+  return new Promise((resolve) => {
+    const settle = async (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearInterval(interval);
+      resolve(result);
+    };
+
+    const interval = setInterval(() => {
+      if (checking || settled) {
+        return;
+      }
+      checking = true;
+      void (async () => {
+        try {
+          if (!codexSession && launchToken && Date.now() - startedAtMs <= discoveryTimeoutMs) {
+            codexSession = await findCodexSessionByLaunchToken(launchToken, {
+              sessionsRoot,
+              priorSessionFiles,
+              startedAtMs,
+            });
+            if (codexSession) {
+              await options.onSessionDiscovered?.(codexSession);
+            }
+          } else if (!codexSession && !sessionDiscoveryExpired && Date.now() - startedAtMs > discoveryTimeoutMs) {
+            sessionDiscoveryExpired = true;
+            appendFileSyncSafe(
+              options.stderrLog,
+              `timed out discovering Codex session for ${options.agentId || "subagent"}\n`,
+            );
+          }
+
+          const report = await readJsonSafe(options.reportJson);
+          if (report && typeof report === "object") {
+            if (!codexSession && launchToken) {
+              codexSession = await findCodexSessionByLaunchToken(launchToken, {
+                sessionsRoot,
+                priorSessionFiles,
+                startedAtMs,
+              });
+              if (codexSession) {
+                await options.onSessionDiscovered?.(codexSession);
+              }
+            }
+            await stopCodexInteractivePty(terminal, exitPromise, () => exited, options.stderrLog);
+            await settle({
+              exitCode: 0,
+              signal: null,
+              stdout,
+              stderr,
+              ...(codexSession || {}),
+            });
+            return;
+          }
+
+          if (exited) {
+            const message = `Codex exited before writing a valid report JSON: ${options.reportJson}`;
+            appendFileSyncSafe(options.stderrLog, `${message}\n`);
+            await settle({
+              exitCode: exitInfo.exitCode || 1,
+              signal: exitInfo.signal,
+              stdout,
+              stderr: `${stderr}${stderr ? "\n" : ""}${message}`,
+              ...(codexSession || {}),
+            });
+            return;
+          }
+
+          if (Date.now() - startedAtMs > reportTimeoutMs) {
+            const message = `timed out waiting for subagent report JSON: ${options.reportJson}`;
+            appendFileSyncSafe(options.stderrLog, `${message}\n`);
+            await killCodexInteractivePty(terminal, exitPromise, () => exited);
+            await settle({
+              exitCode: 1,
+              signal: null,
+              stdout,
+              stderr: `${stderr}${stderr ? "\n" : ""}${message}`,
+              ...(codexSession || {}),
+            });
+          }
+        } finally {
+          checking = false;
+        }
+      })();
+    }, 250);
+  });
+}
+
+async function runCodexInteractiveSpawnFallback(options) {
+  const child = spawn(options.command, options.args, {
+    cwd: options.cwd || process.cwd(),
+    env: {
+      ...process.env,
+      TERM: process.env.TERM || "xterm-256color",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let stdout = "";
+  let stderr = options.initialStderr || "";
+  let exited = false;
+  let exitInfo = { exitCode: null, signal: null };
+  let codexSession = null;
+  let sessionDiscoveryExpired = false;
+  let checking = false;
+  let settled = false;
+  const launchToken = String(options.launchToken || "");
+
+  child.stdout.on("data", (chunk) => {
+    const text = chunk.toString();
+    stdout += text;
+    appendFileSyncSafe(options.stdoutLog, text);
+  });
+  child.stderr.on("data", (chunk) => {
+    const text = chunk.toString();
+    stderr += `${stderr ? "\n" : ""}${text}`;
+    appendFileSyncSafe(options.stderrLog, text);
+  });
+
+  const exitPromise = new Promise((resolve) => {
+    child.on("error", (error) => {
+      exited = true;
+      exitInfo = { exitCode: 1, signal: null };
+      stderr += `${stderr ? "\n" : ""}${error.message}`;
+      resolve(exitInfo);
+    });
+    child.on("close", (exitCode, signal) => {
+      exited = true;
+      exitInfo = {
+        exitCode: exitCode ?? 1,
+        signal,
+      };
+      resolve(exitInfo);
+    });
+  });
+
+  return new Promise((resolve) => {
+    const settle = async (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearInterval(interval);
+      resolve(result);
+    };
+
+    const interval = setInterval(() => {
+      if (checking || settled) {
+        return;
+      }
+      checking = true;
+      void (async () => {
+        try {
+          if (!codexSession && launchToken && Date.now() - options.startedAtMs <= options.discoveryTimeoutMs) {
+            codexSession = await findCodexSessionByLaunchToken(launchToken, {
+              sessionsRoot: options.sessionsRoot,
+              priorSessionFiles: options.priorSessionFiles,
+              startedAtMs: options.startedAtMs,
+            });
+            if (codexSession) {
+              await options.onSessionDiscovered?.(codexSession);
+            }
+          } else if (!codexSession && !sessionDiscoveryExpired && Date.now() - options.startedAtMs > options.discoveryTimeoutMs) {
+            sessionDiscoveryExpired = true;
+            appendFileSyncSafe(
+              options.stderrLog,
+              `timed out discovering Codex session for ${options.agentId || "subagent"}\n`,
+            );
+          }
+
+          const report = await readJsonSafe(options.reportJson);
+          if (report && typeof report === "object") {
+            if (!codexSession && launchToken) {
+              codexSession = await findCodexSessionByLaunchToken(launchToken, {
+                sessionsRoot: options.sessionsRoot,
+                priorSessionFiles: options.priorSessionFiles,
+                startedAtMs: options.startedAtMs,
+              });
+              if (codexSession) {
+                await options.onSessionDiscovered?.(codexSession);
+              }
+            }
+            await killSpawnedProcess(child, exitPromise, () => exited);
+            await settle({
+              exitCode: 0,
+              signal: null,
+              stdout,
+              stderr,
+              ...(codexSession || {}),
+            });
+            return;
+          }
+
+          if (exited) {
+            const message = `Codex exited before writing a valid report JSON: ${options.reportJson}`;
+            appendFileSyncSafe(options.stderrLog, `${message}\n`);
+            await settle({
+              exitCode: exitInfo.exitCode || 1,
+              signal: exitInfo.signal,
+              stdout,
+              stderr: `${stderr}${stderr ? "\n" : ""}${message}`,
+              ...(codexSession || {}),
+            });
+            return;
+          }
+
+          if (Date.now() - options.startedAtMs > options.reportTimeoutMs) {
+            const message = `timed out waiting for subagent report JSON: ${options.reportJson}`;
+            appendFileSyncSafe(options.stderrLog, `${message}\n`);
+            await killSpawnedProcess(child, exitPromise, () => exited);
+            await settle({
+              exitCode: 1,
+              signal: null,
+              stdout,
+              stderr: `${stderr}${stderr ? "\n" : ""}${message}`,
+              ...(codexSession || {}),
+            });
+          }
+        } finally {
+          checking = false;
+        }
+      })();
+    }, 250);
+  });
+}
+
+async function killSpawnedProcess(child, exitPromise, isExited) {
+  if (!isExited()) {
+    child.kill("SIGTERM");
+  }
+  await Promise.race([
+    exitPromise,
+    sleep(1000),
+  ]);
+}
+
+function resolvePtyCommand(command, args) {
+  const executablePath = resolveExecutablePath(command);
+  const shebang = executablePath ? readShebang(executablePath) : "";
+  if (!shebang) {
+    return { command, args };
+  }
+  const parts = splitShebang(shebang);
+  if (parts.length === 0) {
+    return { command, args };
+  }
+  return {
+    command: parts[0],
+    args: [...parts.slice(1), executablePath, ...args],
+  };
+}
+
+function resolveExecutablePath(command) {
+  const value = String(command || "");
+  if (!value) {
+    return "";
+  }
+  if (value.includes(path.sep) || path.isAbsolute(value)) {
+    return path.resolve(value);
+  }
+  for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
+    if (!dir) {
+      continue;
+    }
+    const candidate = path.join(dir, value);
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile()) {
+        return candidate;
+      }
+    } catch {
+      // Keep searching PATH.
+    }
+  }
+  return "";
+}
+
+function readShebang(filePath) {
+  try {
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(256);
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      const firstLine = buffer.subarray(0, bytesRead).toString("utf8").split(/\r?\n/, 1)[0] || "";
+      return firstLine.startsWith("#!") ? firstLine.slice(2).trim() : "";
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+}
+
+function splitShebang(shebang) {
+  const parts = String(shebang || "").match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+  return parts.map((part) => part.replace(/^["']|["']$/g, ""));
+}
+
+function codexHomeDir() {
+  return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+}
+
+function envDurationMs(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function codexResumeCommand(sessionId) {
+  return sessionId ? `codex resume --all ${sessionId}` : "";
+}
+
+async function snapshotCodexSessionFiles(sessionsRoot) {
+  const files = await collectCodexSessionFiles(sessionsRoot);
+  return new Map(files.map((file) => [file.filePath, file.mtimeMs]));
+}
+
+async function findCodexSessionByLaunchToken(launchToken, options = {}) {
+  const files = await collectCodexSessionFiles(options.sessionsRoot);
+  const candidates = files.filter((file) => {
+    const priorMtime = options.priorSessionFiles?.get(file.filePath);
+    if (priorMtime === undefined) {
+      return file.mtimeMs >= options.startedAtMs - 5000;
+    }
+    return file.mtimeMs > priorMtime;
+  });
+  for (const file of candidates) {
+    const content = await fsp.readFile(file.filePath, "utf8").catch(() => "");
+    if (!content.includes(launchToken)) {
+      continue;
+    }
+    const sessionId = readCodexSessionId(content) || codexSessionIdFromPath(file.filePath);
+    return {
+      codexSessionId: sessionId,
+      codexSessionPath: file.filePath,
+      codexResumeCommand: codexResumeCommand(sessionId),
+    };
+  }
+  return null;
+}
+
+async function collectCodexSessionFiles(sessionsRoot) {
+  const root = path.resolve(sessionsRoot || path.join(codexHomeDir(), "sessions"));
+  const rootStat = await fsp.stat(root).catch(() => null);
+  if (!rootStat?.isDirectory()) {
+    return [];
+  }
+  const files = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    const entries = await fsp.readdir(current, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(entryPath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      const stat = await fsp.stat(entryPath).catch(() => null);
+      if (stat?.isFile()) {
+        files.push({
+          filePath: entryPath,
+          mtimeMs: stat.mtimeMs,
+        });
+      }
+    }
+  }
+  return files.sort((left, right) => right.mtimeMs - left.mtimeMs);
+}
+
+function readCodexSessionId(content) {
+  for (const line of String(content || "").split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const event = JSON.parse(line);
+      if (event?.type === "session_meta" && event.payload?.id) {
+        return String(event.payload.id);
+      }
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function codexSessionIdFromPath(filePath) {
+  const base = path.basename(filePath, ".jsonl");
+  const match = base.match(/([0-9a-f]{8}-[0-9a-f-]{27,})$/i);
+  return match ? match[1] : "";
+}
+
+async function stopCodexInteractivePty(terminal, exitPromise, isExited, stderrLog) {
+  if (isExited()) {
+    return exitPromise;
+  }
+  try {
+    terminal.write("/quit\r");
+  } catch (error) {
+    appendFileSyncSafe(stderrLog, `failed to request Codex interactive exit: ${error.message}\n`);
+  }
+  const exitedGracefully = await Promise.race([
+    exitPromise.then(() => true),
+    sleep(CODEX_INTERACTIVE_EXIT_GRACE_MS).then(() => false),
+  ]);
+  if (!exitedGracefully) {
+    appendFileSyncSafe(stderrLog, "Codex interactive session did not exit after report; terminating it\n");
+    await killCodexInteractivePty(terminal, exitPromise, isExited);
+  }
+  return exitPromise;
+}
+
+async function killCodexInteractivePty(terminal, exitPromise, isExited) {
+  if (!isExited()) {
+    try {
+      terminal.kill("SIGTERM");
+    } catch {
+      // Best effort cleanup after AgentDesk has captured the completion/failure signal.
+    }
+  }
+  await Promise.race([
+    exitPromise,
+    sleep(1000),
+  ]);
 }
 
 function normalizeSubagentReport(report) {

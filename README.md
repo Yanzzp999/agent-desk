@@ -97,6 +97,8 @@ Useful session commands:
 
 Defaults: model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, execution mode `auto`, launch batch size `6`, and maximum parallelism `6`.
 
+`codex-cli` subagents are launched as resumable interactive Codex CLI sessions. `sessions show` and `session.md` include each agent's `codex resume --all <sessionId>` command; from the original cwd, the same session can also be continued with bare `codex resume <sessionId>`.
+
 ## State Layout
 
 Each project stores AgentDesk state inside the project, while persistent worktrees live under the user home directory.
@@ -134,6 +136,8 @@ Each project stores AgentDesk state inside the project, while persistent worktre
 ```
 
 `taskId` and `sessionId` are stable references for paths, commands, worktrees, and MCP lookups. `memory.md` preserves shared task context across sessions, and `session.md` is regenerated as agents finish.
+
+Each CLI-run agent writes `report.json` when implementation and validation are complete. Agent metadata also records `codexSessionId`, `codexSessionPath`, and `codexResumeCommand` for read-only inspection and manual continuation.
 
 Detailed skills, MCP tools, task format, and verification notes are in [docs/reference.md](docs/reference.md). Runtime behavior details are in [docs/design.md](docs/design.md).
 
