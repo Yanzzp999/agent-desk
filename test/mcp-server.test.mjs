@@ -512,7 +512,7 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
       assert.equal(entry.model, "gpt-5.5");
       assert.deepEqual(entry.configs, [
         "model_reasoning_effort=\"xhigh\"",
-        "model_provider.service_tier=fast",
+        "service_tier=fast",
       ]);
     }
   } finally {
@@ -716,7 +716,7 @@ test("MCP create_agentdesk_task requires confirmation for similar tasks", async 
     assert.equal(generationInvocation.model, "gpt-5.5");
     assert.deepEqual(generationInvocation.configs, [
       "model_reasoning_effort=\"xhigh\"",
-      "model_provider.service_tier=fast",
+      "service_tier=fast",
     ]);
     assert.match(generationInvocation.prompt, /Write markdown only/);
     assert.match(generationInvocation.prompt, /Task title hint: MCP duplicate guard/);
