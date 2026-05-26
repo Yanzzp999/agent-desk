@@ -42,7 +42,7 @@
     "secret-scan": "gitleaks git --redact --verbose ."
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
