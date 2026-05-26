@@ -16,6 +16,7 @@ test("npm package includes bundled Codex skills", async () => {
 
   for (const skillName of [
     "claim-agentdesk-task",
+    "codexapp-direct-subagents",
     "generate-agentdesk-task",
     "review-agentdesk-task",
     "run-agentdesk-subagents",
@@ -45,10 +46,11 @@ test("sync-codex-skills copies bundled skills to CODEX_HOME", async () => {
   });
 
   assert.equal(result.exitCode, 0, result.stderr);
-  assert.match(result.stdout, /Synced 4 Codex skill\(s\)/);
+  assert.match(result.stdout, /Synced 5 Codex skill\(s\)/);
 
   for (const skillName of [
     "claim-agentdesk-task",
+    "codexapp-direct-subagents",
     "generate-agentdesk-task",
     "review-agentdesk-task",
     "run-agentdesk-subagents",
@@ -117,6 +119,21 @@ test("run-agentdesk-subagents skill documents bounded concurrency and app handof
   assert.match(skill, /user-selected value/);
   assert.match(skill, /Never launch more subagents at once than `parallelism`/);
   assert.match(skill, /only the Codex App host can actually start them/);
+});
+
+test("codexapp-direct-subagents skill bypasses AgentDesk tasks by default", async () => {
+  const skill = await fs.readFile(
+    path.join(REPO_ROOT, "skills", "codexapp-direct-subagents", "SKILL.md"),
+    "utf8",
+  );
+
+  assert.match(skill, /without creating a task/);
+  assert.match(skill, /Do not create `task\.md`/);
+  assert.match(skill, /call `create_agentdesk_task`/);
+  assert.match(skill, /call `start_subagent_session`/);
+  assert.match(skill, /model: "gpt-5\.5"/);
+  assert.match(skill, /reasoning_effort: "xhigh"/);
+  assert.match(skill, /Launch at most `6` subagents/);
 });
 
 test("project docs describe model-reviewed concurrency recommendations", async () => {

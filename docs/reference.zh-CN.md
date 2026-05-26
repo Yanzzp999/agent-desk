@@ -13,6 +13,7 @@
 | `generate-agentdesk-task` | 把显式用户需求转成 AgentDesk control-plane task。它会检查 brief 是否足以生成可执行的 `task.md`，阻塞信息缺失时先反问。 |
 | `review-agentdesk-task` | 对 AgentDesk task 或 `task.md` 做实现前只读审查，重点找歧义、验收缺失、范围偏差，以及后续 agent 误解风险。 |
 | `run-agentdesk-subagents` | 基于已有 task 启动或协调 Codex CLI / Codex App 子代理。配置的 parallelism 是最大上限，不要求用满。 |
+| `codexapp-direct-subagents` | 不创建也不写入 AgentDesk task，直接下发 Codex App subagents。默认使用 `gpt-5.5`、`xhigh` reasoning，批次上限为 6。 |
 | `claim-agentdesk-task` | 原子领取一个开放的 markdown checklist item，只实现这一项，并用同一个 assignee/session 身份完成它。 |
 
 在执行子代理前，协调模型应先评审 task 复杂度和并发编辑冲突风险，决定推荐的每批 subagent 数量并告知用户。用户仍可在配置上限内自行选择不同的并发量。

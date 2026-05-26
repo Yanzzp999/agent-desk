@@ -13,6 +13,7 @@ All bundled skills are explicit-invocation only. They are the default AgentDesk 
 | `generate-agentdesk-task` | Turn an explicit user request into an AgentDesk control-plane task. It checks whether the brief is complete enough for an executable `task.md` and asks for missing blocking details before creation. |
 | `review-agentdesk-task` | Read-only pre-implementation review of an AgentDesk task or `task.md`, focused on ambiguity, missing acceptance criteria, scope mismatch, and future agent misinterpretation risk. |
 | `run-agentdesk-subagents` | Run or coordinate an existing task with Codex CLI or Codex App subagents. Configured parallelism is a maximum cap, not a requirement to use every slot. |
+| `codexapp-direct-subagents` | Directly dispatch Codex App subagents without creating or writing an AgentDesk task. Defaults to `gpt-5.5` with `xhigh` reasoning and a batch cap of 6. |
 | `claim-agentdesk-task` | Atomically claim one open markdown checklist item, implement only that item, and complete it with the same assignee/session identity. |
 
 Before subagent execution, the coordinating model should review task complexity and concurrent-edit conflict risk, choose a recommended per-batch subagent count, and tell the user. The user can still choose a different concurrency value within the configured maximum.
