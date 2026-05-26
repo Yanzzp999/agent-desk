@@ -6,9 +6,11 @@ import assert from "node:assert/strict";
 import {
   AGENT_DESK_STATE_DIRNAME,
   buildCodexExecArgs,
+  buildCodexInteractiveArgs,
   chooseExecutionModeForTask,
   createContext,
   createTask,
+  findCodexSessionByLaunchToken,
   getAgentLogs,
   getSession,
   getTask,
@@ -25,10 +27,14 @@ import {
 
 test("createContext uses project-scoped .agent-desk roots", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-context-"));
-  const context = createContext({ projectRoot });
+  const userDeskRoot = path.join(projectRoot, "home", AGENT_DESK_STATE_DIRNAME);
+  const context = createContext({ projectRoot, userDeskRoot });
 
   assert.equal(context.projectRoot, projectRoot);
   assert.equal(context.deskRoot, path.join(projectRoot, AGENT_DESK_STATE_DIRNAME));
+  assert.equal(context.userDeskRoot, userDeskRoot);
+  assert.equal(context.taskStoreDeskRoot, userDeskRoot);
+  assert.equal(context.taskStoreDbPath, "");
   assert.equal(context.tasksRoot, path.join(projectRoot, AGENT_DESK_STATE_DIRNAME, "tasks"));
   assert.equal(context.sessionsRoot, path.join(projectRoot, AGENT_DESK_STATE_DIRNAME, "sessions"));
   assert.match(context.worktreesRoot, /agent-desk\/worktrees/);
@@ -437,6 +443,9 @@ test("normalizes configurable session defaults and overrides", () => {
     serviceTier: "fast",
     executionMode: "auto",
     subagentLauncher: "codex-cli",
+    baseBranch: "",
+    worktreeIntegration: "agent-branch",
+    pushWorktreeIntegration: false,
     launchPrompt: "",
   });
 
@@ -454,6 +463,9 @@ test("normalizes configurable session defaults and overrides", () => {
     serviceTier: "fast",
     executionMode: "current-branch",
     subagentLauncher: "codex-cli",
+    baseBranch: "",
+    worktreeIntegration: "agent-branch",
+    pushWorktreeIntegration: false,
     launchPrompt: "Prefer small patches",
   });
 
@@ -513,6 +525,9 @@ reasoning = "high"
 parallelism = 3
 execution_mode = "current-branch"
 subagent_launcher = "codex-cli"
+base_branch = "agentdesk/next"
+worktree_integration = "fast-forward"
+push_worktree_integration = true
 `);
 
   assert.deepEqual(normalizeSessionRequest(parsed.session), {
@@ -522,6 +537,9 @@ subagent_launcher = "codex-cli"
     serviceTier: "fast",
     executionMode: "current-branch",
     subagentLauncher: "codex-cli",
+    baseBranch: "agentdesk/next",
+    worktreeIntegration: "fast-forward",
+    pushWorktreeIntegration: true,
     launchPrompt: "",
   });
 
@@ -530,6 +548,9 @@ subagent_launcher = "codex-cli"
   assert.match(rendered, /model = "gpt-5\.4"/);
   assert.match(rendered, /execution_mode = "current-branch"/);
   assert.match(rendered, /subagent_launcher = "codex-cli"/);
+  assert.match(rendered, /base_branch = "agentdesk\/next"/);
+  assert.match(rendered, /worktree_integration = "fast-forward"/);
+  assert.match(rendered, /push_worktree_integration = true/);
 });
 
 test("builds Codex exec args with selected model, reasoning, service tier, and output schema", () => {
@@ -565,6 +586,85 @@ test("builds Codex exec args with selected model, reasoning, service tier, and o
     outputFile: "/tmp/report.json",
     serviceTierConfigValue: "priority",
   }).includes("service_tier=\"priority\""));
+});
+
+test("builds Codex interactive args for resumable subagents", () => {
+  const args = buildCodexInteractiveArgs({
+    cwd: "/tmp/project-worktree",
+    model: "gpt-5.5",
+    reasoning: "high",
+    serviceTier: "fast",
+    sandboxMode: "workspace-write",
+    prompt: "Implement the assigned task.",
+  });
+
+  assert.equal(args.includes("exec"), false);
+  assert.equal(args.includes("-o"), false);
+  assert.equal(args.includes("--output-schema"), false);
+  assert.deepEqual(args, [
+    "-a",
+    "never",
+    "-m",
+    "gpt-5.5",
+    "--config",
+    "model_reasoning_effort=\"high\"",
+    "--config",
+    "service_tier=\"fast\"",
+    "-s",
+    "workspace-write",
+    "-C",
+    "/tmp/project-worktree",
+    "--no-alt-screen",
+    "Implement the assigned task.",
+  ]);
+});
+
+test("discovers Codex session only from launch token in user prompt records", async () => {
+  const sessionsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-codex-sessions-"));
+  const launchToken = "agentdesk-session-demo-agent-01-token";
+  const validSessionId = "fake-session-valid";
+  const trapSessionId = "fake-session-trap";
+  const validPath = path.join(sessionsRoot, "rollout-valid.jsonl");
+  const trapPath = path.join(sessionsRoot, "rollout-trap.jsonl");
+  const now = new Date().toISOString();
+
+  await fs.writeFile(validPath, [
+    JSON.stringify({ timestamp: now, type: "session_meta", payload: { id: validSessionId } }),
+    JSON.stringify({
+      timestamp: now,
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: `AgentDesk launch token: ${launchToken}` }],
+      },
+    }),
+    "",
+  ].join("\n"), "utf8");
+  await fs.writeFile(trapPath, [
+    JSON.stringify({ timestamp: now, type: "session_meta", payload: { id: trapSessionId } }),
+    JSON.stringify({
+      timestamp: now,
+      type: "response_item",
+      payload: {
+        type: "function_call_output",
+        output: `sessions show output echoed ${launchToken}`,
+      },
+    }),
+    "",
+  ].join("\n"), "utf8");
+  const newer = new Date(Date.now() + 1000);
+  await fs.utimes(trapPath, newer, newer);
+
+  const discovered = await findCodexSessionByLaunchToken(launchToken, {
+    sessionsRoot,
+    startedAtMs: Date.now() - 5000,
+    priorSessionFiles: new Map(),
+  });
+
+  assert.equal(discovered.codexSessionId, validSessionId);
+  assert.equal(discovered.codexSessionPath, validPath);
+  assert.equal(discovered.codexResumeCommand, `codex resume --all ${validSessionId}`);
 });
 
 async function writeTaskState(projectRoot, options) {

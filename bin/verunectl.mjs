@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { startAgentDeskMcpServer } from "../src/lib/mcp-server.mjs";
+import { startTaskApiServer } from "../src/lib/task-api-server.mjs";
 import {
   createContext,
   createSession,
@@ -15,6 +16,14 @@ import {
   listTasks,
   writeDefaultAgentDeskConfig,
 } from "../src/lib/control-plane.mjs";
+import {
+  claimOverallTask,
+  createOverallTask,
+  dispatchOverallTask,
+  getOverallTask,
+  listOverallTasks,
+  updateOverallTask,
+} from "../src/lib/overall-tasks.mjs";
 
 const VALUE_OPTIONS = new Set([
   "codex-cli",
@@ -34,6 +43,32 @@ const VALUE_OPTIONS = new Set([
   "task",
   "title",
   "brief",
+  "agentdesk-task",
+  "actor",
+  "api-base-path",
+  "assignee",
+  "base-branch",
+  "branch",
+  "date",
+  "description",
+  "dispatch-target",
+  "host",
+  "note",
+  "owner",
+  "period",
+  "period-key",
+  "period-type",
+  "port",
+  "priority",
+  "q",
+  "query",
+  "session",
+  "sqlite",
+  "sqlite-path",
+  "static-dir",
+  "status",
+  "task-type",
+  "worktree-integration",
   "worktrees-root",
 ]);
 
@@ -52,7 +87,10 @@ async function main() {
   }
 
   if (command === "mcp") {
-    await startAgentDeskMcpServer({ projectRoot: parsed.project });
+    await startAgentDeskMcpServer({
+      projectRoot: parsed.project,
+      taskStoreDbPath: parsed.sqlite || parsed["sqlite-path"],
+    });
     return;
   }
 
@@ -62,6 +100,7 @@ async function main() {
     worktreesRoot: parsed["worktrees-root"],
     configPath: parsed.config,
     codexCli: parsed["codex-cli"],
+    taskStoreDbPath: parsed.sqlite || parsed["sqlite-path"],
   });
 
   if (command === "tasks") {
@@ -69,8 +108,18 @@ async function main() {
     return;
   }
 
+  if (command === "overall-tasks") {
+    await handleOverallTasks(context, parsed);
+    return;
+  }
+
   if (command === "sessions") {
     await handleSessions(context, parsed);
+    return;
+  }
+
+  if (command === "api") {
+    await handleApi(context, parsed);
     return;
   }
 
@@ -155,6 +204,100 @@ function taskStatusLabel(row) {
   return row.status;
 }
 
+async function handleOverallTasks(context, parsed) {
+  const subcommand = parsed._[1] || "list";
+  if (subcommand === "list") {
+    const result = await listOverallTasks(context, {
+      ...(parsed.project ? { projectRoot: parsed.project } : {}),
+      periodType: parsed["period-type"] || parsed.period,
+      periodKey: parsed["period-key"],
+      date: parsed.date,
+      status: parsed.status,
+      assignee: parsed.assignee || parsed.owner,
+      q: parsed.q || parsed.query,
+    });
+    return output(parsed, result, () => {
+      if (result.items.length === 0) {
+        return "No overall tasks found.";
+      }
+      return formatTable(result.items, [
+        { header: "TITLE", value: (row) => row.title, maxWidth: 36 },
+        { header: "OVERALL TASK ID", value: (row) => row.overallTaskId, maxWidth: 46 },
+        { header: "PERIOD", value: (row) => `${row.periodType}:${row.periodKey}`, maxWidth: 18 },
+        { header: "STATUS", value: (row) => row.status, maxWidth: 12 },
+        { header: "ASSIGNEE", value: (row) => row.assignee || row.claim?.claimedBy || "-", maxWidth: 16 },
+        { header: "UPDATED", value: (row) => row.updatedAt || "-", maxWidth: 24 },
+      ]);
+    });
+  }
+  if (subcommand === "show") {
+    const overallTaskId = required(parsed._[2], "overall task id");
+    const result = await getOverallTask(context, overallTaskId);
+    return output(parsed, result, () => renderOverallTask(result.task));
+  }
+  if (subcommand === "create") {
+    const result = await createOverallTask(context, {
+      title: parsed.title,
+      description: parsed.description || parsed.brief,
+      taskType: parsed["task-type"] || parsed.taskType || "coding",
+      periodType: parsed["period-type"] || parsed.period || "day",
+      periodKey: parsed["period-key"],
+      date: parsed.date,
+      status: parsed.status || "ready",
+      priority: parsed.priority || "normal",
+      assignee: parsed.assignee || parsed.owner,
+      ...(parsed.project ? { projectRoot: parsed.project } : {}),
+      branch: parsed.branch,
+      actor: parsed.actor || parsed.owner || parsed.assignee,
+      sessionId: parsed.session,
+    });
+    return output(parsed, result, () => `Created overall task: ${result.task.title} (${result.task.overallTaskId})`);
+  }
+  if (subcommand === "update") {
+    const overallTaskId = required(parsed._[2], "overall task id");
+    const result = await updateOverallTask(context, overallTaskId, {
+      title: parsed.title,
+      description: parsed.description || parsed.brief,
+      taskType: parsed["task-type"] || parsed.taskType,
+      periodType: parsed["period-type"] || parsed.period,
+      periodKey: parsed["period-key"],
+      date: parsed.date,
+      status: parsed.status,
+      priority: parsed.priority,
+      assignee: parsed.assignee || parsed.owner,
+      ...(parsed.project ? { projectRoot: parsed.project } : {}),
+      branch: parsed.branch,
+      actor: parsed.actor || parsed.owner || parsed.assignee,
+      sessionId: parsed.session,
+    });
+    return output(parsed, result, () => `Updated overall task: ${result.task.title} (${result.task.overallTaskId})`);
+  }
+  if (subcommand === "claim") {
+    const overallTaskId = required(parsed._[2], "overall task id");
+    const result = await claimOverallTask(context, overallTaskId, {
+      assignee: parsed.assignee || parsed.owner,
+      sessionId: parsed.session,
+      note: parsed.note,
+      force: Boolean(parsed.force),
+    });
+    return output(parsed, result, () => `Claimed overall task: ${result.task.title} -> ${result.task.assignee}`);
+  }
+  if (subcommand === "dispatch") {
+    const overallTaskId = required(parsed._[2], "overall task id");
+    const result = await dispatchOverallTask(context, overallTaskId, {
+      assignee: parsed.assignee || parsed.owner,
+      sessionId: parsed.session,
+      branch: parsed.branch,
+      target: parsed["dispatch-target"],
+      agentdeskTaskId: parsed["agentdesk-task"],
+      note: parsed.note,
+      force: Boolean(parsed.force),
+    });
+    return output(parsed, result, () => `Dispatched overall task: ${result.task.title} (${result.task.overallTaskId})`);
+  }
+  throw new Error(`unknown overall-tasks command: ${subcommand}`);
+}
+
 async function handleSessions(context, parsed) {
   const subcommand = parsed._[1] || "list";
   if (subcommand === "list") {
@@ -200,6 +343,9 @@ async function handleSessions(context, parsed) {
       reasoning: parsed.reasoning || parsed.effort,
       executionMode: parsed["execution-mode"] || parsed.mode,
       subagentLauncher: parsed["subagent-launcher"],
+      baseBranch: parsed["base-branch"] || parsed.branch,
+      worktreeIntegration: parsed["worktree-integration"],
+      pushWorktreeIntegration: parsed["push-worktree-integration"],
       allowDuplicateSession: parsed["allow-duplicate-session"] || parsed.force,
     }));
     return output(parsed, result, () => result.requiresHostLaunch
@@ -219,6 +365,41 @@ async function handleSessions(context, parsed) {
     ].join("\n"));
   }
   throw new Error(`unknown sessions command: ${subcommand}`);
+}
+
+async function handleApi(context, parsed) {
+  const listener = await startTaskApiServer({
+    context,
+    host: parsed.host,
+    port: parsed.port,
+    sqlitePath: parsed.sqlite || parsed["sqlite-path"],
+    staticDir: parsed["static-dir"],
+    basePath: parsed["api-base-path"],
+  });
+  const payload = {
+    url: listener.url,
+    host: listener.host,
+    port: listener.port,
+    basePath: listener.basePath,
+    projectRoot: context.projectRoot,
+  };
+  if (parsed.json) {
+    console.log(JSON.stringify(payload, null, 2));
+  } else {
+    console.log(`AgentDesk task API listening on ${listener.url}`);
+    console.log("Use Vite dev proxy for the same base path, or pass --static-dir for built UI files.");
+  }
+  await waitForShutdown(listener);
+}
+
+async function waitForShutdown(listener) {
+  await new Promise((resolve) => {
+    const shutdown = () => {
+      void listener.close().finally(resolve);
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+  });
 }
 
 async function attachCodexAppLaunchPlan(context, session) {
@@ -290,6 +471,25 @@ function renderTaskCreateResult(result) {
   ].filter(Boolean).join("\n");
 }
 
+function renderOverallTask(task) {
+  return [
+    `Overall task: ${task.title}`,
+    `Overall task ID: ${task.overallTaskId}`,
+    `Period: ${task.periodType} ${task.periodKey}`,
+    `Status: ${task.status}`,
+    `Assignee: ${task.assignee || "-"}`,
+    `Project root: ${task.projectRoot || "-"}`,
+    `Claim: ${task.claim?.claimedBy || "-"}${task.claim?.sessionId ? ` (${task.claim.sessionId})` : ""}`,
+    `Dispatch: ${task.dispatch?.status || "not_dispatched"}${task.dispatch?.sessionId ? ` (${task.dispatch.sessionId})` : ""}`,
+    "",
+    task.description || task.brief || "(no description)",
+    "",
+    "## Audit",
+    "",
+    ...(task.audit || []).map((entry) => `- ${entry.at} ${entry.action}${entry.actor ? ` by ${entry.actor}` : ""}${entry.sessionId ? ` (${entry.sessionId})` : ""}`),
+  ].join("\n");
+}
+
 function parseArgs(argv) {
   const result = { _: [] };
   for (let index = 0; index < argv.length; index += 1) {
@@ -343,6 +543,13 @@ Usage:
   verunectl tasks list [--json]
   verunectl tasks show <taskId> [--json]
   verunectl tasks create [--title TEXT] [--brief TEXT] [--rebuild|--continue-similar] [--json]
+  verunectl overall-tasks list [--period day|week|month] [--period-key KEY] [--status STATUS] [--assignee NAME] [--json]
+  verunectl overall-tasks show <overallTaskId> [--json]
+  verunectl overall-tasks create --title TEXT [--description TEXT] [--period day|week|month] [--period-key KEY] [--assignee NAME] [--json]
+  verunectl overall-tasks update <overallTaskId> [--title TEXT] [--description TEXT] [--status STATUS] [--assignee NAME] [--json]
+  verunectl overall-tasks claim <overallTaskId> --assignee NAME [--session SESSION] [--note TEXT] [--force] [--json]
+  verunectl overall-tasks dispatch <overallTaskId> --session SESSION [--assignee NAME] [--branch BRANCH] [--force] [--json]
+  verunectl api [--host HOST] [--port PORT] [--api-base-path PATH] [--static-dir DIR] [--json]
   verunectl mcp [--project DIR]
   verunectl config show [--json]
   verunectl config init [--force] [--json]
@@ -354,6 +561,7 @@ Usage:
 Global options:
   --project DIR          Project root to inspect. Defaults to the current git root.
   --desk-root DIR        Override the AgentDesk state root. Default: <project>/.agent-desk.
+  --sqlite-path FILE     Override overall task SQLite DB. Default: ~/.agent-desk/tasks.sqlite.
   --config FILE          Override the AgentDesk TOML config path. Default: <desk-root>/config.toml.
   --worktrees-root DIR   Override the persistent git worktrees root.
   --codex-cli PATH       Override the Codex CLI executable path.
@@ -370,6 +578,11 @@ Session start options:
   --codex-count N        Alias for --parallel.
   --execution-mode MODE  auto, worktree, or current-branch. Default: auto.
   --subagent-launcher L  codex-cli or codex-app for current-branch mode.
+  --base-branch BRANCH   Local branch used as the base for worktree sessions. Default: current checkout branch.
+  --worktree-integration MODE
+                          agent-branch or fast-forward. Default: agent-branch.
+  --push-worktree-integration
+                          Push the configured base branch after explicit fast-forward integration.
   --allow-duplicate-session
                           Override the active-session guard for this task.
   --force                 Alias for --allow-duplicate-session.
@@ -377,6 +590,6 @@ Session start options:
 Workflow defaults:
   Service tier: fast (mapped to the current Codex CLI service_tier id at launch).
   Launch batch size: 6.
-  Completed worktree sessions rebase onto and fast-forward master.
+  Completed worktree sessions keep subagent branches for review unless fast-forward integration is explicitly configured.
 `);
 }

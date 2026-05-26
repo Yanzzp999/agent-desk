@@ -19,6 +19,19 @@ import {
   listTaskMarkdownFiles,
   readTaskMarkdownFile,
 } from "./task-files.mjs";
+import {
+  claimOverallTask,
+  createOverallTask,
+  dispatchOverallTask,
+  getOverallTask,
+  listOverallTasks,
+  serializeAgentDeskError,
+  updateOverallTask,
+} from "./overall-tasks.mjs";
+
+const START_SUBAGENT_SESSION_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
+const START_SUBAGENT_SESSION_WAIT_POLL_MS = 1000;
+const TERMINAL_SESSION_STATUSES = new Set(["succeeded", "failed"]);
 
 export function createAgentDeskMcpServer(options = {}) {
   const server = new McpServer({
@@ -266,9 +279,147 @@ export function createAgentDeskMcpServer(options = {}) {
     return toolResult(result, result.markdown || `Read AgentDesk task: ${result.taskId}`);
   });
 
+  server.registerTool("create_overall_task", {
+    title: "Create Overall Task",
+    description: "Create a day/week/month overall task backed by SQLite. This is separate from markdown checklist item claims.",
+    inputSchema: {
+      title: z.string().min(1).describe("Overall task title."),
+      description: z.string().optional().describe("Optional overall task description."),
+      taskType: z.string().optional().describe("Task type. Use coding when projectRoot is required."),
+      periodType: z.enum(["day", "week", "month"]).optional().describe("Overall task period type."),
+      periodKey: z.string().optional().describe("Canonical period key: YYYY-MM-DD, YYYY-Www, or YYYY-MM."),
+      status: overallTaskStatusSchema().optional().describe("Overall task workflow status."),
+      priority: z.union([z.string(), z.number()]).optional().describe("Priority label or numeric priority."),
+      assignee: z.string().optional().describe("Optional assignee."),
+      projectRoot: z.string().optional().describe("Coding project root. Omit for a user-level non-coding task."),
+      branch: z.string().optional().describe("Optional target branch."),
+      dueAt: z.string().optional().describe("Optional due date/time."),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await createOverallTask(context, args);
+    return {
+      payload: result,
+      text: `Created overall task ${result.task.title} (${result.task.overallTaskId})`,
+    };
+  }));
+
+  server.registerTool("list_overall_tasks", {
+    title: "List Overall Tasks",
+    description: "List day/week/month overall tasks with UI-ready SQLite state.",
+    inputSchema: {
+      periodType: z.enum(["day", "week", "month"]).optional().describe("Optional period type filter."),
+      periodKey: z.string().optional().describe("Optional canonical period key filter."),
+      status: overallTaskStatusSchema().optional().describe("Optional overall task status filter."),
+      assignee: z.string().optional().describe("Optional assignee filter."),
+      q: z.string().optional().describe("Optional text search."),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskListResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await listOverallTasks(context, args);
+    return {
+      payload: result,
+      text: `Found ${result.items.length} overall task(s)`,
+    };
+  }));
+
+  server.registerTool("read_overall_task", {
+    title: "Read Overall Task",
+    description: "Read one overall task, including claim, dispatch, session, and audit state.",
+    inputSchema: {
+      overallTaskId: z.string().min(1).describe("Overall task id."),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await getOverallTask(context, args.overallTaskId);
+    return {
+      payload: result,
+      text: `Read overall task ${result.task.title} (${result.task.overallTaskId})`,
+    };
+  }));
+
+  server.registerTool("update_overall_task", {
+    title: "Update Overall Task",
+    description: "Update overall task metadata or workflow status. This does not change markdown checklist item status.",
+    inputSchema: {
+      overallTaskId: z.string().min(1).describe("Overall task id."),
+      title: z.string().optional(),
+      description: z.string().optional(),
+      taskType: z.string().optional(),
+      periodType: z.enum(["day", "week", "month"]).optional(),
+      periodKey: z.string().optional(),
+      status: overallTaskStatusSchema().optional(),
+      priority: z.union([z.string(), z.number()]).optional(),
+      assignee: z.string().optional(),
+      projectRoot: z.string().optional(),
+      branch: z.string().optional(),
+      dueAt: z.string().optional(),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await updateOverallTask(context, args.overallTaskId, args);
+    return {
+      payload: result,
+      text: `Updated overall task ${result.task.title} (${result.task.overallTaskId})`,
+    };
+  }));
+
+  server.registerTool("claim_overall_task", {
+    title: "Claim Overall Task",
+    description: "Claim ownership of an overall task. Checklist item claim tools remain separate.",
+    inputSchema: {
+      overallTaskId: z.string().min(1).describe("Overall task id."),
+      assignee: z.string().min(1).describe("Assignee claiming the overall task."),
+      sessionId: z.string().optional().describe("Optional session id."),
+      note: z.string().optional(),
+      force: z.boolean().optional(),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await claimOverallTask(context, args.overallTaskId, args);
+    return {
+      payload: result,
+      text: `Claimed overall task ${result.task.title} for ${result.task.assignee}`,
+    };
+  }));
+
+  server.registerTool("dispatch_overall_task", {
+    title: "Dispatch Overall Task",
+    description: "Record dispatch/session state for an overall task without modifying markdown checklist item status.",
+    inputSchema: {
+      overallTaskId: z.string().min(1).describe("Overall task id."),
+      assignee: z.string().optional().describe("Optional dispatch assignee."),
+      sessionId: z.string().min(1).describe("Dispatch/session id."),
+      branch: z.string().optional().describe("Optional target branch."),
+      target: z.string().optional().describe("Optional dispatch target."),
+      agentdeskTaskId: z.string().optional().describe("Optional AgentDesk control-plane task id."),
+      note: z.string().optional(),
+      force: z.boolean().optional(),
+      ...contextInputSchema(),
+    },
+    outputSchema: overallTaskResultSchema(),
+  }, async (args) => overallToolResult(async () => {
+    const context = createMcpContext(args, options);
+    const result = await dispatchOverallTask(context, args.overallTaskId, args);
+    return {
+      payload: result,
+      text: `Dispatched overall task ${result.task.title} (${result.task.overallTaskId})`,
+    };
+  }));
+
   server.registerTool("start_subagent_session", {
     title: "Start Subagent Session",
-    description: "Start an AgentDesk subagent session. The main agent should use auto/current-branch when worktree isolation is unnecessary, and worktree only for parallel work that needs branch isolation. codex-cli sessions are launched by AgentDesk and block until completion by default. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
+    description: "Start an AgentDesk subagent session. The main agent should use auto/current-branch when worktree isolation is unnecessary, and worktree only for parallel work that needs branch isolation. codex-cli sessions are launched by AgentDesk and wait up to 5 minutes for completion by default. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
     inputSchema: {
       taskId: z.string().min(1).describe("Ready AgentDesk task id under <project>/.agent-desk/tasks."),
       parallelism: z.number().optional().describe("Maximum concurrent subagents. Default 6, max 24."),
@@ -276,43 +427,67 @@ export function createAgentDeskMcpServer(options = {}) {
       reasoning: z.enum(["low", "medium", "high", "xhigh"]).optional().describe("Codex reasoning effort. Default: xhigh."),
       executionMode: z.enum(["auto", "worktree", "current-branch"]).optional().describe("Execution mode. Default auto lets the main agent avoid worktrees for simple or non-conflicting tasks. codex-app uses current-branch."),
       subagentLauncher: z.enum(["codex-cli", "codex-app"]).optional().describe("Subagent launcher. Default: codex-cli."),
+      baseBranch: z.string().optional().describe("Local branch used as the base for worktree sessions. Defaults to the current checkout branch."),
+      worktreeIntegration: z.enum(["agent-branch", "fast-forward"]).optional().describe("Worktree completion policy. Default agent-branch keeps completed subagent branches for review without advancing the base branch."),
+      pushWorktreeIntegration: z.boolean().optional().describe("Whether fast-forward worktree integration should push the configured base branch upstream. Default false."),
       launchPrompt: z.string().optional().describe("Optional extra launch context included in each subagent prompt."),
       waitForCompletion: z.boolean().optional().describe("For codex-cli sessions, wait for all subagents to finish before returning. Default: true."),
+      waitTimeoutMs: z.number().int().positive().optional().describe("Maximum time to keep the MCP call open while waiting for codex-cli completion. Default: 300000 ms (5 minutes). Ignored when waitForCompletion is false or subagentLauncher is codex-app."),
       allowDuplicateSession: z.boolean().optional().describe("Override the active-session guard and allow another session for the same task. Default: false."),
       force: z.boolean().optional().describe("Alias for allowDuplicateSession."),
       ...contextInputSchema(),
     },
     outputSchema: sessionStartSchema(),
-  }, async (args) => {
+  }, async (args, extra) => {
     const context = createMcpContext(args, options);
     const subagentLauncher = args.subagentLauncher || "codex-cli";
     const waitForCompletion = subagentLauncher === "codex-cli"
       ? args.waitForCompletion ?? true
       : false;
-    const result = await createSession(context, args.taskId, {
+    const waitTimeoutMs = waitForCompletion
+      ? args.waitTimeoutMs || START_SUBAGENT_SESSION_WAIT_TIMEOUT_MS
+      : 0;
+    let result = await createSession(context, args.taskId, {
       parallelism: args.parallelism,
       model: args.model,
       reasoning: args.reasoning,
       executionMode: args.executionMode || (subagentLauncher === "codex-app" ? "current-branch" : undefined),
       subagentLauncher,
+      baseBranch: args.baseBranch,
+      worktreeIntegration: args.worktreeIntegration,
+      pushWorktreeIntegration: args.pushWorktreeIntegration,
       launchPrompt: args.launchPrompt,
-      waitForCompletion,
+      waitForCompletion: false,
       allowDuplicateSession: args.allowDuplicateSession || args.force,
     });
+    let waitTimedOut = false;
+    let waitElapsedMs = 0;
+    if (waitForCompletion) {
+      const waitResult = await waitForSessionTerminal(context, result.sessionId, waitTimeoutMs, extra);
+      result = waitResult.session;
+      waitTimedOut = waitResult.timedOut;
+      waitElapsedMs = waitResult.elapsedMs;
+    }
     const appLaunchPlan = subagentLauncher === "codex-app"
       ? await getCodexAppLaunchPlan(context, result.sessionId)
       : emptyAppLaunchPlan(result.sessionId, result.parallelism);
     const payload = {
       ...result,
       requiresHostLaunch: appLaunchPlan.requiresHostLaunch,
-      waitedForCompletion: waitForCompletion,
+      waitRequested: waitForCompletion,
+      waitedForCompletion: waitForCompletion && !waitTimedOut,
+      waitTimedOut,
+      waitTimeoutMs,
+      waitElapsedMs,
       appLaunchPlan,
     };
     const text = appLaunchPlan.requiresHostLaunch
       ? `Prepared ${appLaunchPlan.subagents.length} Codex App subagent prompt(s) for session ${result.name || result.sessionId} (${result.sessionId})`
-      : waitForCompletion
-        ? `Completed AgentDesk Codex CLI session ${result.name || result.sessionId} (${result.sessionId}) with status ${result.status}`
-        : `Started AgentDesk Codex CLI session: ${result.name || result.sessionId} (${result.sessionId})`;
+      : waitTimedOut
+        ? `Started AgentDesk Codex CLI session ${result.name || result.sessionId} (${result.sessionId}); it is still ${result.status} after ${formatDuration(waitTimeoutMs)}. Use read_subagent_session to check progress.`
+        : waitForCompletion
+          ? `Completed AgentDesk Codex CLI session ${result.name || result.sessionId} (${result.sessionId}) with status ${result.status}`
+          : `Started AgentDesk Codex CLI session: ${result.name || result.sessionId} (${result.sessionId})`;
     return toolResult(payload, text);
   });
 
@@ -371,6 +546,19 @@ function toolResult(structuredContent, text) {
   };
 }
 
+async function overallToolResult(callback) {
+  try {
+    const result = await callback();
+    return toolResult(result.payload, result.text);
+  } catch (error) {
+    const payload = {
+      ok: false,
+      error: serializeAgentDeskError(error),
+    };
+    return toolResult(payload, payload.error.message);
+  }
+}
+
 function taskItemSchema() {
   return z.object({
     index: z.number(),
@@ -389,6 +577,8 @@ function createMcpContext(args = {}, options = {}) {
   return createContext({
     projectRoot: args.projectRoot || options.projectRoot,
     deskRoot: args.deskRoot,
+    taskStoreDeskRoot: args.taskStoreDeskRoot || options.taskStoreDeskRoot,
+    taskStoreDbPath: args.taskStoreDbPath || args.sqlitePath || options.taskStoreDbPath || options.sqlitePath,
     worktreesRoot: args.worktreesRoot,
     configPath: args.configPath,
     codexCli: args.codexCli,
@@ -399,6 +589,8 @@ function contextInputSchema() {
   return {
     projectRoot: z.string().optional().describe("Project root. Defaults to AGENT_DESK_PROJECT_ROOT, INIT_CWD, git root, or the MCP server working directory."),
     deskRoot: z.string().optional().describe("Override <project>/.agent-desk."),
+    taskStoreDeskRoot: z.string().optional().describe("Override the overall task store root. Default: ~/.agent-desk."),
+    taskStoreDbPath: z.string().optional().describe("Override the overall task SQLite DB path. Default: ~/.agent-desk/tasks.sqlite."),
     worktreesRoot: z.string().optional().describe("Override the persistent git worktrees root."),
     configPath: z.string().optional().describe("Override the AgentDesk TOML config path."),
     codexCli: z.string().optional().describe("Override the Codex CLI executable path."),
@@ -521,6 +713,10 @@ function sessionStartSchema() {
   return sessionSummarySchema().extend({
     requiresHostLaunch: z.boolean(),
     waitedForCompletion: z.boolean().optional(),
+    waitRequested: z.boolean().optional(),
+    waitTimedOut: z.boolean().optional(),
+    waitTimeoutMs: z.number().optional(),
+    waitElapsedMs: z.number().optional(),
     appLaunchPlan: appLaunchPlanSchema(),
   }).passthrough();
 }
@@ -551,6 +747,56 @@ function appLaunchPlanSchema() {
   });
 }
 
+function overallTaskStatusSchema() {
+  return z.enum(["draft", "backlog", "ready", "claimed", "dispatched", "running", "blocked", "done", "succeeded", "failed", "canceled"]);
+}
+
+function overallTaskResultSchema() {
+  return z.object({
+    ok: z.boolean().optional(),
+    task: overallTaskSchema().optional(),
+    error: z.object({
+      code: z.string(),
+      message: z.string(),
+      details: z.object({}).passthrough().optional(),
+    }).optional(),
+  }).passthrough();
+}
+
+function overallTaskListResultSchema() {
+  return z.object({
+    ok: z.boolean().optional(),
+    period: z.string().optional(),
+    periodKey: z.string().optional(),
+    items: z.array(overallTaskSchema()).optional(),
+    summary: z.object({}).passthrough().optional(),
+    error: z.object({
+      code: z.string(),
+      message: z.string(),
+      details: z.object({}).passthrough().optional(),
+    }).optional(),
+  }).passthrough();
+}
+
+function overallTaskSchema() {
+  return z.object({
+    id: z.string(),
+    overallTaskId: z.string(),
+    taskId: z.string(),
+    title: z.string(),
+    description: z.string(),
+    taskType: z.string(),
+    periodType: z.string(),
+    periodKey: z.string(),
+    status: z.string(),
+    priority: z.number(),
+    assignee: z.string(),
+    projectRoot: z.string(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  }).passthrough();
+}
+
 function emptyAppLaunchPlan(sessionId, parallelism) {
   return {
     sessionId,
@@ -559,4 +805,61 @@ function emptyAppLaunchPlan(sessionId, parallelism) {
     parallelism,
     subagents: [],
   };
+}
+
+async function waitForSessionTerminal(context, sessionId, timeoutMs, extra) {
+  const startedAt = Date.now();
+  let session = await getSession(context, sessionId);
+  await sendSessionWaitProgress(extra, session, 0, timeoutMs);
+  while (!TERMINAL_SESSION_STATUSES.has(session.status)) {
+    const elapsedMs = Date.now() - startedAt;
+    const remainingMs = timeoutMs - elapsedMs;
+    if (remainingMs <= 0) {
+      return { session, timedOut: true, elapsedMs };
+    }
+    await sleep(Math.min(START_SUBAGENT_SESSION_WAIT_POLL_MS, remainingMs));
+    session = await getSession(context, sessionId);
+    await sendSessionWaitProgress(extra, session, Date.now() - startedAt, timeoutMs);
+  }
+  return {
+    session,
+    timedOut: false,
+    elapsedMs: Date.now() - startedAt,
+  };
+}
+
+async function sendSessionWaitProgress(extra, session, elapsedMs, timeoutMs) {
+  const progressToken = extra?._meta?.progressToken;
+  if (progressToken === undefined || typeof extra?.sendNotification !== "function") {
+    return;
+  }
+  try {
+    await extra.sendNotification({
+      method: "notifications/progress",
+      params: {
+        progressToken,
+        progress: Math.min(elapsedMs, timeoutMs),
+        total: timeoutMs,
+        message: `AgentDesk session ${session.sessionId} is ${session.status}`,
+      },
+    });
+  } catch {
+    // Progress is best-effort; session polling should keep running if a client ignores it.
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatDuration(ms) {
+  if (ms % 60000 === 0) {
+    const minutes = ms / 60000;
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  if (ms % 1000 === 0) {
+    const seconds = ms / 1000;
+    return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  }
+  return `${ms} ms`;
 }

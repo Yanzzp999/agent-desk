@@ -3,8 +3,10 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import pty from "node-pty";
 import {
   CODEX_REASONING_EFFORT_OPTIONS,
   discoverCodexModels,
@@ -22,6 +24,8 @@ export const DEFAULT_LAUNCH_BATCH_SIZE = 6;
 export const MAX_PARALLELISM = 24;
 export const DEFAULT_EXECUTION_MODE = "auto";
 export const DEFAULT_WORKTREE_SUBAGENT_LAUNCHER = "codex-cli";
+export const DEFAULT_WORKTREE_INTEGRATION = "agent-branch";
+export const WORKTREE_INTEGRATION_MODES = Object.freeze([DEFAULT_WORKTREE_INTEGRATION, "fast-forward"]);
 export const CONCRETE_EXECUTION_MODES = Object.freeze(["worktree", "current-branch"]);
 export const EXECUTION_MODES = Object.freeze([DEFAULT_EXECUTION_MODE, ...CONCRETE_EXECUTION_MODES]);
 export const CURRENT_BRANCH_SUBAGENT_LAUNCHERS = Object.freeze(["codex-cli", "codex-app"]);
@@ -43,6 +47,9 @@ const SUPPORTED_REASONING_EFFORTS = new Set(
 );
 const SUBAGENT_REPORT_SCHEMA_PATH = path.join(CONTROL_PLANE_ROOT, "src", "lib", "subagent-report.schema.json");
 const CODEX_FAST_METADATA_CACHE = new Map();
+const CODEX_SESSION_DISCOVERY_TIMEOUT_MS = 15 * 1000;
+const CODEX_SUBAGENT_REPORT_TIMEOUT_MS = 30 * 60 * 1000;
+const CODEX_INTERACTIVE_EXIT_GRACE_MS = 1500;
 const DIRECTORY_SLUG_STOP_WORDS = new Set([
   "a",
   "an",
@@ -120,15 +127,26 @@ export function findProjectRoot(cwd = process.cwd()) {
 
 export function createContext(options = {}) {
   const projectRoot = path.resolve(options.projectRoot || findProjectRoot(options.cwd || process.cwd()));
+  const explicitDeskRoot = Boolean(normalizeOptionalString(options.deskRoot));
   const deskRoot = path.resolve(options.deskRoot || path.join(projectRoot, AGENT_DESK_STATE_DIRNAME));
+  const userDeskRoot = path.resolve(options.userDeskRoot || path.join(os.homedir(), AGENT_DESK_STATE_DIRNAME));
+  const taskStoreDeskRoot = path.resolve(
+    options.taskStoreDeskRoot || options.overallDeskRoot || (explicitDeskRoot ? deskRoot : userDeskRoot),
+  );
+  const taskStoreDbPath = normalizeOptionalString(
+    options.taskStoreDbPath || options.sqlitePath || options.dbPath,
+  );
   const projectKey = `${slug(path.basename(projectRoot))}-${shortHash(projectRoot)}`;
   const worktreesRoot = path.resolve(
-    options.worktreesRoot || path.join(os.homedir(), ".agent-desk", "worktrees", projectKey),
+    options.worktreesRoot || path.join(userDeskRoot, "worktrees", projectKey),
   );
   const configPath = path.resolve(options.configPath || options.config || path.join(deskRoot, DEFAULT_CONFIG_FILENAME));
   return {
     projectRoot,
     deskRoot,
+    userDeskRoot,
+    taskStoreDeskRoot,
+    taskStoreDbPath,
     configPath,
     tasksRoot: path.join(deskRoot, "tasks"),
     sessionsRoot: path.join(deskRoot, "sessions"),
@@ -198,9 +216,16 @@ export function renderAgentDeskConfigToml(config = {}) {
     `parallelism = ${session.parallelism}`,
     `execution_mode = ${tomlString(session.executionMode)}`,
     `subagent_launcher = ${tomlString(session.subagentLauncher)}`,
+    `base_branch = ${tomlString(session.baseBranch)}`,
+    `worktree_integration = ${tomlString(session.worktreeIntegration)}`,
+    `push_worktree_integration = ${session.pushWorktreeIntegration ? "true" : "false"}`,
     "",
     "# execution_mode = \"auto\" lets the main agent avoid worktrees for simple or non-conflicting work.",
     "# Use execution_mode = \"worktree\" when parallel branch isolation is required.",
+    "# base_branch is captured from the current checkout when omitted.",
+    "# worktree_integration = \"agent-branch\" keeps completed subagent branches for review.",
+    "# Use worktree_integration = \"fast-forward\" only when local branch advancement is desired.",
+    "# push_worktree_integration defaults to false; enabling it pushes the configured base branch upstream.",
   ].join("\n");
 }
 
@@ -286,7 +311,10 @@ export async function getRuntimeCapabilities(context) {
       sessions: {
         worktrees: true,
         currentBranchAnalysis: true,
-        masterIntegration: true,
+        branchAwareWorktrees: true,
+        defaultWorktreeIntegration: DEFAULT_WORKTREE_INTEGRATION,
+        worktreeIntegrationModes: WORKTREE_INTEGRATION_MODES,
+        pushWorktreeIntegrationDefault: false,
         batchSize: DEFAULT_LAUNCH_BATCH_SIZE,
         fixedModel: DEFAULT_SUBAGENT_MODEL,
         fixedReasoning: DEFAULT_SUBAGENT_REASONING,
@@ -588,7 +616,7 @@ export async function createSession(context, taskId, request = {}) {
     "waitForCompletion",
   );
   if (sessionRequest.executionMode === "worktree") {
-    await assertMasterBranch(context.projectRoot);
+    await assertLocalBranch(context.projectRoot, sessionRequest.baseBranch);
   }
   const allowDuplicateSession = normalizeBoolean(
     request.allowDuplicateSession ?? request.allow_duplicate_session ?? request.force,
@@ -694,6 +722,9 @@ async function createClaimedSessionMeta(context, taskId, sessionRequest, options
       executionMode: sessionRequest.executionMode,
       requestedExecutionMode: sessionRequest.requestedExecutionMode,
       subagentLauncher: sessionRequest.subagentLauncher,
+      baseBranch: sessionRequest.baseBranch,
+      worktreeIntegration: sessionRequest.worktreeIntegration,
+      pushWorktreeIntegration: sessionRequest.pushWorktreeIntegration,
       launchPrompt: sessionRequest.launchPrompt,
       worktreeDecision: sessionRequest.worktreeDecision,
       createdAt: now,
@@ -806,11 +837,19 @@ async function prepareCodexAppSession(context, task, sessionId) {
       title: item.title,
       detail: item.detail,
       status: "prepared_for_app",
+      launchToken: buildAgentLaunchToken(sessionId, agentId),
       branchName,
       worktreePath: context.projectRoot,
       baseCommit,
+      baseBranch: branchName,
+      codexSessionId: "",
+      codexSessionPath: "",
+      codexResumeCommand: "",
       headCommit: "",
       mergedCommit: "",
+      integrationMode: "current-branch",
+      integrationTarget: "",
+      pushed: false,
       changedFiles: [],
       testsRun: [],
       risks: [],
@@ -910,11 +949,19 @@ export async function runSessionJob(context, sessionId) {
       title: item.title,
       detail: item.detail,
       status: "queued",
+      launchToken: buildAgentLaunchToken(sessionId, agentId),
       branchName,
       worktreePath,
       baseCommit: "",
+      baseBranch: executionMode === "worktree" ? session.baseBranch || "" : "",
+      codexSessionId: "",
+      codexSessionPath: "",
+      codexResumeCommand: "",
       headCommit: "",
       mergedCommit: "",
+      integrationMode: "",
+      integrationTarget: "",
+      pushed: false,
       changedFiles: [],
       testsRun: [],
       risks: [],
@@ -1007,14 +1054,18 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
     await fsp.mkdir(agent.paths.agentDir, { recursive: true });
     await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
     await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
+    await fsp.rm(agent.paths.reportJson, { force: true });
 
-    created = await prepareAgentWorktree(context, agent);
+    created = await prepareAgentWorktree(context, session, agent);
+    const launchToken = agent.launchToken || buildAgentLaunchToken(sessionId, agent.id);
     const { taskMarkdown, taskMemory } = await readAgentContextSnapshots(context, task, agent);
     await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, {
       ...agent,
+      launchToken,
       worktreePath: created.worktreePath,
       branchName: created.branchName,
       baseCommit: created.baseCommit,
+      baseBranch: created.baseBranch,
     });
     const prompt = await readTextSafe(agent.paths.promptMd);
 
@@ -1023,22 +1074,30 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
       worktreePath: created.worktreePath,
       branchName: created.branchName,
       baseCommit: created.baseCommit,
+      baseBranch: created.baseBranch,
+      launchToken,
       startedAt: new Date().toISOString(),
       lastError: "",
     });
     await refreshSessionCounts(context, sessionId);
 
-    const result = await runCodexPrompt({
+    const result = await runCodexInteractivePrompt({
       context,
+      sessionId,
+      agentId: agent.id,
+      launchToken,
       cwd: created.worktreePath,
       model: session.model || DEFAULT_SUBAGENT_MODEL,
       reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
       serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
       prompt,
-      outputFile: agent.paths.reportJson,
+      reportJson: agent.paths.reportJson,
       stdoutLog: agent.paths.stdoutLog,
       stderrLog: agent.paths.stderrLog,
-      outputSchemaFile: SUBAGENT_REPORT_SCHEMA_PATH,
+      onSessionDiscovered: async (codexSession) => {
+        await patchSessionAgent(context, sessionId, agent.id, codexSession);
+        await writeSessionDocumentation(context, sessionId);
+      },
     });
     if (result.exitCode !== 0) {
       throw new Error(describeCommandFailure(result, `subagent ${agent.id} failed`));
@@ -1048,19 +1107,28 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
     const normalizedReport = normalizeSubagentReport(report);
     const commitInfo = await finalizeAgentBranch(context, created.worktreePath, created.branchName, created.baseCommit, agent.title);
     const changedFiles = await listBranchFiles(created.worktreePath, created.baseCommit);
-    const integration = await integrateBranchIntoMaster(context, created.worktreePath, created.baseCommit, commitInfo.headCommit);
+    const integration = await completeWorktreeBranch(context, created.worktreePath, created.branchName, created.baseBranch, created.baseCommit, commitInfo.headCommit, {
+      mode: session.worktreeIntegration,
+      push: session.pushWorktreeIntegration,
+    });
 
     await patchSessionAgent(context, sessionId, agent.id, {
       status: "succeeded",
       completedAt: new Date().toISOString(),
       exitCode: result.exitCode,
+      codexSessionId: result.codexSessionId || "",
+      codexSessionPath: result.codexSessionPath || "",
+      codexResumeCommand: result.codexResumeCommand || "",
       summary: normalizedReport.summary,
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
       notes: normalizedReport.notes,
       changedFiles,
       headCommit: commitInfo.headCommit,
-      mergedCommit: integration.masterCommit,
+      mergedCommit: integration.integrated ? integration.targetCommit : "",
+      integrationMode: integration.mode,
+      integrationTarget: integration.targetBranch,
+      pushed: integration.pushed,
       lastError: "",
     });
     const updatedAgent = await getSessionAgent(context, sessionId, agent.id);
@@ -1077,6 +1145,7 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
       worktreePath: created?.worktreePath || agent.worktreePath,
       branchName: created?.branchName || agent.branchName,
       baseCommit: created?.baseCommit || agent.baseCommit,
+      baseBranch: created?.baseBranch || agent.baseBranch || "",
       lastError: error.message,
     });
     const failedAgent = await getSessionAgent(context, sessionId, agent.id);
@@ -1091,13 +1160,16 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
     await fsp.mkdir(agent.paths.agentDir, { recursive: true });
     await fsp.writeFile(agent.paths.stdoutLog, "", "utf8");
     await fsp.writeFile(agent.paths.stderrLog, "", "utf8");
+    await fsp.rm(agent.paths.reportJson, { force: true });
 
     const baseCommit = await gitRevParse(context.projectRoot, "HEAD");
     const branchName = await gitCurrentBranch(context.projectRoot).catch(() => "current-branch");
     const filesBefore = await listCurrentBranchChangedFiles(context.projectRoot);
+    const launchToken = agent.launchToken || buildAgentLaunchToken(sessionId, agent.id);
     const { taskMarkdown, taskMemory } = await readAgentContextSnapshots(context, task, agent);
     await writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session, sessionId, {
       ...agent,
+      launchToken,
       branchName,
       worktreePath: context.projectRoot,
       baseCommit,
@@ -1109,22 +1181,30 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
       worktreePath: context.projectRoot,
       branchName,
       baseCommit,
+      baseBranch: branchName,
+      launchToken,
       startedAt: new Date().toISOString(),
       lastError: "",
     });
     await refreshSessionCounts(context, sessionId);
 
-    const result = await runCodexPrompt({
+    const result = await runCodexInteractivePrompt({
       context,
+      sessionId,
+      agentId: agent.id,
+      launchToken,
       cwd: context.projectRoot,
       model: session.model || DEFAULT_SUBAGENT_MODEL,
       reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
       serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
       prompt,
-      outputFile: agent.paths.reportJson,
+      reportJson: agent.paths.reportJson,
       stdoutLog: agent.paths.stdoutLog,
       stderrLog: agent.paths.stderrLog,
-      outputSchemaFile: SUBAGENT_REPORT_SCHEMA_PATH,
+      onSessionDiscovered: async (codexSession) => {
+        await patchSessionAgent(context, sessionId, agent.id, codexSession);
+        await writeSessionDocumentation(context, sessionId);
+      },
     });
     if (result.exitCode !== 0) {
       throw new Error(describeCommandFailure(result, `current-branch subagent ${agent.id} failed`));
@@ -1139,6 +1219,9 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
       status: "succeeded",
       completedAt: new Date().toISOString(),
       exitCode: result.exitCode,
+      codexSessionId: result.codexSessionId || "",
+      codexSessionPath: result.codexSessionPath || "",
+      codexResumeCommand: result.codexResumeCommand || "",
       summary: normalizedReport.summary,
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
@@ -1146,6 +1229,9 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
       changedFiles,
       headCommit,
       mergedCommit: "",
+      integrationMode: "current-branch",
+      integrationTarget: "",
+      pushed: false,
       lastError: "",
     });
     const updatedAgent = await getSessionAgent(context, sessionId, agent.id);
@@ -1154,9 +1240,13 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
       report: normalizedReport,
       changedFiles,
       integration: {
-        masterBefore: "",
-        masterCommit: "",
+        mode: "current-branch",
+        baseBranch: agent.branchName || "",
+        targetBranch: "",
+        baseBefore: "",
+        targetCommit: headCommit,
         integrated: false,
+        pushed: false,
       },
     };
   } catch (error) {
@@ -1414,6 +1504,12 @@ export function normalizeSessionRequest(request = {}) {
     serviceTier: DEFAULT_SERVICE_TIER,
     executionMode,
     subagentLauncher: normalizeSubagentLauncher(normalizedInput.subagentLauncher, executionMode),
+    baseBranch: normalizeBaseBranch(normalizedInput.baseBranch, { allowEmpty: true }),
+    worktreeIntegration: normalizeWorktreeIntegration(normalizedInput.worktreeIntegration),
+    pushWorktreeIntegration: normalizeBoolean(
+      normalizedInput.pushWorktreeIntegration,
+      "pushWorktreeIntegration",
+    ),
     launchPrompt: normalizeOptionalString(normalizedInput.launchPrompt),
   };
 }
@@ -1429,8 +1525,11 @@ async function resolveSessionRequest(context, task, request = {}) {
   });
   const taskMarkdown = task?.paths?.taskMd ? await readTextSafe(task.paths.taskMd) : "";
   const worktreeDecision = chooseExecutionModeForTask(taskMarkdown, normalized);
+  const baseBranch = normalized.baseBranch
+    || await gitCurrentBranch(context.projectRoot);
   return {
     ...normalized,
+    baseBranch,
     requestedExecutionMode: normalized.executionMode,
     executionMode: worktreeDecision.executionMode,
     worktreeDecision,
@@ -1618,6 +1717,9 @@ function normalizeSessionRequestInput(input = {}) {
     reasoning: input.reasoning ?? input.effort,
     executionMode: input.executionMode ?? input.execution_mode ?? input.mode,
     subagentLauncher: input.subagentLauncher ?? input.subagent_launcher,
+    baseBranch: input.baseBranch ?? input.base_branch ?? input.branch,
+    worktreeIntegration: input.worktreeIntegration ?? input.worktree_integration,
+    pushWorktreeIntegration: input.pushWorktreeIntegration ?? input.push_worktree_integration,
     launchPrompt: input.launchPrompt ?? input.launch_prompt,
   });
 }
@@ -1653,6 +1755,36 @@ function normalizeExecutionMode(value) {
   const mode = normalizeOptionalString(value) || DEFAULT_EXECUTION_MODE;
   if (!EXECUTION_MODES.includes(mode)) {
     throw new Error(`unsupported execution mode: ${mode}`);
+  }
+  return mode;
+}
+
+function normalizeBaseBranch(value, options = {}) {
+  const branch = normalizeOptionalString(value).replace(/^refs\/heads\//, "");
+  if (!branch) {
+    if (options.allowEmpty) {
+      return "";
+    }
+    throw new Error("base branch is required");
+  }
+  if (
+    /\s/.test(branch)
+    || branch.startsWith("-")
+    || branch.startsWith("/")
+    || branch.endsWith("/")
+    || branch.includes("..")
+    || branch.includes("@{")
+    || /[~^:?*\[\\]/.test(branch)
+  ) {
+    throw new Error(`invalid base branch: ${branch}`);
+  }
+  return branch;
+}
+
+function normalizeWorktreeIntegration(value) {
+  const mode = normalizeOptionalString(value) || DEFAULT_WORKTREE_INTEGRATION;
+  if (!WORKTREE_INTEGRATION_MODES.includes(mode)) {
+    throw new Error(`unsupported worktree integration mode: ${mode}`);
   }
   return mode;
 }
@@ -1739,6 +1871,8 @@ function buildTaskGenerationPrompt(task) {
     "- Mention concrete file or module paths in subtasks when that helps the main agent detect non-conflicting work.",
     "- Prefer 4 to 12 subtasks.",
     "- Keep subtasks concrete and code-oriented.",
+    "- Do not turn coordinator duties into subtasks, including concurrency planning, launcher choice, user notification, or final cross-agent report aggregation.",
+    "- For validation, QA, smoke-test, or health-check tasks, subagents should write only their required report JSON and session artifacts. If a repository-level report is needed, say the main/coordinating agent aggregates it after subagents finish.",
     "- Avoid PRD phrasing and do not mention prd.json.",
     "",
     `Task title hint: ${task.title}`,
@@ -1758,6 +1892,10 @@ function buildAgentPaths(agentDir) {
     stdoutLog: path.join(agentDir, "stdout.log"),
     stderrLog: path.join(agentDir, "stderr.log"),
   };
+}
+
+function buildAgentLaunchToken(sessionId, agentId) {
+  return `agentdesk-${sessionId}-${agentId}-${crypto.randomUUID()}`;
 }
 
 async function writeAgentContextSnapshots(agent, taskMarkdown, taskMemory) {
@@ -1790,11 +1928,13 @@ async function writeAgentPromptSnapshot(task, taskMarkdown, taskMemory, session,
 }
 
 function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent) {
+  const launchToken = agent.launchToken || buildAgentLaunchToken(sessionId, agent.id);
   return [
     "You are one AgentDesk execution subagent working in your own git worktree.",
     "",
     `Task ID: ${task.taskId}`,
     `Session ID: ${sessionId}`,
+    `AgentDesk launch token: ${launchToken}`,
     `Execution model: ${session.model || DEFAULT_SUBAGENT_MODEL}`,
     `Execution reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
     `Execution mode: ${getSessionExecutionMode(session)}`,
@@ -1802,6 +1942,7 @@ function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId,
     `Assigned subtask: ${agent.title}`,
     `Branch: ${agent.branchName}`,
     `Worktree: ${agent.worktreePath}`,
+    `Report JSON path: ${agent.paths.reportJson}`,
     "",
     "Context snapshot files:",
     `- Task markdown snapshot: ${agent.paths.taskSnapshotMd}`,
@@ -1811,15 +1952,18 @@ function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId,
     "Rules:",
     "- Work only on the assigned subtask.",
     "- Stay inside the current git worktree and current branch.",
-    "- Do not delete worktrees, do not merge to master, and do not switch to another branch.",
+    "- Do not delete worktrees, do not merge into any base branch, do not push, and do not switch to another branch.",
     "- Treat the context snapshots in this prompt as the complete launch context; do not resume a parent Codex conversation.",
     "- Run the narrowest meaningful self-tests before finishing.",
     "- Keep your changes scoped and production-oriented.",
     "- If you are blocked, explain the blocker clearly in the final response.",
     "",
     "Before you finish:",
-    "- Leave the branch ready for the orchestrator to integrate.",
-    "- Include concise notes about tests and remaining risks in the final response.",
+    "- Leave the branch ready for the orchestrator or main agent to review according to the session integration policy.",
+    `- Write valid JSON to ${agent.paths.reportJson} with exactly these top-level fields: summary, tests_run, risks, notes.`,
+    "- Use a concise string for summary and arrays of strings for tests_run, risks, and notes.",
+    "- Write the report only after implementation and validation are complete; AgentDesk treats a valid report as your completion signal.",
+    "- After writing the report, give a brief final response with tests and remaining risks.",
     "",
     ...(session.launchPrompt
       ? [
@@ -1837,11 +1981,13 @@ function buildSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId,
 }
 
 function buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, session, sessionId, agent) {
+  const launchToken = agent.launchToken || buildAgentLaunchToken(sessionId, agent.id);
   return [
     "You are one AgentDesk implementation subagent running in the shared current checkout.",
     "",
     `Task ID: ${task.taskId}`,
     `Session ID: ${sessionId}`,
+    `AgentDesk launch token: ${launchToken}`,
     `Execution model: ${session.model || DEFAULT_SUBAGENT_MODEL}`,
     `Execution reasoning: ${session.reasoning || DEFAULT_SUBAGENT_REASONING}`,
     `Execution mode: ${getSessionExecutionMode(session)}`,
@@ -1849,6 +1995,7 @@ function buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, sessio
     `Assigned subtask: ${agent.title}`,
     `Current branch: ${agent.branchName}`,
     `Project root: ${agent.worktreePath}`,
+    `Report JSON path: ${agent.paths.reportJson}`,
     "",
     "Context snapshot files:",
     `- Task markdown snapshot: ${agent.paths.taskSnapshotMd}`,
@@ -1860,7 +2007,7 @@ function buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, sessio
     "- No separate git worktree was created because the main agent judged worktree isolation unnecessary for this session.",
     "- Do not create or switch branches, stage files, commit, rebase, merge, or delete worktrees.",
     "- Avoid files outside the assigned subtask scope, especially when other subagents may be running in the same checkout.",
-    "- Do not edit .agent-desk state files; AgentDesk owns snapshots, logs, and report output.",
+    `- Do not edit .agent-desk state files except the required report JSON path: ${agent.paths.reportJson}`,
     "- Treat the context snapshots in this prompt as the complete launch context; do not resume a parent Codex conversation.",
     "- Run the narrowest meaningful self-tests before finishing.",
     "- Keep your changes scoped and production-oriented.",
@@ -1868,7 +2015,10 @@ function buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, sessio
     "",
     "Before you finish:",
     "- Leave current-branch changes unstaged for the main agent or caller to review.",
-    "- Include concise notes about tests, changed areas, and remaining risks in the final response.",
+    `- Write valid JSON to ${agent.paths.reportJson} with exactly these top-level fields: summary, tests_run, risks, notes.`,
+    "- Use a concise string for summary and arrays of strings for tests_run, risks, and notes.",
+    "- Write the report only after implementation and validation are complete; AgentDesk treats a valid report as your completion signal.",
+    "- After writing the report, give a brief final response with tests, changed areas, and remaining risks.",
     "",
     ...(session.launchPrompt
       ? [
@@ -1959,6 +2109,13 @@ export function renderSessionDocument(session, task) {
     `- Execution mode: ${getSessionExecutionMode(session)}`,
     `- Requested execution mode: ${session.requestedExecutionMode || session.executionMode || "-"}`,
     ...(session.worktreeDecision?.reason ? [`- Worktree decision: ${session.worktreeDecision.reason}`] : []),
+    ...(getSessionExecutionMode(session) === "worktree"
+      ? [
+        `- Worktree base branch: ${session.baseBranch || "-"}`,
+        `- Worktree integration: ${session.worktreeIntegration || DEFAULT_WORKTREE_INTEGRATION}`,
+        `- Push integration: ${session.pushWorktreeIntegration ? "true" : "false"}`,
+      ]
+      : []),
     `- Subagent launcher: ${getSessionSubagentLauncher(session) || "-"}`,
     `- Parallelism: ${session.parallelism}`,
     `- Batch size: ${session.batchSize}`,
@@ -1981,7 +2138,13 @@ export function renderSessionDocument(session, task) {
     lines.push(`### ${agent.id} · ${agent.title}`);
     lines.push(`- Status: ${agent.status}`);
     lines.push(`- Branch: ${agent.branchName || "-"}`);
+    if (agent.baseBranch) {
+      lines.push(`- Base branch: ${agent.baseBranch}`);
+    }
     lines.push(`- Worktree: ${agent.worktreePath || "-"}`);
+    if (agent.integrationMode) {
+      lines.push(`- Integration: ${agent.integrationMode}${agent.integrationTarget ? ` -> ${agent.integrationTarget}` : ""}`);
+    }
     if (agent.paths?.taskSnapshotMd) {
       lines.push(`- Task snapshot: ${agent.paths.taskSnapshotMd}`);
     }
@@ -1990,6 +2153,15 @@ export function renderSessionDocument(session, task) {
     }
     if (agent.paths?.promptMd) {
       lines.push(`- Prompt snapshot: ${agent.paths.promptMd}`);
+    }
+    if (agent.codexSessionId) {
+      lines.push(`- Codex session: ${agent.codexSessionId}`);
+    }
+    if (agent.codexResumeCommand) {
+      lines.push(`- Codex resume: ${agent.codexResumeCommand}`);
+    }
+    if (agent.codexSessionPath) {
+      lines.push(`- Codex session file: ${agent.codexSessionPath}`);
     }
     lines.push(`- Started: ${agent.startedAt || "-"}`);
     lines.push(`- Completed: ${agent.completedAt || "-"}`);
@@ -2107,8 +2279,10 @@ function renderTaskChecklistStatusLine(indent, state) {
   return `${indent}  - AgentDesk status: \`${state.status}\`; session: \`${state.sessionId}\`; agent: \`${state.agentId}\``;
 }
 
-async function prepareAgentWorktree(context, agent) {
+async function prepareAgentWorktree(context, session, agent) {
   await fsp.mkdir(path.dirname(agent.worktreePath), { recursive: true });
+  const baseBranch = normalizeBaseBranch(session?.baseBranch || agent.baseBranch);
+  await assertLocalBranch(context.projectRoot, baseBranch);
   const worktreeExists = await statSafe(agent.worktreePath);
   if (!worktreeExists) {
     const created = await spawnCapture("git", [
@@ -2117,7 +2291,7 @@ async function prepareAgentWorktree(context, agent) {
       "-b",
       agent.branchName,
       agent.worktreePath,
-      "master",
+      baseBranch,
     ], {
       cwd: context.projectRoot,
     });
@@ -2129,6 +2303,7 @@ async function prepareAgentWorktree(context, agent) {
   return {
     worktreePath: agent.worktreePath,
     branchName: agent.branchName,
+    baseBranch,
     baseCommit,
   };
 }
@@ -2157,48 +2332,89 @@ async function finalizeAgentBranch(context, worktreePath, branchName, baseCommit
   };
 }
 
-async function integrateBranchIntoMaster(context, worktreePath, baseCommit, headCommit) {
+async function completeWorktreeBranch(context, worktreePath, branchName, baseBranch, baseCommit, headCommit, options = {}) {
+  const mode = normalizeWorktreeIntegration(options.mode);
+  const shouldPush = Boolean(options.push);
+  const normalizedBaseBranch = normalizeBaseBranch(baseBranch);
+  const targetBranchRef = gitLocalBranchRef(normalizedBaseBranch);
+  const baseBefore = await gitRevParse(context.projectRoot, targetBranchRef);
+
   if (baseCommit === headCommit) {
     return {
-      masterBefore: await gitRevParse(context.projectRoot, "master"),
-      masterCommit: await gitRevParse(context.projectRoot, "master"),
+      mode,
+      baseBranch: normalizedBaseBranch,
+      targetBranch: mode === "fast-forward" ? normalizedBaseBranch : branchName,
+      baseBefore,
+      targetCommit: headCommit,
       integrated: false,
       pushed: false,
     };
   }
 
-  const lock = await acquireLock(path.join(context.locksRoot, "master-integrate.lock"));
+  if (mode === DEFAULT_WORKTREE_INTEGRATION) {
+    return {
+      mode,
+      baseBranch: normalizedBaseBranch,
+      targetBranch: branchName,
+      baseBefore,
+      targetCommit: headCommit,
+      integrated: false,
+      pushed: false,
+    };
+  }
+
+  const lock = await acquireLock(path.join(context.locksRoot, `${slug(normalizedBaseBranch)}-integrate.lock`));
   try {
-    const upstream = await gitMasterUpstream(context.projectRoot);
-    const masterBefore = await gitRevParse(context.projectRoot, "master");
-    const rebase = await spawnCapture("git", ["rebase", "master"], { cwd: worktreePath });
+    const currentBase = await gitRevParse(context.projectRoot, targetBranchRef);
+    const rebase = await spawnCapture("git", ["rebase", normalizedBaseBranch], { cwd: worktreePath });
     if (rebase.exitCode !== 0) {
       await spawnCapture("git", ["rebase", "--abort"], { cwd: worktreePath });
-      throw new Error(describeCommandFailure(rebase, "failed to rebase branch onto master"));
+      throw new Error(describeCommandFailure(rebase, `failed to rebase branch onto ${normalizedBaseBranch}`));
     }
     const rebasedHead = await gitRevParse(worktreePath, "HEAD");
-    const isAncestor = await gitIsAncestor(worktreePath, masterBefore, rebasedHead);
+    const isAncestor = await gitIsAncestor(worktreePath, currentBase, rebasedHead);
     if (!isAncestor) {
-      throw new Error("rebased branch is not based on current master");
+      throw new Error(`rebased branch is not based on current ${normalizedBaseBranch}`);
     }
-    const update = await spawnCapture("git", ["update-ref", "refs/heads/master", rebasedHead, masterBefore], {
-      cwd: context.projectRoot,
-    });
-    if (update.exitCode !== 0) {
-      throw new Error(describeCommandFailure(update, "failed to advance master"));
+
+    const currentBranch = await gitCurrentBranch(context.projectRoot).catch(() => "");
+    if (currentBranch === normalizedBaseBranch) {
+      await assertCleanGitWorktree(context.projectRoot);
+      const merge = await spawnCapture("git", ["merge", "--ff-only", rebasedHead], { cwd: context.projectRoot });
+      if (merge.exitCode !== 0) {
+        throw new Error(describeCommandFailure(merge, `failed to fast-forward ${normalizedBaseBranch}`));
+      }
+    } else {
+      const update = await spawnCapture("git", ["update-ref", targetBranchRef, rebasedHead, currentBase], {
+        cwd: context.projectRoot,
+      });
+      if (update.exitCode !== 0) {
+        throw new Error(describeCommandFailure(update, `failed to advance ${normalizedBaseBranch}`));
+      }
     }
-    const push = await spawnCapture("git", ["push", upstream.remoteName, `refs/heads/master:${upstream.remoteRef}`], {
-      cwd: context.projectRoot,
-    });
-    if (push.exitCode !== 0) {
-      throw new Error(describeCommandFailure(push, `failed to push master to ${upstream.displayName}`));
+
+    let pushed = false;
+    let upstream = "";
+    if (shouldPush) {
+      const branchUpstream = await gitBranchUpstream(context.projectRoot, normalizedBaseBranch);
+      const push = await spawnCapture("git", ["push", branchUpstream.remoteName, `${targetBranchRef}:${branchUpstream.remoteRef}`], {
+        cwd: context.projectRoot,
+      });
+      if (push.exitCode !== 0) {
+        throw new Error(describeCommandFailure(push, `failed to push ${normalizedBaseBranch} to ${branchUpstream.displayName}`));
+      }
+      pushed = true;
+      upstream = branchUpstream.displayName;
     }
     return {
-      masterBefore,
-      masterCommit: rebasedHead,
+      mode,
+      baseBranch: normalizedBaseBranch,
+      targetBranch: normalizedBaseBranch,
+      baseBefore: currentBase,
+      targetCommit: rebasedHead,
       integrated: true,
-      pushed: true,
-      upstream: upstream.displayName,
+      pushed,
+      upstream,
     };
   } finally {
     await releaseLock(lock);
@@ -2232,6 +2448,26 @@ export function buildCodexExecArgs(options = {}) {
   }
   args.push("-");
   return args;
+}
+
+export function buildCodexInteractiveArgs(options = {}) {
+  const serviceTierConfig = buildServiceTierConfig(options);
+  return [
+    "-a",
+    "never",
+    "-m",
+    options.model || DEFAULT_SUBAGENT_MODEL,
+    "--config",
+    `model_reasoning_effort="${options.reasoning || DEFAULT_SUBAGENT_REASONING}"`,
+    "--config",
+    `${serviceTierConfig.key}=${tomlString(serviceTierConfig.value)}`,
+    "-s",
+    options.sandboxMode || "danger-full-access",
+    "-C",
+    options.cwd,
+    "--no-alt-screen",
+    String(options.prompt || ""),
+  ];
 }
 
 async function runCodexPrompt(options) {
@@ -2289,6 +2525,582 @@ function normalizeCodexConfigKey(value) {
     return "";
   }
   return key;
+}
+
+async function runCodexInteractivePrompt(options) {
+  const command = options.context.codexCli || "codex";
+  const serviceTierConfig = await resolveCodexServiceTierConfig(options);
+  const args = buildCodexInteractiveArgs({
+    ...options,
+    serviceTierConfigKey: serviceTierConfig.key,
+    serviceTierConfigValue: serviceTierConfig.value,
+  });
+  const ptyCommand = resolvePtyCommand(command, args);
+  const startedAtMs = Date.now();
+  const discoveryTimeoutMs = envDurationMs(
+    "AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS",
+    CODEX_SESSION_DISCOVERY_TIMEOUT_MS,
+  );
+  const reportTimeoutMs = envDurationMs("AGENT_DESK_CODEX_REPORT_TIMEOUT_MS", CODEX_SUBAGENT_REPORT_TIMEOUT_MS);
+  const sessionsRoot = path.join(codexHomeDir(), "sessions");
+  const launchToken = String(options.launchToken || "");
+  const priorSessionFiles = await snapshotCodexSessionFiles(sessionsRoot);
+  let terminal;
+  try {
+    ensureNodePtySpawnHelperExecutable(options.stderrLog);
+    terminal = pty.spawn(ptyCommand.command, ptyCommand.args, {
+      name: "xterm-256color",
+      cols: 120,
+      rows: 30,
+      cwd: options.cwd || process.cwd(),
+      env: {
+        ...process.env,
+        TERM: process.env.TERM || "xterm-256color",
+      },
+    });
+  } catch (error) {
+    const message = `failed to launch Codex PTY session: ${error.message}; falling back to non-PTY spawn`;
+    appendFileSyncSafe(options.stderrLog, `${message}\n`);
+    return runCodexInteractiveSpawnFallback({
+      ...options,
+      args: ptyCommand.args,
+      command: ptyCommand.command,
+      startedAtMs,
+      discoveryTimeoutMs,
+      reportTimeoutMs,
+      sessionsRoot,
+      priorSessionFiles,
+      initialStderr: message,
+    });
+  }
+
+  let stdout = "";
+  let stderr = "";
+  let exited = false;
+  let exitInfo = { exitCode: null, signal: null };
+  let codexSession = null;
+  let sessionDiscoveryExpired = false;
+  let checking = false;
+  let settled = false;
+
+  terminal.onData((data) => {
+    stdout += data;
+    appendFileSyncSafe(options.stdoutLog, data);
+  });
+
+  const exitPromise = new Promise((resolve) => {
+    terminal.onExit((event) => {
+      exited = true;
+      exitInfo = {
+        exitCode: event.exitCode ?? 0,
+        signal: event.signal ?? null,
+      };
+      resolve(exitInfo);
+    });
+  });
+
+  return new Promise((resolve) => {
+    const settle = async (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearInterval(interval);
+      resolve(result);
+    };
+
+    const interval = setInterval(() => {
+      if (checking || settled) {
+        return;
+      }
+      checking = true;
+      void (async () => {
+        try {
+          if (!codexSession && launchToken && Date.now() - startedAtMs <= discoveryTimeoutMs) {
+            codexSession = await findCodexSessionByLaunchToken(launchToken, {
+              sessionsRoot,
+              priorSessionFiles,
+              startedAtMs,
+            });
+            if (codexSession) {
+              await options.onSessionDiscovered?.(codexSession);
+            }
+          } else if (!codexSession && !sessionDiscoveryExpired && Date.now() - startedAtMs > discoveryTimeoutMs) {
+            sessionDiscoveryExpired = true;
+            appendFileSyncSafe(
+              options.stderrLog,
+              `timed out discovering Codex session for ${options.agentId || "subagent"}\n`,
+            );
+          }
+
+          const report = await readJsonSafe(options.reportJson);
+          if (report && typeof report === "object") {
+            if (!codexSession && launchToken) {
+              codexSession = await findCodexSessionByLaunchToken(launchToken, {
+                sessionsRoot,
+                priorSessionFiles,
+                startedAtMs,
+              });
+              if (codexSession) {
+                await options.onSessionDiscovered?.(codexSession);
+              }
+            }
+            await stopCodexInteractivePty(terminal, exitPromise, () => exited, options.stderrLog);
+            await settle({
+              exitCode: 0,
+              signal: null,
+              stdout,
+              stderr,
+              ...(codexSession || {}),
+            });
+            return;
+          }
+
+          if (exited) {
+            const message = `Codex exited before writing a valid report JSON: ${options.reportJson}`;
+            appendFileSyncSafe(options.stderrLog, `${message}\n`);
+            await settle({
+              exitCode: exitInfo.exitCode || 1,
+              signal: exitInfo.signal,
+              stdout,
+              stderr: `${stderr}${stderr ? "\n" : ""}${message}`,
+              ...(codexSession || {}),
+            });
+            return;
+          }
+
+          if (Date.now() - startedAtMs > reportTimeoutMs) {
+            const message = `timed out waiting for subagent report JSON: ${options.reportJson}`;
+            appendFileSyncSafe(options.stderrLog, `${message}\n`);
+            await killCodexInteractivePty(terminal, exitPromise, () => exited);
+            await settle({
+              exitCode: 1,
+              signal: null,
+              stdout,
+              stderr: `${stderr}${stderr ? "\n" : ""}${message}`,
+              ...(codexSession || {}),
+            });
+          }
+        } finally {
+          checking = false;
+        }
+      })();
+    }, 250);
+  });
+}
+
+async function runCodexInteractiveSpawnFallback(options) {
+  const child = spawn(options.command, options.args, {
+    cwd: options.cwd || process.cwd(),
+    env: {
+      ...process.env,
+      TERM: process.env.TERM || "xterm-256color",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let stdout = "";
+  let stderr = options.initialStderr || "";
+  let exited = false;
+  let exitInfo = { exitCode: null, signal: null };
+  let codexSession = null;
+  let sessionDiscoveryExpired = false;
+  let checking = false;
+  let settled = false;
+  const launchToken = String(options.launchToken || "");
+
+  child.stdout.on("data", (chunk) => {
+    const text = chunk.toString();
+    stdout += text;
+    appendFileSyncSafe(options.stdoutLog, text);
+  });
+  child.stderr.on("data", (chunk) => {
+    const text = chunk.toString();
+    stderr += `${stderr ? "\n" : ""}${text}`;
+    appendFileSyncSafe(options.stderrLog, text);
+  });
+
+  const exitPromise = new Promise((resolve) => {
+    child.on("error", (error) => {
+      exited = true;
+      exitInfo = { exitCode: 1, signal: null };
+      stderr += `${stderr ? "\n" : ""}${error.message}`;
+      resolve(exitInfo);
+    });
+    child.on("close", (exitCode, signal) => {
+      exited = true;
+      exitInfo = {
+        exitCode: exitCode ?? 1,
+        signal,
+      };
+      resolve(exitInfo);
+    });
+  });
+
+  return new Promise((resolve) => {
+    const settle = async (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearInterval(interval);
+      resolve(result);
+    };
+
+    const interval = setInterval(() => {
+      if (checking || settled) {
+        return;
+      }
+      checking = true;
+      void (async () => {
+        try {
+          if (!codexSession && launchToken && Date.now() - options.startedAtMs <= options.discoveryTimeoutMs) {
+            codexSession = await findCodexSessionByLaunchToken(launchToken, {
+              sessionsRoot: options.sessionsRoot,
+              priorSessionFiles: options.priorSessionFiles,
+              startedAtMs: options.startedAtMs,
+            });
+            if (codexSession) {
+              await options.onSessionDiscovered?.(codexSession);
+            }
+          } else if (!codexSession && !sessionDiscoveryExpired && Date.now() - options.startedAtMs > options.discoveryTimeoutMs) {
+            sessionDiscoveryExpired = true;
+            appendFileSyncSafe(
+              options.stderrLog,
+              `timed out discovering Codex session for ${options.agentId || "subagent"}\n`,
+            );
+          }
+
+          const report = await readJsonSafe(options.reportJson);
+          if (report && typeof report === "object") {
+            if (!codexSession && launchToken) {
+              codexSession = await findCodexSessionByLaunchToken(launchToken, {
+                sessionsRoot: options.sessionsRoot,
+                priorSessionFiles: options.priorSessionFiles,
+                startedAtMs: options.startedAtMs,
+              });
+              if (codexSession) {
+                await options.onSessionDiscovered?.(codexSession);
+              }
+            }
+            await killSpawnedProcess(child, exitPromise, () => exited);
+            await settle({
+              exitCode: 0,
+              signal: null,
+              stdout,
+              stderr,
+              ...(codexSession || {}),
+            });
+            return;
+          }
+
+          if (exited) {
+            const message = `Codex exited before writing a valid report JSON: ${options.reportJson}`;
+            appendFileSyncSafe(options.stderrLog, `${message}\n`);
+            await settle({
+              exitCode: exitInfo.exitCode || 1,
+              signal: exitInfo.signal,
+              stdout,
+              stderr: `${stderr}${stderr ? "\n" : ""}${message}`,
+              ...(codexSession || {}),
+            });
+            return;
+          }
+
+          if (Date.now() - options.startedAtMs > options.reportTimeoutMs) {
+            const message = `timed out waiting for subagent report JSON: ${options.reportJson}`;
+            appendFileSyncSafe(options.stderrLog, `${message}\n`);
+            await killSpawnedProcess(child, exitPromise, () => exited);
+            await settle({
+              exitCode: 1,
+              signal: null,
+              stdout,
+              stderr: `${stderr}${stderr ? "\n" : ""}${message}`,
+              ...(codexSession || {}),
+            });
+          }
+        } finally {
+          checking = false;
+        }
+      })();
+    }, 250);
+  });
+}
+
+async function killSpawnedProcess(child, exitPromise, isExited) {
+  if (!isExited()) {
+    child.kill("SIGTERM");
+  }
+  await Promise.race([
+    exitPromise,
+    sleep(1000),
+  ]);
+}
+
+function ensureNodePtySpawnHelperExecutable(stderrLog) {
+  const helperPath = nodePtySpawnHelperPath();
+  if (!helperPath) {
+    return;
+  }
+  try {
+    const stat = fs.statSync(helperPath);
+    if ((stat.mode & 0o111) === 0) {
+      fs.chmodSync(helperPath, stat.mode | 0o111);
+    }
+  } catch (error) {
+    appendFileSyncSafe(stderrLog, `failed to prepare node-pty spawn-helper: ${error.message}\n`);
+  }
+}
+
+function nodePtySpawnHelperPath() {
+  try {
+    const nodePtyEntry = fileURLToPath(import.meta.resolve("node-pty"));
+    return path.resolve(path.dirname(nodePtyEntry), "..", "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
+  } catch {
+    return "";
+  }
+}
+
+function resolvePtyCommand(command, args) {
+  const executablePath = resolveExecutablePath(command);
+  const shebang = executablePath ? readShebang(executablePath) : "";
+  if (!shebang) {
+    return { command, args };
+  }
+  const parts = splitShebang(shebang);
+  if (parts.length === 0) {
+    return { command, args };
+  }
+  return {
+    command: parts[0],
+    args: [...parts.slice(1), executablePath, ...args],
+  };
+}
+
+function resolveExecutablePath(command) {
+  const value = String(command || "");
+  if (!value) {
+    return "";
+  }
+  if (value.includes(path.sep) || path.isAbsolute(value)) {
+    return path.resolve(value);
+  }
+  for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
+    if (!dir) {
+      continue;
+    }
+    const candidate = path.join(dir, value);
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile()) {
+        return candidate;
+      }
+    } catch {
+      // Keep searching PATH.
+    }
+  }
+  return "";
+}
+
+function readShebang(filePath) {
+  try {
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(256);
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      const firstLine = buffer.subarray(0, bytesRead).toString("utf8").split(/\r?\n/, 1)[0] || "";
+      return firstLine.startsWith("#!") ? firstLine.slice(2).trim() : "";
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+}
+
+function splitShebang(shebang) {
+  const parts = String(shebang || "").match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+  return parts.map((part) => part.replace(/^["']|["']$/g, ""));
+}
+
+function codexHomeDir() {
+  return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+}
+
+function envDurationMs(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function codexResumeCommand(sessionId) {
+  return sessionId ? `codex resume --all ${sessionId}` : "";
+}
+
+async function snapshotCodexSessionFiles(sessionsRoot) {
+  const files = await collectCodexSessionFiles(sessionsRoot);
+  return new Map(files.map((file) => [file.filePath, file.mtimeMs]));
+}
+
+export async function findCodexSessionByLaunchToken(launchToken, options = {}) {
+  const files = await collectCodexSessionFiles(options.sessionsRoot);
+  const candidates = files.filter((file) => {
+    const priorMtime = options.priorSessionFiles?.get(file.filePath);
+    if (priorMtime === undefined) {
+      return file.mtimeMs >= options.startedAtMs - 5000;
+    }
+    return file.mtimeMs > priorMtime;
+  });
+  for (const file of candidates) {
+    const content = await fsp.readFile(file.filePath, "utf8").catch(() => "");
+    if (!codexRolloutHasLaunchPrompt(content, launchToken)) {
+      continue;
+    }
+    const sessionId = readCodexSessionId(content) || codexSessionIdFromPath(file.filePath);
+    return {
+      codexSessionId: sessionId,
+      codexSessionPath: file.filePath,
+      codexResumeCommand: codexResumeCommand(sessionId),
+    };
+  }
+  return null;
+}
+
+function codexRolloutHasLaunchPrompt(content, launchToken) {
+  const token = String(launchToken || "");
+  if (!token) {
+    return false;
+  }
+  for (const line of String(content || "").split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      if (codexEventHasLaunchPrompt(JSON.parse(line), token)) {
+        return true;
+      }
+    } catch {
+      // Ignore partial or malformed rollout lines.
+    }
+  }
+  return false;
+}
+
+function codexEventHasLaunchPrompt(event, launchToken) {
+  if (event?.type === "response_item" && event.payload?.type === "message" && event.payload.role === "user") {
+    return codexMessageText(event.payload.content).includes(launchToken);
+  }
+  if (event?.type === "event_msg" && event.payload?.type === "user_message") {
+    return String(event.payload.message || event.payload.text || "").includes(launchToken)
+      || event.payload.launchToken === launchToken;
+  }
+  if (event?.type === "message" && event.role === "user") {
+    return codexMessageText(event.content).includes(launchToken);
+  }
+  return false;
+}
+
+function codexMessageText(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content.map((part) => {
+    if (typeof part === "string") {
+      return part;
+    }
+    return String(part?.text || part?.message || part?.content || "");
+  }).join("\n");
+}
+
+async function collectCodexSessionFiles(sessionsRoot) {
+  const root = path.resolve(sessionsRoot || path.join(codexHomeDir(), "sessions"));
+  const rootStat = await fsp.stat(root).catch(() => null);
+  if (!rootStat?.isDirectory()) {
+    return [];
+  }
+  const files = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    const entries = await fsp.readdir(current, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(entryPath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      const stat = await fsp.stat(entryPath).catch(() => null);
+      if (stat?.isFile()) {
+        files.push({
+          filePath: entryPath,
+          mtimeMs: stat.mtimeMs,
+        });
+      }
+    }
+  }
+  return files.sort((left, right) => right.mtimeMs - left.mtimeMs);
+}
+
+function readCodexSessionId(content) {
+  for (const line of String(content || "").split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const event = JSON.parse(line);
+      if (event?.type === "session_meta" && event.payload?.id) {
+        return String(event.payload.id);
+      }
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function codexSessionIdFromPath(filePath) {
+  const base = path.basename(filePath, ".jsonl");
+  const match = base.match(/([0-9a-f]{8}-[0-9a-f-]{27,})$/i);
+  return match ? match[1] : "";
+}
+
+async function stopCodexInteractivePty(terminal, exitPromise, isExited, stderrLog) {
+  if (isExited()) {
+    return exitPromise;
+  }
+  try {
+    terminal.write("/quit\r");
+  } catch (error) {
+    appendFileSyncSafe(stderrLog, `failed to request Codex interactive exit: ${error.message}\n`);
+  }
+  const exitedGracefully = await Promise.race([
+    exitPromise.then(() => true),
+    sleep(CODEX_INTERACTIVE_EXIT_GRACE_MS).then(() => false),
+  ]);
+  if (!exitedGracefully) {
+    appendFileSyncSafe(stderrLog, "Codex interactive session did not exit after report; terminating it\n");
+    await killCodexInteractivePty(terminal, exitPromise, isExited);
+  }
+  return exitPromise;
+}
+
+async function killCodexInteractivePty(terminal, exitPromise, isExited) {
+  if (!isExited()) {
+    try {
+      terminal.kill("SIGTERM");
+    } catch {
+      // Best effort cleanup after AgentDesk has captured the completion/failure signal.
+    }
+  }
+  await Promise.race([
+    exitPromise,
+    sleep(1000),
+  ]);
 }
 
 function normalizeSubagentReport(report) {
@@ -2607,10 +3419,11 @@ async function assertGitRepository(projectRoot) {
   }
 }
 
-async function assertMasterBranch(projectRoot) {
-  const result = await spawnCapture("git", ["rev-parse", "--verify", "master"], { cwd: projectRoot });
+async function assertLocalBranch(projectRoot, branch) {
+  const normalizedBranch = normalizeBaseBranch(branch);
+  const result = await spawnCapture("git", ["rev-parse", "--verify", gitLocalBranchRef(normalizedBranch)], { cwd: projectRoot });
   if (result.exitCode !== 0) {
-    throw new Error("selected project does not have a master branch");
+    throw new Error(`selected project does not have a local ${normalizedBranch} branch`);
   }
 }
 
@@ -2651,24 +3464,39 @@ async function gitIsAncestor(cwd, ancestor, descendant) {
   return result.exitCode === 0;
 }
 
-async function gitMasterUpstream(cwd) {
+async function gitBranchUpstream(cwd, branch) {
+  const normalizedBranch = normalizeBaseBranch(branch);
   const result = await spawnCapture("git", [
     "for-each-ref",
     "--format=%(upstream:remotename)%09%(upstream:remoteref)",
-    "refs/heads/master",
+    gitLocalBranchRef(normalizedBranch),
   ], { cwd });
   if (result.exitCode !== 0) {
-    throw new Error(describeCommandFailure(result, "failed to read master upstream"));
+    throw new Error(describeCommandFailure(result, `failed to read ${normalizedBranch} upstream`));
   }
   const [remoteName, remoteRef] = result.stdout.trim().split("\t");
   if (!remoteName || !remoteRef) {
-    throw new Error("master branch does not have an upstream; configure master to track a remote before worktree integration can push");
+    throw new Error(`${normalizedBranch} branch does not have an upstream; configure it to track a remote before worktree integration can push`);
   }
   return {
     remoteName,
     remoteRef,
     displayName: `${remoteName}/${remoteRef.replace(/^refs\/heads\//, "")}`,
   };
+}
+
+function gitLocalBranchRef(branch) {
+  return `refs/heads/${normalizeBaseBranch(branch)}`;
+}
+
+async function assertCleanGitWorktree(cwd) {
+  const result = await spawnCapture("git", ["status", "--porcelain"], { cwd });
+  if (result.exitCode !== 0) {
+    throw new Error(describeCommandFailure(result, "failed to read git worktree status"));
+  }
+  if (result.stdout.trim()) {
+    throw new Error("cannot fast-forward checked-out base branch with a dirty working tree");
+  }
 }
 
 async function listBranchFiles(cwd, baseCommit) {

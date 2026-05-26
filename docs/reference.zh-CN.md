@@ -6,7 +6,7 @@
 
 ## Codex Skills
 
-所有内置 skill 都只在显式点名时使用。
+所有内置 skill 都只在显式点名时使用。它们和 MCP stdio server、`verunectl` 一起构成 AgentDesk 的默认产品路径；本地 Web UI 是可选 beta 功能。
 
 | Skill | 用途 |
 | --- | --- |
@@ -70,4 +70,4 @@ npm test
 codex --version
 ```
 
-未来新增 UI/Web runtime 时，按仓库规则验证：先检查 dev server 是否已经运行，只有需要时才启动，并优先用 Computer Use 做本地 UI 验证。
+本地 Web UI 是可选 beta 功能，因此普通 skills、MCP、CLI、task 或 session 改动不需要加入 UI 验证。只有改动 beta UI 或 Web runtime 时才按仓库规则验证：先检查 dev server 是否已经运行，只有需要时才启动，并优先用 Computer Use 做本地 UI 验证。

@@ -33,6 +33,8 @@ Do not ask for extra detail when the missing information is non-blocking or the 
 1. Confirm the project root from the current workspace unless the user provides one.
 2. Review task brief completeness using the checklist above; ask the user for missing blocking details before generating the task.
 3. When the task is intended for subagent execution, include enough structure in the generated brief/task notes for the coordinating model to assess task complexity, file ownership, and likely concurrent-edit conflicts before choosing a per-batch subagent count.
+   - Keep coordinator duties out of the executable subtask checklist. Concurrency planning, launcher selection, user notification, and final cross-agent report aggregation belong in Context or Acceptance Criteria, not as subagent-owned checkbox items.
+   - For validation, QA, smoke-test, or health-check tasks, instruct subagents to write only their required `report.json` and session artifacts. If the user wants a repository-level report under `docs/`, make that a main/coordinating-agent aggregation step after the subagent session finishes.
 4. Prefer MCP:
    - Call `create_agentdesk_task` with `projectRoot`, `title` when known, and a concrete Chinese `brief`.
    - Then call `read_agentdesk_task` until the task reaches `ready` or `failed`.
@@ -50,4 +52,6 @@ Do not ask for extra detail when the missing information is non-blocking or the 
 - Prefer explicit session defaults in user-facing notes: `gpt-5.5`, `xhigh`, service tier `fast`, execution mode `auto`, batches of up to 6, and the repository-designated working branch as the base for new work.
 - If the user or repository designates a non-`master` working branch, carry that branch into task notes and do not describe future work as based on or automatically integrated into `master`. In this AgentDesk workspace, use `agentdesk/next` as the working branch and leave any merge to `master` for the user to perform manually.
 - Make clear that before subagent execution, the coordinating model should review task complexity and concurrency-conflict risk, decide a recommended per-batch subagent count within the configured cap, notify the user of that recommendation, and respect any later user-selected concurrency.
+- Do not generate an executable checklist item whose only job is "assess concurrency before starting"; that work must happen before `start_subagent_session`.
+- For health-check or validation tasks, do not assign repository-level final report creation to a subagent. Subagents should leave evidence in their AgentDesk `report.json` and session artifacts; the main agent should write any final tracked report after reviewing all results.
 - If task generation fails, preserve the task directory and summarize `stdout.log` / `stderr.log` rather than deleting artifacts.
