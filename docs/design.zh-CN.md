@@ -22,12 +22,12 @@ AgentDesk 对用户展示的默认 service tier 仍是 `fast`。实际启动 Cod
 
 对于 `codex-cli`，AgentDesk 会通过 pseudo-terminal 启动交互式 `codex` 命令，而不是 `codex exec`。初始 prompt 会包含唯一的 AgentDesk launch token，以及报告协议：subagent 必须向自己的 `report.json` 写入包含 `summary`、`tests_run`、`risks`、`notes` 的 JSON。
 
-AgentDesk 会在 `${CODEX_HOME:-~/.codex}/sessions` 下按 launch token 匹配 Codex rollout，并把 `codexSessionId`、`codexSessionPath`、`codexResumeCommand` 记录到 agent metadata。展示的命令是 `codex resume --all <codexSessionId>`；如果在原始 cwd 下，也可以用裸 `codex resume <codexSessionId>` 继续同一个交互会话。
+AgentDesk 会在 `${CODEX_HOME:-~/.codex}/sessions` 下按 launch token 匹配 Codex rollout，并把 `codexSessionId`、`codexSessionPath`、`codexResumeCommand` 和 `codexResumeAllCommand` 记录到 agent metadata。主要展示的命令是 `codex resume <codexSessionId>`；同时也会展示 `codex resume --all <codexSessionId>`，用于从其他工作目录继续同一个交互会话。
 
 自动完成仍由 AgentDesk 控制。runner 会把 PTY 输出写入 `stdout.log`，把 runner 错误和超时写入 `stderr.log`，等待可解析的 `report.json`，然后请求交互式 Codex session 退出。如果 Codex 在有效 report 前退出，或等待 report 超时，agent 会被标记为 failed。
 
 ## Codex App handoff
 
-使用 `--subagent-launcher codex-app` 时，AgentDesk 只准备 session metadata 和 prompt 文件，不直接启动 app subagents。MCP 结果会包含 `requiresHostLaunch: true` 和 `appLaunchPlan`。
+使用 `--subagent-launcher codex-app` 时，AgentDesk 只准备 session metadata 和 prompt 文件，不直接启动 app subagents。MCP 结果会包含 `requiresHostLaunch: true`、选定的 model/reasoning/service tier 和 `appLaunchPlan`。
 
-已准备好的 Codex App agent 会保持 `prepared_for_app`；AgentDesk 不会因为 launch plan 创建成功就把它们计为 succeeded。真正启动、等待和 host-side 结果统计由 Codex App host 负责。
+已准备好的 Codex App agent 会保持 `prepared_for_app`；AgentDesk 不会因为 launch plan 创建成功就把它们计为 succeeded。真正启动和等待由 Codex App host 负责，host-side 成功或失败结果再通过 `record_codex_app_subagent_result` 回写到 AgentDesk。

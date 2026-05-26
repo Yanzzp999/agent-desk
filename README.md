@@ -72,6 +72,12 @@ Start the local SQLite-backed API first, then run Vite:
 npm run dev
 ```
 
+Or start both processes with one command:
+
+```sh
+npm run dev:all -- --project /absolute/path/to/project
+```
+
 Vite serves the app at `http://127.0.0.1:5173` by default. During development it proxies `/api/agentdesk` to the Node.js ESM HTTP API at `http://127.0.0.1:19731`; the API stores overall task metadata, period assignment, claim/dispatch state, and audit events in the user-level `~/.agent-desk/tasks.sqlite` by default. Pass `--sqlite-path <file>` to override it for a run.
 
 Expected local API routes:
@@ -133,7 +139,7 @@ Useful session commands:
 
 Defaults: model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, execution mode `auto`, launch batch size `6`, and maximum parallelism `6`.
 
-`codex-cli` subagents are launched as resumable interactive Codex CLI sessions. `sessions show` and `session.md` include each agent's `codex resume --all <sessionId>` command; from the original cwd, the same session can also be continued with bare `codex resume <sessionId>`.
+`codex-cli` subagents are launched as resumable interactive Codex CLI sessions. `sessions show` and `session.md` include each agent's primary `codex resume <sessionId>` command, plus `codex resume --all <sessionId>` for resuming from another working directory.
 
 ## State Layout
 
@@ -173,7 +179,7 @@ Each project stores AgentDesk state inside the project, while persistent worktre
 
 `taskId` and `sessionId` are stable references for paths, commands, worktrees, and MCP lookups. `memory.md` preserves shared task context across sessions, and `session.md` is regenerated as agents finish.
 
-Each CLI-run agent writes `report.json` when implementation and validation are complete. Agent metadata also records `codexSessionId`, `codexSessionPath`, and `codexResumeCommand` for read-only inspection and manual continuation.
+Each CLI-run agent writes `report.json` when implementation and validation are complete. Agent metadata also records `codexSessionId`, `codexSessionPath`, `codexResumeCommand`, and `codexResumeAllCommand` for read-only inspection and manual continuation.
 
 Detailed skills, MCP tools, task format, and verification notes are in [docs/reference.md](docs/reference.md). Runtime behavior details are in [docs/design.md](docs/design.md).
 

@@ -39,8 +39,10 @@ test("MCP server runs markdown task tools against the launched project", async (
       "list_tasks",
       "read_agentdesk_task",
       "read_overall_task",
+      "read_subagent_logs",
       "read_subagent_session",
       "read_task",
+      "record_codex_app_subagent_result",
       "start_subagent_session",
       "update_overall_task",
     ];
@@ -487,7 +489,8 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.equal(launchTokens.size, meta.agents.length);
     assert.ok(meta.agents.every((agent) => agent.launchToken.startsWith(`agentdesk-${sessionId}-${agent.id}-`)));
     assert.ok(meta.agents.every((agent) => /^fake-session-/.test(agent.codexSessionId)));
-    assert.ok(meta.agents.every((agent) => agent.codexResumeCommand === `codex resume --all ${agent.codexSessionId}`));
+    assert.ok(meta.agents.every((agent) => agent.codexResumeCommand === `codex resume ${agent.codexSessionId}`));
+    assert.ok(meta.agents.every((agent) => agent.codexResumeAllCommand === `codex resume --all ${agent.codexSessionId}`));
     assert.ok(meta.agents.every((agent) => agent.codexSessionPath.includes("rollout-")));
     assert.match(await fs.readFile(meta.agents[0].paths.taskSnapshotMd, "utf8"), /Inspect API surface/);
     assert.match(await fs.readFile(meta.agents[0].paths.memorySnapshotMd, "utf8"), /Existing MCP memory/);
@@ -516,14 +519,29 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
       },
     });
     assert.equal(read.structuredContent.subagentLauncher, "codex-cli");
-    assert.match(read.structuredContent.docContent, /Codex resume: codex resume --all fake-session-/);
-    assert.match(read.content[0].text, /Codex resume: codex resume --all fake-session-/);
+    assert.match(read.structuredContent.docContent, /Codex resume: codex resume fake-session-/);
+    assert.match(read.structuredContent.docContent, /Codex resume \(any cwd\): codex resume --all fake-session-/);
+    assert.match(read.content[0].text, /Codex resume: codex resume fake-session-/);
+    assert.match(read.content[0].text, /Codex resume \(any cwd\): codex resume --all fake-session-/);
     assert.equal(read.structuredContent.agents.length, 7);
     for (const agent of read.structuredContent.agents) {
       assert.match(agent.codexSessionId, /^fake-session-/);
-      assert.equal(agent.codexResumeCommand, `codex resume --all ${agent.codexSessionId}`);
+      assert.equal(agent.codexResumeCommand, `codex resume ${agent.codexSessionId}`);
+      assert.equal(agent.codexResumeAllCommand, `codex resume --all ${agent.codexSessionId}`);
       assert.match(agent.codexSessionPath, /rollout-/);
     }
+    const logs = await client.callTool({
+      name: "read_subagent_logs",
+      arguments: {
+        projectRoot,
+        sessionId,
+        agentId: "agent-01",
+      },
+    });
+    assert.equal(logs.structuredContent.sessionId, sessionId);
+    assert.equal(logs.structuredContent.agentId, "agent-01");
+    assert.match(logs.structuredContent.stdoutPath, /stdout\.log$/);
+    assert.match(logs.structuredContent.stderrPath, /stderr\.log$/);
 
     const state = JSON.parse(await fs.readFile(fakeState, "utf8"));
     assert.equal(state.maxActive <= 6, true);
@@ -682,6 +700,55 @@ test("MCP server reports actionable Codex CLI session failures", async () => {
     assert.equal(read.structuredContent.status, "failed");
     assert.match(read.structuredContent.lastError, /synthetic fake Codex failure/);
     assert.match(read.content[0].text, /synthetic fake Codex failure/);
+  } finally {
+    await client.close();
+  }
+});
+
+test("MCP server rejects codex-cli completion when report.json violates the protocol", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-invalid-report-")));
+  const projectRoot = path.join(root, "project");
+  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const codexHome = path.join(root, "codex-home");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await initializeGitProject(projectRoot);
+  await writeReadyAgentDeskTask(projectRoot, "task-mcp-invalid-report", "MCP invalid report", ["Write malformed report"]);
+  await writeFakeCodex(fakeCodex);
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [MCP_BIN],
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      FAKE_CODEX_INVALID_REPORT: "empty-object",
+      AGENT_DESK_CODEX_SESSION_DISCOVERY_TIMEOUT_MS: "5000",
+      AGENT_DESK_CODEX_REPORT_TIMEOUT_MS: "30000",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-desk-mcp-invalid-report-test", version: "0.0.0" });
+
+  try {
+    await client.connect(transport);
+    const started = await client.callTool({
+      name: "start_subagent_session",
+      arguments: {
+        projectRoot,
+        taskId: "task-mcp-invalid-report",
+        codexCli: fakeCodex,
+        executionMode: "current-branch",
+        subagentLauncher: "codex-cli",
+      },
+    });
+
+    assert.equal(started.structuredContent.status, "failed");
+    assert.equal(started.structuredContent.failedAgents, 1);
+    assert.match(started.structuredContent.lastError, /valid report JSON/);
+    const agent = started.structuredContent.agents[0];
+    assert.equal(agent.status, "failed");
+    assert.match(await fs.readFile(agent.paths.stderrLog, "utf8"), /invalid subagent report JSON/);
   } finally {
     await client.close();
   }
@@ -1056,6 +1123,9 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
     assert.equal(launchPlan.requiresHostLaunch, true);
     assert.equal(launchPlan.launchTool, "spawn_agent");
     assert.equal(launchPlan.parallelism, 5);
+    assert.equal(launchPlan.model, "gpt-5.5");
+    assert.equal(launchPlan.reasoning, "xhigh");
+    assert.equal(launchPlan.serviceTier, "fast");
     assert.equal(launchPlan.subagents.length, 3);
     assert.deepEqual(
       launchPlan.subagents.map((subagent) => subagent.status),
@@ -1066,6 +1136,9 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
       ["Inspect API surface", "Validate session launcher", "Summarize verification"],
     );
     for (const subagent of launchPlan.subagents) {
+      assert.equal(subagent.model, "gpt-5.5");
+      assert.equal(subagent.reasoning, "xhigh");
+      assert.equal(subagent.serviceTier, "fast");
       assert.match(subagent.taskSnapshotPath, /task\.snapshot\.md$/);
       assert.match(subagent.memorySnapshotPath, /memory\.snapshot\.md$/);
       assert.match(subagent.promptPath, /prompt\.md$/);
@@ -1148,6 +1221,140 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
     assert.equal(legacyList.structuredContent.items[0].status, "waiting_for_app");
     assert.equal(legacyList.structuredContent.items[0].subagentLauncher, "codex-app");
     assert.equal(legacyList.structuredContent.items[0].succeededAgents, 0);
+  } finally {
+    await client.close();
+  }
+});
+
+test("MCP start_subagent_session honors configured codex-app launcher defaults", async () => {
+  const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-app-config-")));
+  await initializeGitProject(projectRoot);
+  await writeReadyAgentDeskTask(projectRoot, "task-mcp-app-config", "MCP App config default", ["Prepare configured launch"]);
+  await fs.mkdir(path.join(projectRoot, ".agent-desk"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, ".agent-desk", "config.toml"), [
+    "[session]",
+    "subagent_launcher = \"codex-app\"",
+    "execution_mode = \"auto\"",
+    "parallelism = 2",
+    "",
+  ].join("\n"), "utf8");
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [MCP_BIN],
+    cwd: projectRoot,
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-desk-mcp-app-config-test", version: "0.0.0" });
+
+  try {
+    await client.connect(transport);
+    const started = await client.callTool({
+      name: "start_subagent_session",
+      arguments: {
+        projectRoot,
+        taskId: "task-mcp-app-config",
+      },
+    });
+
+    assert.equal(started.structuredContent.subagentLauncher, "codex-app");
+    assert.equal(started.structuredContent.executionMode, "current-branch");
+    assert.equal(started.structuredContent.requiresHostLaunch, true);
+    assert.equal(started.structuredContent.waitRequested, false);
+    assert.equal(started.structuredContent.appLaunchPlan.parallelism, 2);
+  } finally {
+    await client.close();
+  }
+});
+
+test("MCP records Codex App host results and completes waiting sessions", async () => {
+  const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-mcp-app-result-")));
+  await initializeGitProject(projectRoot);
+  await writeReadyAgentDeskTask(projectRoot, "task-mcp-app-result", "MCP App result recording", [
+    "Record first host result",
+    "Record second host result",
+  ]);
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [MCP_BIN],
+    cwd: projectRoot,
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-desk-mcp-app-result-test", version: "0.0.0" });
+
+  try {
+    await client.connect(transport);
+    const started = await client.callTool({
+      name: "start_subagent_session",
+      arguments: {
+        projectRoot,
+        taskId: "task-mcp-app-result",
+        subagentLauncher: "codex-app",
+        parallelism: 2,
+      },
+    });
+    const sessionId = started.structuredContent.sessionId;
+
+    const first = await client.callTool({
+      name: "record_codex_app_subagent_result",
+      arguments: {
+        projectRoot,
+        sessionId,
+        agentId: "agent-01",
+        status: "succeeded",
+        report: {
+          summary: "First host result recorded.",
+          tests_run: ["host smoke"],
+          risks: [],
+          notes: ["Recorded through MCP."],
+        },
+      },
+    });
+    assert.equal(first.structuredContent.status, "waiting_for_app");
+    assert.equal(first.structuredContent.succeededAgents, 1);
+    assert.equal(first.structuredContent.agents[0].status, "succeeded");
+
+    const second = await client.callTool({
+      name: "record_codex_app_subagent_result",
+      arguments: {
+        projectRoot,
+        sessionId,
+        agentId: "agent-02",
+        status: "succeeded",
+        report: {
+          summary: "Second host result recorded.",
+          tests_run: ["host smoke"],
+          risks: [],
+          notes: ["Final host result."],
+        },
+      },
+    });
+    assert.equal(second.structuredContent.status, "succeeded");
+    assert.equal(second.structuredContent.succeededAgents, 2);
+    assert.equal(second.structuredContent.failedAgents, 0);
+    assert.equal(second.structuredContent.requiresHostLaunch, true);
+
+    const taskMarkdown = await fs.readFile(
+      path.join(projectRoot, ".agent-desk", "tasks", "task-mcp-app-result", "task.md"),
+      "utf8",
+    );
+    assert.equal((taskMarkdown.match(/^- \[x\] /gm) || []).length, 2);
+    assert.match(taskMarkdown, /AgentDesk status: `succeeded`; session: `[^`]+`; agent: `agent-01`/);
+    assert.match(taskMarkdown, /AgentDesk status: `succeeded`; session: `[^`]+`; agent: `agent-02`/);
+
+    const read = await client.callTool({
+      name: "read_subagent_session",
+      arguments: {
+        projectRoot,
+        sessionId,
+      },
+    });
+    assert.equal(read.structuredContent.status, "succeeded");
+    assert.deepEqual(
+      read.structuredContent.agents.map((agent) => agent.summary),
+      ["First host result recorded.", "Second host result recorded."],
+    );
   } finally {
     await client.close();
   }
@@ -1434,6 +1641,10 @@ async function runInteractiveInvocation() {
 }
 
 async function writeFakeSubagentReport(outputFile, prompt) {
+  if (process.env.FAKE_CODEX_INVALID_REPORT === "empty-object") {
+    await fs.writeFile(outputFile, "{}\\n", "utf8");
+    return;
+  }
   await fs.writeFile(outputFile, JSON.stringify({
     summary: "completed via fake Codex",
     tests_run: ["fake codex"],

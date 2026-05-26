@@ -1,6 +1,14 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+declare const process: {
+  env: Record<string, string | undefined>;
+};
+
+const apiHost = process.env.AGENT_DESK_TASK_API_HOST || "127.0.0.1";
+const apiPort = process.env.AGENT_DESK_TASK_API_PORT || "19731";
+const apiBasePath = process.env.AGENT_DESK_TASK_API_BASE_PATH || "/api/agentdesk";
+
 export default defineConfig({
   root: "src/web",
   plugins: [react()],
@@ -8,8 +16,8 @@ export default defineConfig({
     port: 5173,
     strictPort: false,
     proxy: {
-      "^/api/agentdesk": {
-        target: "http://127.0.0.1:19731",
+      [`^${escapeRegex(apiBasePath)}`]: {
+        target: `http://${apiHost}:${apiPort}`,
         changeOrigin: true,
       },
     },
@@ -19,3 +27,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
 });
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

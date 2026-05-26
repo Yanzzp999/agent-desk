@@ -453,6 +453,7 @@ test("normalizes configurable session defaults and overrides", () => {
     parallelism: "2",
     model: "gpt-5.4",
     reasoning: "high",
+    serviceTier: "fast",
     executionMode: "current-branch",
     subagentLauncher: "codex-cli",
     launchPrompt: "Prefer small patches",
@@ -473,6 +474,7 @@ test("normalizes configurable session defaults and overrides", () => {
   assert.throws(() => normalizeSessionRequest({ parallelism: "0" }), /positive number/);
   assert.throws(() => normalizeSessionRequest({ model: "bad model" }), /single Codex CLI model id/);
   assert.throws(() => normalizeSessionRequest({ reasoning: "extreme" }), /unsupported reasoning effort/);
+  assert.throws(() => normalizeSessionRequest({ serviceTier: "standard" }), /unsupported service tier/);
   assert.equal(normalizeSessionRequest({ executionMode: "current-branch" }).subagentLauncher, "codex-cli");
   assert.throws(() => normalizeSessionRequest({ executionMode: "sidecar" }), /unsupported execution mode/);
 });
@@ -522,6 +524,7 @@ test("parses and renders TOML session config", () => {
 [session]
 model = "gpt-5.4"
 reasoning = "high"
+service_tier = "fast"
 parallelism = 3
 execution_mode = "current-branch"
 subagent_launcher = "codex-cli"
@@ -546,6 +549,7 @@ push_worktree_integration = true
   const rendered = renderAgentDeskConfigToml({ session: parsed.session });
   assert.match(rendered, /\[session\]/);
   assert.match(rendered, /model = "gpt-5\.4"/);
+  assert.match(rendered, /service_tier = "fast"/);
   assert.match(rendered, /execution_mode = "current-branch"/);
   assert.match(rendered, /subagent_launcher = "codex-cli"/);
   assert.match(rendered, /base_branch = "agentdesk\/next"/);
@@ -664,7 +668,8 @@ test("discovers Codex session only from launch token in user prompt records", as
 
   assert.equal(discovered.codexSessionId, validSessionId);
   assert.equal(discovered.codexSessionPath, validPath);
-  assert.equal(discovered.codexResumeCommand, `codex resume --all ${validSessionId}`);
+  assert.equal(discovered.codexResumeCommand, `codex resume ${validSessionId}`);
+  assert.equal(discovered.codexResumeAllCommand, `codex resume --all ${validSessionId}`);
 });
 
 async function writeTaskState(projectRoot, options) {

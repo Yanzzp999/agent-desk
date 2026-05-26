@@ -72,6 +72,12 @@ codex mcp add agent-desk-my-project \
 npm run dev
 ```
 
+也可以用一个命令同时启动两个进程：
+
+```sh
+npm run dev:all -- --project /absolute/path/to/project
+```
+
 Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agentdesk` 代理到 `http://127.0.0.1:19731` 上的 Node.js ESM HTTP API；API 默认会把总体 task 元数据、周期归属、领取/分发状态和审计事件保存在用户级 `~/.agent-desk/tasks.sqlite`。单次运行需要覆盖路径时传 `--sqlite-path <file>`。
 
 预期本地 API routes：
@@ -133,7 +139,7 @@ npm run build
 
 默认值：模型 `gpt-5.5`、reasoning `xhigh`、service tier `fast`、execution mode `auto`、启动批次大小 `6`、最大并发 `6`。
 
-`codex-cli` subagent 会作为可 resume 的交互式 Codex CLI session 启动。`sessions show` 和 `session.md` 会展示每个 agent 的 `codex resume --all <sessionId>` 命令；在原始 cwd 下，也可以用裸 `codex resume <sessionId>` 继续同一个会话。
+`codex-cli` subagent 会作为可 resume 的交互式 Codex CLI session 启动。`sessions show` 和 `session.md` 会展示每个 agent 的主入口 `codex resume <sessionId>`，并额外展示跨工作目录兜底用的 `codex resume --all <sessionId>`。
 
 ## 状态目录
 
@@ -173,7 +179,7 @@ npm run build
 
 `taskId` 和 `sessionId` 是路径、命令、worktree 和 MCP 查询里的稳定引用。`memory.md` 保存跨 session 共享的 task 上下文，`session.md` 会随着 agent 完成不断重新生成。
 
-每个 CLI 运行的 agent 会在实现和验证完成后写入 `report.json`。agent metadata 也会记录只读字段 `codexSessionId`、`codexSessionPath` 和 `codexResumeCommand`，方便人工检查或继续会话。
+每个 CLI 运行的 agent 会在实现和验证完成后写入 `report.json`。agent metadata 也会记录只读字段 `codexSessionId`、`codexSessionPath`、`codexResumeCommand` 和 `codexResumeAllCommand`，方便人工检查或继续会话。
 
 详细 skills、MCP tools、task 格式和验证说明见 [reference.zh-CN.md](reference.zh-CN.md)。运行行为细节见 [design.zh-CN.md](design.zh-CN.md)。
 

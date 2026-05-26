@@ -93,7 +93,7 @@ export async function claimTaskMarkdownItems(options = {}) {
       || "agent",
   );
   const claimedAt = normalizeClaimedAt(options.claimedAt);
-  const sessionId = normalizeClaimSessionId(options.sessionId || options.session);
+  const sessionId = requiredClaimSessionId(options.sessionId || options.session || process.env.CODEX_SESSION_ID);
   const note = normalizeClaimNote(options.note);
   const force = Boolean(options.force);
   const resolved = await resolveTaskMarkdownFile(taskDir, taskName);
@@ -703,6 +703,9 @@ async function acquireLock(lockPath) {
       if (error.code !== "EEXIST") {
         throw error;
       }
+      if (await removeStaleLock(lockPath)) {
+        continue;
+      }
       if (Date.now() - started > 30 * 60 * 1000) {
         throw new Error(`timed out waiting for lock: ${lockPath}`);
       }
@@ -716,6 +719,37 @@ async function releaseLock(lock) {
     return;
   }
   await fs.rm(lock.lockPath, { recursive: true, force: true });
+}
+
+async function removeStaleLock(lockPath) {
+  const ownerPath = path.join(lockPath, "owner.json");
+  let owner = null;
+  try {
+    owner = JSON.parse(await fs.readFile(ownerPath, "utf8"));
+  } catch {
+    owner = null;
+  }
+  const pid = Number(owner?.pid);
+  if (Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) {
+    return false;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) {
+    const stat = await fs.stat(lockPath).catch(() => null);
+    if (stat && Date.now() - stat.mtimeMs < 30 * 60 * 1000) {
+      return false;
+    }
+  }
+  await fs.rm(lockPath, { recursive: true, force: true }).catch(() => {});
+  return true;
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
 }
 
 function sleep(ms) {

@@ -170,6 +170,7 @@ export async function claimOverallTask(contextLike, overallTaskId, request = {})
       assignee,
       sessionId: parsed.sessionId || parsed.session || "",
       actor: parsed.actor || assignee,
+      message: parsed.note,
       force: Boolean(parsed.force),
     });
     return { ok: true, task: toOverallTask(store, task) };
@@ -190,6 +191,9 @@ export async function dispatchOverallTask(contextLike, overallTaskId, request = 
       sessionId,
       actor: parsed.actor || parsed.assignee || parsed.owner,
       branch: parsed.branch,
+      target: parsed.dispatchTarget || parsed.target,
+      agentdeskTaskId: parsed.agentdeskTaskId || parsed.taskId,
+      message: parsed.note,
       force: Boolean(parsed.force),
     });
     return { ok: true, task: toOverallTask(store, task) };
@@ -467,6 +471,9 @@ function normalizeApiQuery(query = {}) {
 
 function toOverallTask(store, task, options = {}) {
   const audit = store.getAuditEvents(task.id);
+  const latestClaim = latestAuditEvent(audit, "claim");
+  const latestDispatch = latestAuditEvent(audit, "dispatch");
+  const dispatchMetadata = latestDispatch?.changes?.dispatchMetadata || {};
   return {
     ...task,
     overallTaskId: task.id,
@@ -480,16 +487,16 @@ function toOverallTask(store, task, options = {}) {
       claimedBy: task.claimedBy,
       claimedAt: task.claimedAt,
       sessionId: task.claimSessionId,
-      note: "",
+      note: latestClaim?.message || "",
     },
     dispatch: {
       status: task.dispatchSessionId ? "dispatched" : "not_dispatched",
       sessionId: task.dispatchSessionId,
       dispatchedAt: task.dispatchedAt,
-      dispatchedBy: "",
-      target: "",
-      agentdeskTaskId: "",
-      note: "",
+      dispatchedBy: latestDispatch?.actor || "",
+      target: dispatchMetadata.target || "",
+      agentdeskTaskId: dispatchMetadata.agentdeskTaskId || "",
+      note: latestDispatch?.message || "",
     },
     session: {
       sessionId: task.dispatchSessionId || task.claimSessionId || "",
@@ -510,6 +517,15 @@ function toOverallTask(store, task, options = {}) {
       changes: event.changes,
     })),
   };
+}
+
+function latestAuditEvent(events, eventType) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index].eventType === eventType) {
+      return events[index];
+    }
+  }
+  return null;
 }
 
 function toUiTaskSummary(task) {

@@ -17,6 +17,8 @@
     "bin/",
     "src/",
     "skills/",
+    "scripts/check-github-version.sh",
+    "scripts/dev-all.mjs",
     "scripts/install-mcp.sh",
     "scripts/sync-codex-skills.sh",
     "scripts/verunectl.sh",
@@ -32,6 +34,7 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:all": "node scripts/dev-all.mjs",
     "build": "tsc -p tsconfig.web.json && vite build",
     "test": "node --test test/*.test.mjs",
     "test:web": "vitest run --config vitest.config.ts",

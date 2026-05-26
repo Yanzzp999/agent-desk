@@ -213,6 +213,7 @@ export function renderAgentDeskConfigToml(config = {}) {
     "[session]",
     `model = ${tomlString(session.model)}`,
     `reasoning = ${tomlString(session.reasoning)}`,
+    `service_tier = ${tomlString(session.serviceTier)}`,
     `parallelism = ${session.parallelism}`,
     `execution_mode = ${tomlString(session.executionMode)}`,
     `subagent_launcher = ${tomlString(session.subagentLauncher)}`,
@@ -795,6 +796,9 @@ export async function getCodexAppLaunchPlan(context, sessionId) {
         agentId: agent.id,
         title: agent.title,
         status: agent.status,
+        model: session.model || DEFAULT_SUBAGENT_MODEL,
+        reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
+        serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
         taskSnapshotPath: paths.taskSnapshotMd || "",
         memorySnapshotPath: paths.memorySnapshotMd || "",
         promptPath: paths.promptMd || "",
@@ -807,8 +811,92 @@ export async function getCodexAppLaunchPlan(context, sessionId) {
     requiresHostLaunch,
     launchTool: requiresHostLaunch ? "spawn_agent" : "",
     parallelism: session.parallelism,
+    model: session.model || DEFAULT_SUBAGENT_MODEL,
+    reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
+    serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
     subagents,
   };
+}
+
+export async function recordCodexAppSubagentResult(context, sessionId, agentId, request = {}) {
+  const session = await readSessionMeta(context, sessionId);
+  if (getSessionSubagentLauncher(session) !== "codex-app") {
+    throw new Error("codex app result recording is only supported for codex-app sessions");
+  }
+  if (session.status !== "waiting_for_app") {
+    throw new Error(`codex app session is not waiting for host results: ${session.status}`);
+  }
+  const agent = session.agents.find((candidate) => candidate.id === agentId);
+  if (!agent) {
+    throw new Error(`agent not found in session ${sessionId}: ${agentId}`);
+  }
+  const status = normalizeCodexAppResultStatus(request.status || "succeeded");
+  const now = new Date().toISOString();
+  let patch;
+  if (status === "succeeded") {
+    const reportInput = request.report || request.reportJson || request;
+    const normalizedReport = normalizeSubagentReport(reportInput);
+    if (agent.paths?.reportJson) {
+      await writeJsonAtomic(agent.paths.reportJson, {
+        summary: normalizedReport.summary,
+        tests_run: normalizedReport.testsRun,
+        risks: normalizedReport.risks,
+        notes: normalizedReport.notes,
+      });
+    }
+    patch = {
+      status: "succeeded",
+      completedAt: now,
+      exitCode: 0,
+      summary: normalizedReport.summary,
+      testsRun: normalizedReport.testsRun,
+      risks: normalizedReport.risks,
+      notes: normalizedReport.notes,
+      changedFiles: Array.isArray(request.changedFiles) ? request.changedFiles.map(String) : agent.changedFiles || [],
+      codexSessionId: normalizeOptionalString(request.codexSessionId || agent.codexSessionId),
+      codexSessionPath: normalizeOptionalString(request.codexSessionPath || agent.codexSessionPath),
+      codexResumeCommand: normalizeOptionalString(request.codexResumeCommand || agent.codexResumeCommand),
+      codexResumeAllCommand: normalizeOptionalString(request.codexResumeAllCommand || agent.codexResumeAllCommand),
+      lastError: "",
+    };
+  } else {
+    patch = {
+      status: "failed",
+      completedAt: now,
+      exitCode: Number.isFinite(Number(request.exitCode)) ? Number(request.exitCode) : 1,
+      lastError: normalizeOptionalString(request.error || request.lastError || "Codex App host reported subagent failure"),
+    };
+  }
+
+  await patchSessionAgent(context, sessionId, agentId, patch);
+  if (status === "failed") {
+    await updateSessionLastError(context, sessionId, patch.lastError);
+  }
+  await refreshSessionCounts(context, sessionId);
+
+  const task = await readTaskMeta(context, session.taskId);
+  const updatedAgent = await getSessionAgent(context, sessionId, agentId);
+  const agentStatus = updatedAgent.status === "succeeded" ? "succeeded" : "failed";
+  await syncTaskChecklistItemStatusSafe(context, task, sessionId, updatedAgent, agentStatus, session.paths.stderrLog);
+  await persistAgentMemory(context, task, sessionId, updatedAgent, session.paths.stderrLog);
+
+  const latestSession = await readSessionMeta(context, sessionId);
+  const terminalCount = latestSession.succeededAgents + latestSession.failedAgents;
+  if (latestSession.totalAgents > 0 && terminalCount >= latestSession.totalAgents) {
+    const finalStatus = latestSession.failedAgents > 0 ? "failed" : "succeeded";
+    await updateSessionMeta(context, sessionId, {
+      status: finalStatus,
+      completedAt: now,
+      lastError: finalStatus === "failed" ? latestSession.lastError || updatedAgent.lastError || "" : "",
+    });
+    await finishTaskActiveSession(context, task.taskId, sessionId, {
+      status: finalStatus,
+      completedAt: now,
+      lastError: finalStatus === "failed" ? latestSession.lastError || updatedAgent.lastError || "" : "",
+    });
+  }
+  await writeSessionDocumentation(context, sessionId);
+  return getSession(context, sessionId);
 }
 
 async function prepareCodexAppSession(context, task, sessionId) {
@@ -845,6 +933,7 @@ async function prepareCodexAppSession(context, task, sessionId) {
       codexSessionId: "",
       codexSessionPath: "",
       codexResumeCommand: "",
+      codexResumeAllCommand: "",
       headCommit: "",
       mergedCommit: "",
       integrationMode: "current-branch",
@@ -957,6 +1046,7 @@ export async function runSessionJob(context, sessionId) {
       codexSessionId: "",
       codexSessionPath: "",
       codexResumeCommand: "",
+      codexResumeAllCommand: "",
       headCommit: "",
       mergedCommit: "",
       integrationMode: "",
@@ -1119,6 +1209,7 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
       codexSessionId: result.codexSessionId || "",
       codexSessionPath: result.codexSessionPath || "",
       codexResumeCommand: result.codexResumeCommand || "",
+      codexResumeAllCommand: result.codexResumeAllCommand || "",
       summary: normalizedReport.summary,
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
@@ -1222,6 +1313,7 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
       codexSessionId: result.codexSessionId || "",
       codexSessionPath: result.codexSessionPath || "",
       codexResumeCommand: result.codexResumeCommand || "",
+      codexResumeAllCommand: result.codexResumeAllCommand || "",
       summary: normalizedReport.summary,
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
@@ -1270,11 +1362,17 @@ export async function getAgentLogs(context, sessionId, agentId) {
   if (!agent) {
     throw new Error(`agent not found in session ${sessionId}: ${agentId}`);
   }
+  const stdoutPath = agent.paths.stdoutLog;
+  const stderrPath = agent.paths.stderrLog;
   return {
-    stdoutLog: agent.paths.stdoutLog,
-    stderrLog: agent.paths.stderrLog,
-    stdout: await readTextSafe(agent.paths.stdoutLog),
-    stderr: await readTextSafe(agent.paths.stderrLog),
+    sessionId,
+    agentId,
+    stdoutPath,
+    stderrPath,
+    stdoutLog: stdoutPath,
+    stderrLog: stderrPath,
+    stdout: await readTextSafe(stdoutPath),
+    stderr: await readTextSafe(stderrPath),
   };
 }
 
@@ -1501,7 +1599,7 @@ export function normalizeSessionRequest(request = {}) {
     parallelism: normalizeParallelism(normalizedInput.parallelism),
     model: normalizeSubagentModel(normalizedInput.model),
     reasoning: normalizeReasoningEffort(normalizedInput.reasoning),
-    serviceTier: DEFAULT_SERVICE_TIER,
+    serviceTier: normalizeServiceTier(normalizedInput.serviceTier),
     executionMode,
     subagentLauncher: normalizeSubagentLauncher(normalizedInput.subagentLauncher, executionMode),
     baseBranch: normalizeBaseBranch(normalizedInput.baseBranch, { allowEmpty: true }),
@@ -1715,6 +1813,7 @@ function normalizeSessionRequestInput(input = {}) {
     parallelism: input.parallelism ?? input.parallel ?? input.concurrency ?? input.codex_count ?? input["codex-count"],
     model: input.model,
     reasoning: input.reasoning ?? input.effort,
+    serviceTier: input.serviceTier ?? input.service_tier ?? input["service-tier"],
     executionMode: input.executionMode ?? input.execution_mode ?? input.mode,
     subagentLauncher: input.subagentLauncher ?? input.subagent_launcher,
     baseBranch: input.baseBranch ?? input.base_branch ?? input.branch,
@@ -1749,6 +1848,14 @@ function normalizeReasoningEffort(value) {
     throw new Error(`unsupported reasoning effort: ${effort}`);
   }
   return effort;
+}
+
+function normalizeServiceTier(value) {
+  const serviceTier = normalizeOptionalString(value) || DEFAULT_SERVICE_TIER;
+  if (serviceTier !== DEFAULT_SERVICE_TIER) {
+    throw new Error(`unsupported service tier: ${serviceTier}`);
+  }
+  return serviceTier;
 }
 
 function normalizeExecutionMode(value) {
@@ -2157,8 +2264,16 @@ export function renderSessionDocument(session, task) {
     if (agent.codexSessionId) {
       lines.push(`- Codex session: ${agent.codexSessionId}`);
     }
-    if (agent.codexResumeCommand) {
-      lines.push(`- Codex resume: ${agent.codexResumeCommand}`);
+    const codexResume = agent.codexSessionId
+      ? codexResumeCommand(agent.codexSessionId)
+      : agent.codexResumeCommand || "";
+    const codexResumeAll = agent.codexResumeAllCommand
+      || (agent.codexSessionId ? codexResumeAllCommand(agent.codexSessionId) : "");
+    if (codexResume) {
+      lines.push(`- Codex resume: ${codexResume}`);
+    }
+    if (codexResumeAll && codexResumeAll !== codexResume) {
+      lines.push(`- Codex resume (any cwd): ${codexResumeAll}`);
     }
     if (agent.codexSessionPath) {
       lines.push(`- Codex session file: ${agent.codexSessionPath}`);
@@ -2582,6 +2697,7 @@ async function runCodexInteractivePrompt(options) {
   let sessionDiscoveryExpired = false;
   let checking = false;
   let settled = false;
+  let lastInvalidReportError = "";
 
   terminal.onData((data) => {
     stdout += data;
@@ -2633,8 +2749,12 @@ async function runCodexInteractivePrompt(options) {
             );
           }
 
-          const report = await readJsonSafe(options.reportJson);
-          if (report && typeof report === "object") {
+          const report = await readSubagentReportIfValid(options.reportJson);
+          if (report.error && report.error !== lastInvalidReportError) {
+            lastInvalidReportError = report.error;
+            appendFileSyncSafe(options.stderrLog, `invalid subagent report JSON at ${options.reportJson}: ${report.error}\n`);
+          }
+          if (report.ok) {
             if (!codexSession && launchToken) {
               codexSession = await findCodexSessionByLaunchToken(launchToken, {
                 sessionsRoot,
@@ -2651,6 +2771,7 @@ async function runCodexInteractivePrompt(options) {
               signal: null,
               stdout,
               stderr,
+              report: report.report,
               ...(codexSession || {}),
             });
             return;
@@ -2707,6 +2828,7 @@ async function runCodexInteractiveSpawnFallback(options) {
   let sessionDiscoveryExpired = false;
   let checking = false;
   let settled = false;
+  let lastInvalidReportError = "";
   const launchToken = String(options.launchToken || "");
 
   child.stdout.on("data", (chunk) => {
@@ -2771,8 +2893,12 @@ async function runCodexInteractiveSpawnFallback(options) {
             );
           }
 
-          const report = await readJsonSafe(options.reportJson);
-          if (report && typeof report === "object") {
+          const report = await readSubagentReportIfValid(options.reportJson);
+          if (report.error && report.error !== lastInvalidReportError) {
+            lastInvalidReportError = report.error;
+            appendFileSyncSafe(options.stderrLog, `invalid subagent report JSON at ${options.reportJson}: ${report.error}\n`);
+          }
+          if (report.ok) {
             if (!codexSession && launchToken) {
               codexSession = await findCodexSessionByLaunchToken(launchToken, {
                 sessionsRoot: options.sessionsRoot,
@@ -2789,6 +2915,7 @@ async function runCodexInteractiveSpawnFallback(options) {
               signal: null,
               stdout,
               stderr,
+              report: report.report,
               ...(codexSession || {}),
             });
             return;
@@ -2933,6 +3060,10 @@ function envDurationMs(name, fallback) {
 }
 
 function codexResumeCommand(sessionId) {
+  return sessionId ? `codex resume ${sessionId}` : "";
+}
+
+function codexResumeAllCommand(sessionId) {
   return sessionId ? `codex resume --all ${sessionId}` : "";
 }
 
@@ -2960,6 +3091,7 @@ export async function findCodexSessionByLaunchToken(launchToken, options = {}) {
       codexSessionId: sessionId,
       codexSessionPath: file.filePath,
       codexResumeCommand: codexResumeCommand(sessionId),
+      codexResumeAllCommand: codexResumeAllCommand(sessionId),
     };
   }
   return null;
@@ -3104,12 +3236,47 @@ async function killCodexInteractivePty(terminal, exitPromise, isExited) {
 }
 
 function normalizeSubagentReport(report) {
+  if (!isPlainObject(report)) {
+    throw new Error("subagent report must be a JSON object");
+  }
+  const expectedKeys = ["summary", "tests_run", "risks", "notes"];
+  const keys = Object.keys(report).sort();
+  const expected = [...expectedKeys].sort();
+  const hasExactKeys = keys.length === expected.length
+    && keys.every((key, index) => key === expected[index]);
+  if (!hasExactKeys) {
+    throw new Error(`subagent report must contain exactly these top-level fields: ${expectedKeys.join(", ")}`);
+  }
+  if (typeof report.summary !== "string") {
+    throw new Error("subagent report field summary must be a string");
+  }
+  for (const field of ["tests_run", "risks", "notes"]) {
+    if (!Array.isArray(report[field]) || report[field].some((item) => typeof item !== "string")) {
+      throw new Error(`subagent report field ${field} must be an array of strings`);
+    }
+  }
   return {
-    summary: String(report?.summary || "").trim(),
-    testsRun: Array.isArray(report?.tests_run) ? report.tests_run.map(String) : [],
-    risks: Array.isArray(report?.risks) ? report.risks.map(String) : [],
-    notes: Array.isArray(report?.notes) ? report.notes.map(String) : [],
+    summary: report.summary.trim(),
+    testsRun: report.tests_run.map((item) => item.trim()).filter(Boolean),
+    risks: report.risks.map((item) => item.trim()).filter(Boolean),
+    notes: report.notes.map((item) => item.trim()).filter(Boolean),
   };
+}
+
+async function readSubagentReportIfValid(reportJson) {
+  const report = await readJsonSafe(reportJson);
+  if (report === null) {
+    return { ok: false, report: null, error: "" };
+  }
+  try {
+    return { ok: true, report: normalizeSubagentReport(report), error: "" };
+  } catch (error) {
+    return { ok: false, report: null, error: error.message || String(error) };
+  }
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 async function refreshSessionCounts(context, sessionId) {
@@ -3347,6 +3514,14 @@ function normalizeAgentStatus(status) {
   return normalized;
 }
 
+function normalizeCodexAppResultStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized !== "succeeded" && normalized !== "failed") {
+    throw new Error(`unsupported codex app result status: ${status}`);
+  }
+  return normalized;
+}
+
 async function mutateTaskMeta(context, taskId, mutate) {
   const metaPath = path.join(taskDirPath(context, taskId), "meta.json");
   const lock = await acquireLock(path.join(context.locksRoot, `task-${taskId}.lock`));
@@ -3543,6 +3718,9 @@ async function acquireLock(lockPath) {
       if (error.code !== "EEXIST") {
         throw error;
       }
+      if (await removeStaleLock(lockPath)) {
+        continue;
+      }
       if (Date.now() - started > 30 * 60 * 1000) {
         throw new Error(`timed out waiting for lock: ${lockPath}`);
       }
@@ -3556,6 +3734,32 @@ async function releaseLock(lock) {
     return;
   }
   await fsp.rm(lock.lockPath, { recursive: true, force: true });
+}
+
+async function removeStaleLock(lockPath) {
+  const ownerPath = path.join(lockPath, "owner.json");
+  const owner = await readJsonSafe(ownerPath);
+  const pid = Number(owner?.pid);
+  if (Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) {
+    return false;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) {
+    const stat = await fsp.stat(lockPath).catch(() => null);
+    if (stat && Date.now() - stat.mtimeMs < 30 * 60 * 1000) {
+      return false;
+    }
+  }
+  await fsp.rm(lockPath, { recursive: true, force: true }).catch(() => {});
+  return true;
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
 }
 
 async function spawnCapture(command, args, options = {}) {
