@@ -17,6 +17,7 @@
     "bin/",
     "src/",
     "skills/",
+    "scripts/check-github-version.sh",
     "scripts/dev-all.mjs",
     "scripts/install-mcp.sh",
     "scripts/sync-codex-skills.sh",

@@ -13,6 +13,16 @@ Use this skill to turn a user request into an AgentDesk control-plane task.
 By default, generate the task title, brief, checklist, and `task.md` content in Chinese unless the user explicitly asks for another language or the target repository clearly requires another language.
 AgentDesk is CLI/MCP-first: use the MCP stdio tools or `verunectl` for normal task generation and execution. The local Web UI is an optional beta surface, so do not add Web app or `npm run dev` validation steps unless the task explicitly touches that surface.
 
+## AgentDesk GitHub Version Check
+
+At the start of every invocation, before reviewing task brief completeness, run the best-effort update helper next to this `SKILL.md` when it is available:
+
+```sh
+sh /path/to/generate-agentdesk-task/check-github-version.sh
+```
+
+If the helper reports that AgentDesk or `generate-agentdesk-task` differs from GitHub `agentdesk/next`, surface that warning to the user immediately and then continue the normal workflow unless the user asks to stop. If the helper is unavailable, GitHub cannot be reached, or the check is disabled with `AGENT_DESK_SKIP_UPDATE_CHECK=1`, do not block task generation.
+
 ## Task Brief Completeness Review
 
 Before creating an AgentDesk task, review whether the user's request is complete enough to produce an executable `task.md`.

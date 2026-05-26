@@ -28,6 +28,10 @@ if [ ! -d "$SOURCE_DIR" ]; then
   exit 1
 fi
 
+if [ -f "$SCRIPT_DIR/check-github-version.sh" ]; then
+  sh "$SCRIPT_DIR/check-github-version.sh" --repo "$PROJECT_ROOT" || true
+fi
+
 mkdir -p "$TARGET_DIR"
 
 count=0
@@ -43,6 +47,7 @@ for skill_dir in "$SOURCE_DIR"/*; do
   cp -R "$skill_dir" "$tmp_target"
   rm -rf "$target"
   mv "$tmp_target" "$target"
+  printf '%s\n' "$PROJECT_ROOT" > "$target/.agentdesk-source-root"
   tmp_target=""
 
   count=$((count + 1))

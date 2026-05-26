@@ -12,6 +12,7 @@ const REPO_ROOT = path.resolve(TEST_DIR, "..");
 test("npm package includes bundled Codex skills", async () => {
   const pkg = JSON.parse(await fs.readFile(path.join(REPO_ROOT, "package.json"), "utf8"));
   assert.ok(pkg.files.includes("skills/"));
+  assert.ok(pkg.files.includes("scripts/check-github-version.sh"));
   assert.ok(pkg.files.includes("scripts/sync-codex-skills.sh"));
 
   for (const skillName of [
@@ -42,6 +43,7 @@ test("sync-codex-skills copies bundled skills to CODEX_HOME", async () => {
     env: {
       ...process.env,
       CODEX_HOME: codexHome,
+      AGENT_DESK_SKIP_UPDATE_CHECK: "1",
     },
   });
 
@@ -57,7 +59,12 @@ test("sync-codex-skills copies bundled skills to CODEX_HOME", async () => {
   ]) {
     const source = await fs.readFile(path.join(REPO_ROOT, "skills", skillName, "SKILL.md"), "utf8");
     const installed = await fs.readFile(path.join(codexHome, "skills", skillName, "SKILL.md"), "utf8");
+    const sourceRoot = await fs.readFile(
+      path.join(codexHome, "skills", skillName, ".agentdesk-source-root"),
+      "utf8",
+    );
     assert.equal(installed, source);
+    assert.equal(sourceRoot.trim(), REPO_ROOT);
   }
 
   await assert.rejects(async () => {
@@ -89,6 +96,84 @@ test("generate-agentdesk-task skill requires task brief completeness review", as
   assert.match(skill, /complete enough to produce an executable `task\.md`/);
   assert.match(skill, /ask the user a concise follow-up question/);
   assert.match(skill, /before calling `create_agentdesk_task`/);
+});
+
+test("generate-agentdesk-task skill documents GitHub update check", async () => {
+  const skill = await fs.readFile(
+    path.join(REPO_ROOT, "skills", "generate-agentdesk-task", "SKILL.md"),
+    "utf8",
+  );
+
+  assert.match(skill, /AgentDesk GitHub Version Check/);
+  assert.match(skill, /check-github-version\.sh/);
+  assert.match(skill, /AGENT_DESK_SKIP_UPDATE_CHECK=1/);
+});
+
+test("check-github-version warns when the local checkout differs from GitHub", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-version-check-"));
+  const remote = path.join(tempRoot, "remote.git");
+  const local = path.join(tempRoot, "local");
+  const updater = path.join(tempRoot, "updater");
+
+  await runOk("git", ["init", "--bare", remote]);
+  await runOk("git", ["init", "-b", "agentdesk/next", local]);
+  await runOk("git", ["-C", local, "config", "user.email", "agentdesk@example.com"]);
+  await runOk("git", ["-C", local, "config", "user.name", "AgentDesk Test"]);
+  await fs.writeFile(path.join(local, "README.md"), "initial\n");
+  await runOk("git", ["-C", local, "add", "README.md"]);
+  await runOk("git", ["-C", local, "commit", "-m", "initial"]);
+  await runOk("git", ["-C", local, "remote", "add", "origin", remote]);
+  await runOk("git", ["-C", local, "push", "origin", "agentdesk/next"]);
+
+  await runOk("git", ["clone", remote, updater]);
+  await runOk("git", ["-C", updater, "switch", "agentdesk/next"]);
+  await runOk("git", ["-C", updater, "config", "user.email", "agentdesk@example.com"]);
+  await runOk("git", ["-C", updater, "config", "user.name", "AgentDesk Test"]);
+  await fs.writeFile(path.join(updater, "README.md"), "updated\n");
+  await runOk("git", ["-C", updater, "commit", "-am", "update"]);
+  await runOk("git", ["-C", updater, "push", "origin", "agentdesk/next"]);
+
+  const result = await run("sh", [path.join(REPO_ROOT, "scripts", "check-github-version.sh"), "--repo", local], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      AGENT_DESK_GITHUB_REPO_URL: remote,
+    },
+  });
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stderr, /AgentDesk update available/);
+  assert.match(result.stderr, /git -C .* pull --ff-only/);
+});
+
+test("check-github-version stays quiet when the local checkout is ahead of GitHub", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-version-check-ahead-"));
+  const remote = path.join(tempRoot, "remote.git");
+  const local = path.join(tempRoot, "local");
+
+  await runOk("git", ["init", "--bare", remote]);
+  await runOk("git", ["init", "-b", "agentdesk/next", local]);
+  await runOk("git", ["-C", local, "config", "user.email", "agentdesk@example.com"]);
+  await runOk("git", ["-C", local, "config", "user.name", "AgentDesk Test"]);
+  await fs.writeFile(path.join(local, "README.md"), "initial\n");
+  await runOk("git", ["-C", local, "add", "README.md"]);
+  await runOk("git", ["-C", local, "commit", "-m", "initial"]);
+  await runOk("git", ["-C", local, "remote", "add", "origin", remote]);
+  await runOk("git", ["-C", local, "push", "origin", "agentdesk/next"]);
+
+  await fs.writeFile(path.join(local, "README.md"), "local ahead\n");
+  await runOk("git", ["-C", local, "commit", "-am", "local ahead"]);
+
+  const result = await run("sh", [path.join(REPO_ROOT, "scripts", "check-github-version.sh"), "--repo", local], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      AGENT_DESK_GITHUB_REPO_URL: remote,
+    },
+  });
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /AgentDesk update available/);
 });
 
 test("review-agentdesk-task skill documents read-only pre-implementation task review", async () => {
@@ -176,4 +261,10 @@ function run(command, args, options = {}) {
       resolve({ exitCode, stdout, stderr });
     });
   });
+}
+
+async function runOk(command, args, options = {}) {
+  const result = await run(command, args, options);
+  assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+  return result;
 }
