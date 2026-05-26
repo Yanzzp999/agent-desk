@@ -290,7 +290,8 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.match(sessionDoc, /- Subagent launcher: codex-cli/);
   assert.match(sessionDoc, /- Parallelism: 2/);
   assert.match(sessionDoc, /- Batch size: 6/);
-  assert.match(sessionDoc, /- Codex resume: codex resume --all fake-session-/);
+  assert.match(sessionDoc, /- Codex resume: codex resume fake-session-/);
+  assert.match(sessionDoc, /- Codex resume \(any cwd\): codex resume --all fake-session-/);
 
   for (const agent of sessionMeta.agents) {
     const taskSnapshot = await fs.readFile(agent.paths.taskSnapshotMd, "utf8");
@@ -319,7 +320,8 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
     assert.match(report.notes[0], /^Prompt length \d+$/);
     assert.deepEqual(agent.testsRun, ["fake codex"]);
     assert.match(agent.codexSessionId, /^fake-session-/);
-    assert.equal(agent.codexResumeCommand, `codex resume --all ${agent.codexSessionId}`);
+    assert.equal(agent.codexResumeCommand, `codex resume ${agent.codexSessionId}`);
+    assert.equal(agent.codexResumeAllCommand, `codex resume --all ${agent.codexSessionId}`);
     assert.match(agent.codexSessionPath, /rollout-/);
   }
 
@@ -789,10 +791,12 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
   );
   assert.match(cliShow.docContent, /Subagent launcher: codex-cli/);
   assert.match(cliShow.docContent, /Status: succeeded/);
-  assert.match(cliShow.docContent, /Codex resume: codex resume --all fake-session-/);
+  assert.match(cliShow.docContent, /Codex resume: codex resume fake-session-/);
+  assert.match(cliShow.docContent, /Codex resume \(any cwd\): codex resume --all fake-session-/);
   for (const agent of cliShow.agents) {
     assert.match(agent.codexSessionId, /^fake-session-/);
-    assert.equal(agent.codexResumeCommand, `codex resume --all ${agent.codexSessionId}`);
+    assert.equal(agent.codexResumeCommand, `codex resume ${agent.codexSessionId}`);
+    assert.equal(agent.codexResumeAllCommand, `codex resume --all ${agent.codexSessionId}`);
     assert.match(agent.codexSessionPath, /rollout-/);
   }
 

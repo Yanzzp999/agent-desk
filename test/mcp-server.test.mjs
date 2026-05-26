@@ -487,7 +487,8 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.equal(launchTokens.size, meta.agents.length);
     assert.ok(meta.agents.every((agent) => agent.launchToken.startsWith(`agentdesk-${sessionId}-${agent.id}-`)));
     assert.ok(meta.agents.every((agent) => /^fake-session-/.test(agent.codexSessionId)));
-    assert.ok(meta.agents.every((agent) => agent.codexResumeCommand === `codex resume --all ${agent.codexSessionId}`));
+    assert.ok(meta.agents.every((agent) => agent.codexResumeCommand === `codex resume ${agent.codexSessionId}`));
+    assert.ok(meta.agents.every((agent) => agent.codexResumeAllCommand === `codex resume --all ${agent.codexSessionId}`));
     assert.ok(meta.agents.every((agent) => agent.codexSessionPath.includes("rollout-")));
     assert.match(await fs.readFile(meta.agents[0].paths.taskSnapshotMd, "utf8"), /Inspect API surface/);
     assert.match(await fs.readFile(meta.agents[0].paths.memorySnapshotMd, "utf8"), /Existing MCP memory/);
@@ -516,12 +517,15 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
       },
     });
     assert.equal(read.structuredContent.subagentLauncher, "codex-cli");
-    assert.match(read.structuredContent.docContent, /Codex resume: codex resume --all fake-session-/);
-    assert.match(read.content[0].text, /Codex resume: codex resume --all fake-session-/);
+    assert.match(read.structuredContent.docContent, /Codex resume: codex resume fake-session-/);
+    assert.match(read.structuredContent.docContent, /Codex resume \(any cwd\): codex resume --all fake-session-/);
+    assert.match(read.content[0].text, /Codex resume: codex resume fake-session-/);
+    assert.match(read.content[0].text, /Codex resume \(any cwd\): codex resume --all fake-session-/);
     assert.equal(read.structuredContent.agents.length, 7);
     for (const agent of read.structuredContent.agents) {
       assert.match(agent.codexSessionId, /^fake-session-/);
-      assert.equal(agent.codexResumeCommand, `codex resume --all ${agent.codexSessionId}`);
+      assert.equal(agent.codexResumeCommand, `codex resume ${agent.codexSessionId}`);
+      assert.equal(agent.codexResumeAllCommand, `codex resume --all ${agent.codexSessionId}`);
       assert.match(agent.codexSessionPath, /rollout-/);
     }
 

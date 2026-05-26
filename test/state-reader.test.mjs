@@ -567,7 +567,8 @@ test("discovers Codex session only from launch token in user prompt records", as
 
   assert.equal(discovered.codexSessionId, validSessionId);
   assert.equal(discovered.codexSessionPath, validPath);
-  assert.equal(discovered.codexResumeCommand, `codex resume --all ${validSessionId}`);
+  assert.equal(discovered.codexResumeCommand, `codex resume ${validSessionId}`);
+  assert.equal(discovered.codexResumeAllCommand, `codex resume --all ${validSessionId}`);
 });
 
 async function writeTaskState(projectRoot, options) {

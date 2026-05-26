@@ -20,7 +20,7 @@ Each agent gets `task.snapshot.md`, `memory.snapshot.md`, `prompt.md`, stdout/st
 
 For `codex-cli`, AgentDesk starts each subagent with the interactive `codex` command through a pseudo-terminal, not `codex exec`. The initial prompt includes a unique AgentDesk launch token and a report protocol requiring the subagent to write JSON to its assigned `report.json` with `summary`, `tests_run`, `risks`, and `notes`.
 
-AgentDesk discovers the generated Codex rollout under `${CODEX_HOME:-~/.codex}/sessions` by matching that launch token, then records `codexSessionId`, `codexSessionPath`, and `codexResumeCommand` on the agent. The displayed command is `codex resume --all <codexSessionId>`; from the original cwd, bare `codex resume <codexSessionId>` can continue the same interactive session.
+AgentDesk discovers the generated Codex rollout under `${CODEX_HOME:-~/.codex}/sessions` by matching that launch token, then records `codexSessionId`, `codexSessionPath`, `codexResumeCommand`, and `codexResumeAllCommand` on the agent. The primary displayed command is `codex resume <codexSessionId>`; AgentDesk also displays `codex resume --all <codexSessionId>` for resuming from another working directory.
 
 Automatic completion is still driven by AgentDesk. The runner streams PTY output to `stdout.log`, records runner errors and timeouts in `stderr.log`, waits for parseable `report.json`, and then asks the interactive Codex session to exit. If Codex exits before a valid report or the report wait times out, the agent is marked failed.
 

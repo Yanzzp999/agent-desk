@@ -831,6 +831,7 @@ async function prepareCodexAppSession(context, task, sessionId) {
       codexSessionId: "",
       codexSessionPath: "",
       codexResumeCommand: "",
+      codexResumeAllCommand: "",
       headCommit: "",
       mergedCommit: "",
       integrationMode: "current-branch",
@@ -943,6 +944,7 @@ export async function runSessionJob(context, sessionId) {
       codexSessionId: "",
       codexSessionPath: "",
       codexResumeCommand: "",
+      codexResumeAllCommand: "",
       headCommit: "",
       mergedCommit: "",
       integrationMode: "",
@@ -1105,6 +1107,7 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
       codexSessionId: result.codexSessionId || "",
       codexSessionPath: result.codexSessionPath || "",
       codexResumeCommand: result.codexResumeCommand || "",
+      codexResumeAllCommand: result.codexResumeAllCommand || "",
       summary: normalizedReport.summary,
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
@@ -1208,6 +1211,7 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
       codexSessionId: result.codexSessionId || "",
       codexSessionPath: result.codexSessionPath || "",
       codexResumeCommand: result.codexResumeCommand || "",
+      codexResumeAllCommand: result.codexResumeAllCommand || "",
       summary: normalizedReport.summary,
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
@@ -2035,8 +2039,16 @@ export function renderSessionDocument(session, task) {
     if (agent.codexSessionId) {
       lines.push(`- Codex session: ${agent.codexSessionId}`);
     }
-    if (agent.codexResumeCommand) {
-      lines.push(`- Codex resume: ${agent.codexResumeCommand}`);
+    const codexResume = agent.codexSessionId
+      ? codexResumeCommand(agent.codexSessionId)
+      : agent.codexResumeCommand || "";
+    const codexResumeAll = agent.codexResumeAllCommand
+      || (agent.codexSessionId ? codexResumeAllCommand(agent.codexSessionId) : "");
+    if (codexResume) {
+      lines.push(`- Codex resume: ${codexResume}`);
+    }
+    if (codexResumeAll && codexResumeAll !== codexResume) {
+      lines.push(`- Codex resume (any cwd): ${codexResumeAll}`);
     }
     if (agent.codexSessionPath) {
       lines.push(`- Codex session file: ${agent.codexSessionPath}`);
@@ -2757,6 +2769,10 @@ function envDurationMs(name, fallback) {
 }
 
 function codexResumeCommand(sessionId) {
+  return sessionId ? `codex resume ${sessionId}` : "";
+}
+
+function codexResumeAllCommand(sessionId) {
   return sessionId ? `codex resume --all ${sessionId}` : "";
 }
 
@@ -2784,6 +2800,7 @@ export async function findCodexSessionByLaunchToken(launchToken, options = {}) {
       codexSessionId: sessionId,
       codexSessionPath: file.filePath,
       codexResumeCommand: codexResumeCommand(sessionId),
+      codexResumeAllCommand: codexResumeAllCommand(sessionId),
     };
   }
   return null;
