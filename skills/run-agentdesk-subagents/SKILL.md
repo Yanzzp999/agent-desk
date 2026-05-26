@@ -46,7 +46,8 @@ If the user later chooses a different concurrency value, respect the user-select
    - If the launch plan has more subagents than `parallelism`, launch them in batches of at most `parallelism`.
    - Give each subagent its returned prompt exactly enough to execute its assigned subtask.
    - Do not edit the same files from multiple subagents unless the task plan explicitly separates ownership.
-7. Summarize session id, launcher, maximum parallelism, actual launched or prepared subagent count, changed files, and verification. For `codex-app`, report host-side succeeded/failed counts only when the Codex App host returned them; AgentDesk itself keeps `succeededAgents` at `0` for launch-plan preparation.
+   - After each host-side subagent finishes, call `record_codex_app_subagent_result` with the agent id, status, and required report fields so AgentDesk can distinguish preparation from real execution completion.
+7. Summarize session id, launcher, maximum parallelism, actual launched or prepared subagent count, changed files, and verification. For `codex-app`, report host-side succeeded/failed counts only after `record_codex_app_subagent_result` has updated the AgentDesk session.
 
 ## CLI Fallback
 
@@ -69,4 +70,4 @@ For Codex App handoff through the CLI fallback, include `--execution-mode curren
 - Configuration defines the maximum concurrency only; it does not force every run to use that many subagents.
 - User-selected concurrency must be in the inclusive range `1..maxParallelism`, and no batch may exceed that cap.
 - Never claim a session has app subagents running just because a launch plan exists; only the Codex App host can actually start them.
-- Never treat an AgentDesk `succeeded` status for a `codex-app` session as evidence that host-side subagents completed; it only means launch-plan preparation succeeded unless host execution results are separately available.
+- Never treat launch-plan preparation as evidence that host-side subagents completed. A `codex-app` session reaches `succeeded` only after host results are recorded back into AgentDesk.

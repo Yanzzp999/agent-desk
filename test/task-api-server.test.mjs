@@ -189,6 +189,14 @@ test("task API server validates JSON bodies and returns consistent error envelop
     assert.equal(invalidJson.status, 400);
     assert.equal(invalidJsonBody.error.code, "INVALID_JSON");
 
+    const unsupportedDispatchKnob = await requestJson(baseUrl, "/api/agentdesk/tasks/task-alpha/dispatch", {
+      method: "POST",
+      body: { serviceTier: "standard", launchBatchSize: 12 },
+    });
+    assert.equal(unsupportedDispatchKnob.status, 400);
+    assert.equal(unsupportedDispatchKnob.body.error.code, "VALIDATION_ERROR");
+    assert.match(unsupportedDispatchKnob.body.error.message, /invalid body/);
+
     const missing = await requestJson(baseUrl, "/api/agentdesk/tasks/missing-task");
     assert.equal(missing.status, 404);
     assert.deepEqual(missing.body, {

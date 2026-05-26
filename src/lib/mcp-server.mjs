@@ -5,11 +5,13 @@ import {
   createContext,
   createSession,
   createTask,
+  getAgentLogs,
   getCodexAppLaunchPlan,
   getSession,
   getTask,
   listSessions,
   listTasks,
+  recordCodexAppSubagentResult,
 } from "./control-plane.mjs";
 import {
   claimTaskMarkdownItems,
@@ -134,7 +136,7 @@ export function createAgentDeskMcpServer(options = {}) {
       taskName: z.string().min(1).describe("Task filename, title, or title slug inside task/. Examples: 'checkout-flow.task.md' or 'Checkout flow'."),
       items: z.array(z.union([z.number(), z.string().min(1)])).min(1).describe("Checklist item selectors. Use 1-based item numbers, exact titles, or unique title fragments."),
       assignee: z.string().optional().describe("Agent/session name to show in the claim marker. Defaults to AGENT_DESK_AGENT_NAME, CODEX_SESSION_ID, or 'agent'."),
-      sessionId: z.string().optional().describe("Optional session id to write beside the claim marker."),
+      sessionId: z.string().min(1).describe("Session id to write beside the claim marker."),
       note: z.string().optional().describe("Optional short note stored beside the claim marker."),
       force: z.boolean().optional().describe("Overwrite claims owned by another assignee. Default: false."),
       projectRoot: z.string().optional().describe("Project root. Defaults to AGENT_DESK_PROJECT_ROOT, INIT_CWD, or the MCP server working directory."),
@@ -440,19 +442,12 @@ export function createAgentDeskMcpServer(options = {}) {
     outputSchema: sessionStartSchema(),
   }, async (args, extra) => {
     const context = createMcpContext(args, options);
-    const subagentLauncher = args.subagentLauncher || "codex-cli";
-    const waitForCompletion = subagentLauncher === "codex-cli"
-      ? args.waitForCompletion ?? true
-      : false;
-    const waitTimeoutMs = waitForCompletion
-      ? args.waitTimeoutMs || START_SUBAGENT_SESSION_WAIT_TIMEOUT_MS
-      : 0;
     let result = await createSession(context, args.taskId, {
       parallelism: args.parallelism,
       model: args.model,
       reasoning: args.reasoning,
-      executionMode: args.executionMode || (subagentLauncher === "codex-app" ? "current-branch" : undefined),
-      subagentLauncher,
+      executionMode: args.executionMode || (args.subagentLauncher === "codex-app" ? "current-branch" : undefined),
+      subagentLauncher: args.subagentLauncher,
       baseBranch: args.baseBranch,
       worktreeIntegration: args.worktreeIntegration,
       pushWorktreeIntegration: args.pushWorktreeIntegration,
@@ -460,6 +455,13 @@ export function createAgentDeskMcpServer(options = {}) {
       waitForCompletion: false,
       allowDuplicateSession: args.allowDuplicateSession || args.force,
     });
+    const resolvedLauncher = result.subagentLauncher || "codex-cli";
+    const waitForCompletion = resolvedLauncher === "codex-cli"
+      ? args.waitForCompletion ?? true
+      : false;
+    const waitTimeoutMs = waitForCompletion
+      ? args.waitTimeoutMs || START_SUBAGENT_SESSION_WAIT_TIMEOUT_MS
+      : 0;
     let waitTimedOut = false;
     let waitElapsedMs = 0;
     if (waitForCompletion) {
@@ -468,7 +470,7 @@ export function createAgentDeskMcpServer(options = {}) {
       waitTimedOut = waitResult.timedOut;
       waitElapsedMs = waitResult.elapsedMs;
     }
-    const appLaunchPlan = subagentLauncher === "codex-app"
+    const appLaunchPlan = resolvedLauncher === "codex-app"
       ? await getCodexAppLaunchPlan(context, result.sessionId)
       : emptyAppLaunchPlan(result.sessionId, result.parallelism);
     const payload = {
@@ -527,6 +529,62 @@ export function createAgentDeskMcpServer(options = {}) {
       appLaunchPlan,
     };
     return toolResult(payload, result.docContent || `Read AgentDesk session: ${result.sessionId}`);
+  });
+
+  server.registerTool("read_subagent_logs", {
+    title: "Read Subagent Logs",
+    description: "Read stdout and stderr logs for one AgentDesk subagent.",
+    inputSchema: {
+      sessionId: z.string().min(1).describe("AgentDesk session id under <project>/.agent-desk/sessions."),
+      agentId: z.string().min(1).describe("Agent id such as agent-01."),
+      ...contextInputSchema(),
+    },
+    outputSchema: z.object({
+      sessionId: z.string(),
+      agentId: z.string(),
+      stdoutPath: z.string(),
+      stderrPath: z.string(),
+      stdout: z.string(),
+      stderr: z.string(),
+    }),
+  }, async (args) => {
+    const context = createMcpContext(args, options);
+    const result = await getAgentLogs(context, args.sessionId, args.agentId);
+    return toolResult(result, result.stdout || result.stderr || `Read logs for ${args.agentId}`);
+  });
+
+  server.registerTool("record_codex_app_subagent_result", {
+    title: "Record Codex App Subagent Result",
+    description: "Record a Codex App host-side subagent completion or failure back into an AgentDesk codex-app session.",
+    inputSchema: {
+      sessionId: z.string().min(1).describe("AgentDesk codex-app session id."),
+      agentId: z.string().min(1).describe("Agent id such as agent-01."),
+      status: z.enum(["succeeded", "failed"]).describe("Host-side result status."),
+      report: z.object({
+        summary: z.string(),
+        tests_run: z.array(z.string()),
+        risks: z.array(z.string()),
+        notes: z.array(z.string()),
+      }).strict().optional().describe("Required when status is succeeded."),
+      error: z.string().optional().describe("Failure message when status is failed."),
+      changedFiles: z.array(z.string()).optional().describe("Optional host-reported changed files."),
+      codexSessionId: z.string().optional(),
+      codexSessionPath: z.string().optional(),
+      codexResumeCommand: z.string().optional(),
+      codexResumeAllCommand: z.string().optional(),
+      ...contextInputSchema(),
+    },
+    outputSchema: sessionDetailSchema(),
+  }, async (args) => {
+    const context = createMcpContext(args, options);
+    const result = await recordCodexAppSubagentResult(context, args.sessionId, args.agentId, args);
+    const appLaunchPlan = await getCodexAppLaunchPlan(context, result.sessionId);
+    const payload = {
+      ...result,
+      requiresHostLaunch: appLaunchPlan.requiresHostLaunch,
+      appLaunchPlan,
+    };
+    return toolResult(payload, `Recorded Codex App ${args.status} result for ${args.agentId}`);
   });
 
   return server;
@@ -705,10 +763,16 @@ function appLaunchPlanSchema() {
     requiresHostLaunch: z.boolean(),
     launchTool: z.string(),
     parallelism: z.number(),
+    model: z.string(),
+    reasoning: z.string(),
+    serviceTier: z.string(),
     subagents: z.array(z.object({
       agentId: z.string(),
       title: z.string(),
       status: z.string(),
+      model: z.string(),
+      reasoning: z.string(),
+      serviceTier: z.string(),
       taskSnapshotPath: z.string(),
       memorySnapshotPath: z.string(),
       promptPath: z.string(),
@@ -773,6 +837,9 @@ function emptyAppLaunchPlan(sessionId, parallelism) {
     requiresHostLaunch: false,
     launchTool: "",
     parallelism,
+    model: "gpt-5.5",
+    reasoning: "xhigh",
+    serviceTier: "fast",
     subagents: [],
   };
 }

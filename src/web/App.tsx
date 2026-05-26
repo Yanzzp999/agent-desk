@@ -324,7 +324,7 @@ export default function App() {
         <div className="workspace-title">
           <span className="app-mark" aria-hidden="true">AD</span>
           <div>
-            <p className="eyebrow">AgentDesk</p>
+            <p className="eyebrow">AgentDesk beta</p>
             <h1>Task operations</h1>
           </div>
         </div>

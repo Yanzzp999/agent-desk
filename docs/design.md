@@ -26,6 +26,6 @@ Automatic completion is still driven by AgentDesk. The runner streams PTY output
 
 ## Codex App Handoff
 
-With `--subagent-launcher codex-app`, AgentDesk prepares session metadata and prompt files but does not start app subagents itself. The MCP result includes `requiresHostLaunch: true` and an `appLaunchPlan`.
+With `--subagent-launcher codex-app`, AgentDesk prepares session metadata and prompt files but does not start app subagents itself. The MCP result includes `requiresHostLaunch: true`, the selected model/reasoning/service tier, and an `appLaunchPlan`.
 
-Prepared Codex App agents stay in `prepared_for_app`; AgentDesk does not count them as succeeded just because the launch plan was created. The Codex App host owns the actual launch, waiting, and host-side result reporting.
+Prepared Codex App agents stay in `prepared_for_app`; AgentDesk does not count them as succeeded just because the launch plan was created. The Codex App host owns the actual launch and waiting, then records host-side success or failure through `record_codex_app_subagent_result`.

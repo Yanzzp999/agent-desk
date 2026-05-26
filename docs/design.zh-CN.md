@@ -26,6 +26,6 @@ AgentDesk 会在 `${CODEX_HOME:-~/.codex}/sessions` 下按 launch token 匹配 C
 
 ## Codex App handoff
 
-使用 `--subagent-launcher codex-app` 时，AgentDesk 只准备 session metadata 和 prompt 文件，不直接启动 app subagents。MCP 结果会包含 `requiresHostLaunch: true` 和 `appLaunchPlan`。
+使用 `--subagent-launcher codex-app` 时，AgentDesk 只准备 session metadata 和 prompt 文件，不直接启动 app subagents。MCP 结果会包含 `requiresHostLaunch: true`、选定的 model/reasoning/service tier 和 `appLaunchPlan`。
 
-已准备好的 Codex App agent 会保持 `prepared_for_app`；AgentDesk 不会因为 launch plan 创建成功就把它们计为 succeeded。真正启动、等待和 host-side 结果统计由 Codex App host 负责。
+已准备好的 Codex App agent 会保持 `prepared_for_app`；AgentDesk 不会因为 launch plan 创建成功就把它们计为 succeeded。真正启动和等待由 Codex App host 负责，host-side 成功或失败结果再通过 `record_codex_app_subagent_result` 回写到 AgentDesk。

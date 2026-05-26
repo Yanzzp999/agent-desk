@@ -235,6 +235,7 @@ test("claims checklist items by task name and preserves visible ownership marker
       taskName: "manual-claim-flow.task.md",
       items: [1],
       assignee: "agent-beta",
+      sessionId: "session-beta",
     }),
     /already claimed: 1 by agent-alpha/,
   );
@@ -277,7 +278,7 @@ test("claim_task_items rejects completed or session-conflicting claims unless fo
       items: [1],
       assignee: "agent-alpha",
     }),
-    /already claimed: 1 by agent-alpha\/session-alpha/,
+    /sessionId is required/,
   );
 
   await assert.rejects(

@@ -82,9 +82,11 @@ test("overall task store supports period list, claim, dispatch, and audit state"
   const claimed = await claimOverallTask(context, created.task.overallTaskId, {
     assignee: "worker",
     sessionId: "session-claim",
+    note: "claiming coding task",
   });
   assert.equal(claimed.task.status, "claimed");
   assert.equal(claimed.task.claim.claimedBy, "worker");
+  assert.equal(claimed.task.claim.note, "claiming coding task");
 
   await assert.rejects(
     () => claimOverallTask(context, created.task.overallTaskId, {
@@ -98,9 +100,15 @@ test("overall task store supports period list, claim, dispatch, and audit state"
     assignee: "worker",
     sessionId: "session-claim",
     branch: "agentdesk/next",
+    dispatchTarget: "codex-cli",
+    agentdeskTaskId: "task-control-plane",
+    note: "dispatching to AgentDesk",
   });
   assert.equal(dispatched.task.status, "dispatched");
   assert.equal(dispatched.task.dispatch.sessionId, "session-claim");
+  assert.equal(dispatched.task.dispatch.target, "codex-cli");
+  assert.equal(dispatched.task.dispatch.agentdeskTaskId, "task-control-plane");
+  assert.equal(dispatched.task.dispatch.note, "dispatching to AgentDesk");
 
   const read = await getOverallTask(context, created.task.overallTaskId);
   assert.deepEqual(

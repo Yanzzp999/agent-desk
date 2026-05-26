@@ -57,6 +57,7 @@ const MAX_ASSIGNEE_LENGTH = 160;
 const MAX_SESSION_ID_LENGTH = 220;
 const MAX_SOURCE_TYPE_LENGTH = 80;
 const MAX_PERIOD_KEY_LENGTH = 120;
+const MAX_DISPATCH_TARGET_LENGTH = 220;
 
 const optionalText = z.preprocess((value) => normalizeOptionalString(value), z.string());
 const nonEmptyText = z.preprocess((value) => normalizeOptionalString(value), z.string().min(1));
@@ -99,6 +100,7 @@ const claimTaskSchema = z.object({
   assignee: nonEmptyText,
   sessionId: optionalText.optional(),
   actor: optionalText.optional(),
+  message: optionalText.optional(),
   force: z.boolean().optional(),
   now: nullableDateTime.optional(),
 }).strict();
@@ -108,6 +110,9 @@ const dispatchTaskSchema = z.object({
   assignee: optionalText.optional(),
   actor: optionalText.optional(),
   branch: optionalText.optional(),
+  target: optionalText.optional(),
+  agentdeskTaskId: optionalText.optional(),
+  message: optionalText.optional(),
   force: z.boolean().optional(),
   now: nullableDateTime.optional(),
 }).strict();
@@ -496,6 +501,7 @@ export class TaskStore {
         eventType: "claim",
         actor: parsed.actor || assignee,
         sessionId,
+        message: parsed.message,
         createdAt: now,
         changes,
       });
@@ -520,6 +526,8 @@ export class TaskStore {
     const sessionId = normalizeBoundedText(parsed.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
     const assignee = normalizeBoundedText(parsed.assignee, "assignee", MAX_ASSIGNEE_LENGTH);
     const branch = normalizeBoundedText(parsed.branch, "branch", MAX_BRANCH_LENGTH);
+    const target = normalizeBoundedText(parsed.target, "target", MAX_DISPATCH_TARGET_LENGTH);
+    const agentdeskTaskId = normalizeBoundedText(parsed.agentdeskTaskId, "agentdeskTaskId", MAX_SESSION_ID_LENGTH);
     const now = normalizeDateString(parsed.now || this.now());
     return runImmediateTransaction(this.db, () => {
       const before = this.getTask(taskId);
@@ -553,8 +561,15 @@ export class TaskStore {
         eventType: "dispatch",
         actor: parsed.actor || nextAssignee,
         sessionId,
+        message: parsed.message,
         createdAt: now,
-        changes,
+        changes: {
+          ...changes,
+          dispatchMetadata: {
+            target,
+            agentdeskTaskId,
+          },
+        },
       });
       if (before.status !== after.status) {
         this.appendAuditEvent({

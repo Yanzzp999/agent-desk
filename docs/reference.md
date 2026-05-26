@@ -33,7 +33,9 @@ Before subagent execution, the coordinating model should review task complexity 
 | `read_agentdesk_task` | Read a control-plane task, generated `task.md`, shared `memory.md`, and session summaries. |
 | `start_subagent_session` | Start a Codex CLI session or prepare a Codex App launch plan. |
 | `list_subagent_sessions` | List AgentDesk sessions from `.agent-desk/sessions`. |
-| `read_subagent_session` | Read session status, agent summaries, docs, logs, and Codex App launch-plan details when available. |
+| `read_subagent_session` | Read session status, agent summaries, docs, and Codex App launch-plan details when available. |
+| `read_subagent_logs` | Read stdout/stderr logs for one session agent. |
+| `record_codex_app_subagent_result` | Record Codex App host-side success or failure back into a waiting launch-plan session. |
 
 ## Task Format
 

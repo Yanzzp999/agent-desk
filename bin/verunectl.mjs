@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { startAgentDeskMcpServer } from "../src/lib/mcp-server.mjs";
-import { startTaskApiServer } from "../src/lib/task-api-server.mjs";
 import {
   createContext,
   createSession,
@@ -39,6 +38,7 @@ const VALUE_OPTIONS = new Set([
   "parallelism",
   "project",
   "reasoning",
+  "service-tier",
   "subagent-launcher",
   "task",
   "title",
@@ -73,7 +73,17 @@ const VALUE_OPTIONS = new Set([
 ]);
 
 main().catch((error) => {
-  console.error(`verunectl: ${error.message}`);
+  if (wantsJsonOutput(process.argv.slice(2))) {
+    console.error(JSON.stringify({
+      ok: false,
+      error: {
+        code: "VERUNECTL_ERROR",
+        message: error.message,
+      },
+    }, null, 2));
+  } else {
+    console.error(`verunectl: ${error.message}`);
+  }
   process.exit(1);
 });
 
@@ -333,6 +343,7 @@ async function handleSessions(context, parsed) {
       parallelism: parsed.parallel || parsed.parallelism || parsed.concurrency || parsed["codex-count"],
       model: parsed.model,
       reasoning: parsed.reasoning || parsed.effort,
+      serviceTier: parsed["service-tier"],
       executionMode: parsed["execution-mode"] || parsed.mode,
       subagentLauncher: parsed["subagent-launcher"],
       baseBranch: parsed["base-branch"] || parsed.branch,
@@ -360,6 +371,7 @@ async function handleSessions(context, parsed) {
 }
 
 async function handleApi(context, parsed) {
+  const { startTaskApiServer } = await import("../src/lib/task-api-server.mjs");
   const listener = await startTaskApiServer({
     context,
     host: parsed.host,
@@ -496,6 +508,10 @@ function parseArgs(argv) {
   return result;
 }
 
+function wantsJsonOutput(argv) {
+  return argv.includes("--json") || argv.some((arg) => arg.startsWith("--json="));
+}
+
 function required(value, label) {
   if (!value) {
     throw new Error(`${label} is required`);
@@ -551,6 +567,7 @@ Task create options:
 Session start options:
   --model MODEL          Codex model for subagents. Default: gpt-5.5.
   --reasoning EFFORT     Reasoning effort: low, medium, high, or xhigh. Default: xhigh.
+  --service-tier TIER    Service tier. The supported value is fast.
   --parallel N           Maximum concurrent subagents or app launch prompts. Default: 6, max: 24.
   --concurrency N        Alias for --parallel.
   --codex-count N        Alias for --parallel.

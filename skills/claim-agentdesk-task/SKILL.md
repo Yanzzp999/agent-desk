@@ -10,7 +10,7 @@ description: "Explicitly specified only: use this skill only when the user write
 The user must explicitly specify this skill by writing `$claim-agentdesk-task` or `claim-agentdesk-task` by name. Never infer this skill from task content, workflow fit, or requests to claim AgentDesk work alone.
 
 Use this skill when multiple agents may independently pull work from the same markdown task file.
-AgentDesk is CLI/MCP-only for this workflow. Coordinate through MCP task tools and focused command-line verification; do not add GUI, browser, Electron, Web app, or `npm run dev` checks unless the task explicitly adds a supported UI surface.
+AgentDesk is CLI/MCP-first for this workflow. Coordinate through MCP task tools and focused command-line verification; do not add GUI, browser, Electron, Web app, or `npm run dev` checks unless the task explicitly touches the optional beta UI surface.
 
 ## Required Identity
 

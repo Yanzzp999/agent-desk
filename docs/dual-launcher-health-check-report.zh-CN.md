@@ -1,5 +1,7 @@
 # AgentDesk 双启动链路健康检查报告
 
+> 历史报告：本文记录 2026-05-25 当时的健康检查结果，保留作为回归背景；当前默认工作流以 `agentdesk/next` 为基线且默认不 push，Codex App 结果可通过 `record_codex_app_subagent_result` 回写。
+
 生成时间：2026-05-25 21:10 CST
 
 任务：`task-20260525T123804Z-dual-launcher-health-check-validation-project`

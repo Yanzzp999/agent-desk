@@ -33,7 +33,9 @@
 | `read_agentdesk_task` | 读取 control-plane task、生成的 `task.md`、共享 `memory.md` 和 session 摘要。 |
 | `start_subagent_session` | 启动 Codex CLI session，或准备 Codex App launch plan。 |
 | `list_subagent_sessions` | 从 `.agent-desk/sessions` 列出 AgentDesk sessions。 |
-| `read_subagent_session` | 读取 session 状态、agent 摘要、文档、日志，以及可用时的 Codex App launch-plan 细节。 |
+| `read_subagent_session` | 读取 session 状态、agent 摘要、文档，以及可用时的 Codex App launch-plan 细节。 |
+| `read_subagent_logs` | 读取指定 session agent 的 stdout/stderr 日志。 |
+| `record_codex_app_subagent_result` | 把 Codex App host 侧成功或失败结果回写到等待中的 launch-plan session。 |
 
 ## Task 格式
 
