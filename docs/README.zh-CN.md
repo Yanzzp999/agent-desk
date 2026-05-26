@@ -72,6 +72,12 @@ codex mcp add agent-desk-my-project \
 npm run dev
 ```
 
+也可以用一个命令同时启动两个进程：
+
+```sh
+npm run dev:all -- --project /absolute/path/to/project
+```
+
 Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agentdesk` 代理到 `http://127.0.0.1:19731` 上的 Node.js ESM HTTP API；API 默认会把总体 task 元数据、周期归属、领取/分发状态和审计事件保存在用户级 `~/.agent-desk/tasks.sqlite`。单次运行需要覆盖路径时传 `--sqlite-path <file>`。
 
 预期本地 API routes：
