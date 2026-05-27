@@ -319,99 +319,118 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
-      <section className="top-strip" aria-label="Project and runtime status">
-        <div className="workspace-title">
-          <span className="app-mark" aria-hidden="true">AD</span>
-          <div>
-            <p className="eyebrow">AgentDesk beta</p>
-            <h1>Task operations</h1>
+    <div className="app-shell">
+      <aside className="app-sidebar" aria-label="Workspace navigation">
+        <div className="sidebar-brand">
+          <span className="brand-mark" aria-hidden="true">AD</span>
+          <div className="brand-text">
+            <strong>AgentDesk</strong>
+            <span>Beta console</span>
           </div>
         </div>
 
-        <div className="project-root-control">
-          <label className="field">
-            <span>Project root</span>
-            <div className="input-with-icon project-input">
-              <FolderGit2 aria-hidden="true" size={17} />
-              <input
-                value={projectRoot}
-                placeholder="/Users/me/work/repository"
-                onChange={(event) => setProjectRoot(event.target.value)}
-              />
-            </div>
-          </label>
-          <p className={`validation-message ${projectRootValidation.valid ? "is-valid" : "is-invalid"}`}>
-            {projectRootValidation.valid ? <CheckCircle2 aria-hidden="true" size={15} /> : <AlertTriangle aria-hidden="true" size={15} />}
-            {projectRootValidation.message}
-          </p>
+        <div className="sidebar-section">
+          <p className="sidebar-label">Project root</p>
+          <div className="project-root-control">
+            <label className="field">
+              <span>Project root</span>
+              <div className="input-with-icon project-input">
+                <FolderGit2 aria-hidden="true" size={15} />
+                <input
+                  value={projectRoot}
+                  placeholder="/Users/me/work/repo"
+                  onChange={(event) => setProjectRoot(event.target.value)}
+                />
+              </div>
+            </label>
+            <p className={`validation-message ${projectRootValidation.valid ? "is-valid" : "is-invalid"}`}>
+              {projectRootValidation.valid
+                ? <CheckCircle2 aria-hidden="true" size={13} />
+                : <AlertTriangle aria-hidden="true" size={13} />}
+              {projectRootValidation.message}
+            </p>
+          </div>
         </div>
 
-        <div className="runtime-status" aria-live="polite">
+        <div className="sidebar-section">
+          <p className="sidebar-label">Overview</p>
+          <div className="summary-stack" aria-label="Task list summary">
+            {summaryItems.map(({ key, label, icon: Icon }) => (
+              <div key={key} className={`summary-row summary-${key}`}>
+                <span className="summary-icon" aria-hidden="true">
+                  <Icon size={16} />
+                </span>
+                <span>{label}</span>
+                <strong>{summary[key]}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="sidebar-footer" aria-live="polite">
           <span className={`runtime-pill source-${apiNotice.source}`}>
             {apiNotice.source === "api" ? "Local API" : "Demo data"}
           </span>
-          <span>{apiNotice.warning || "Node ESM HTTP API is responding."}</span>
+          <p className="runtime-note">{apiNotice.warning || "Node ESM HTTP API is responding."}</p>
           <button
             type="button"
-            className="icon-button"
-            aria-label="Refresh dashboard"
-            title="Refresh dashboard"
+            className="sidebar-refresh"
             onClick={() => void refreshDashboard()}
             disabled={isLoading}
           >
-            <RefreshCw aria-hidden="true" size={17} />
+            <RefreshCw aria-hidden="true" size={14} />
+            {isLoading ? "Refreshing..." : "Refresh"}
           </button>
         </div>
-      </section>
+      </aside>
 
-      <section className="summary-strip" aria-label="Overall task list summary">
-        {summaryItems.map(({ key, label, icon: Icon }) => (
-          <article key={key} className={`summary-card summary-${key}`}>
-            <span className="summary-icon" aria-hidden="true">
-              <Icon size={18} />
-            </span>
-            <span>{label}</span>
-            <strong>{summary[key]}</strong>
-          </article>
-        ))}
-      </section>
-
-      <TaskFilters filters={filters} onChange={setFilters} />
-
-      <section className="workspace-grid">
-        <section className="panel task-panel" aria-label="Overall task list">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Overall task list</p>
-              <h2>Tasks</h2>
-            </div>
+      <main className="app-content">
+        <header className="content-header">
+          <div>
+            <p className="eyebrow">Task operations</p>
+            <h1>Dashboard</h1>
+          </div>
+          <div className="content-actions">
             {isLoading && <span className="loading-pill">Loading</span>}
           </div>
-          <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onSelect={setSelectedTaskId} />
+        </header>
+
+        <TaskFilters filters={filters} onChange={setFilters} />
+
+        <section className="workspace-grid">
+          <section className="panel task-panel" aria-label="Overall task list">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Queue</p>
+                <h2>Tasks</h2>
+              </div>
+              <span className="section-count">{tasks.length}</span>
+            </div>
+            <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onSelect={setSelectedTaskId} />
+          </section>
+
+          <TaskDetail
+            task={taskDetail}
+            canMutate={canMutate}
+            isBusy={isMutating}
+            onClaim={claimSelectedTask}
+            onDispatch={dispatchSelectedTask}
+          />
+
+          <TaskForm
+            mode={formMode}
+            value={draft}
+            projectRoot={projectRoot.trim()}
+            canSubmit={canSubmit}
+            isBusy={isMutating}
+            onModeChange={handleFormModeChange}
+            onChange={setDraft}
+            onSubmit={submitTaskForm}
+          />
         </section>
 
-        <TaskDetail
-          task={taskDetail}
-          canMutate={canMutate}
-          isBusy={isMutating}
-          onClaim={claimSelectedTask}
-          onDispatch={dispatchSelectedTask}
-        />
-
-        <TaskForm
-          mode={formMode}
-          value={draft}
-          projectRoot={projectRoot.trim()}
-          canSubmit={canSubmit}
-          isBusy={isMutating}
-          onModeChange={handleFormModeChange}
-          onChange={setDraft}
-          onSubmit={submitTaskForm}
-        />
-      </section>
-
-      <SessionSummary sessions={sessions} />
-    </main>
+        <SessionSummary sessions={sessions} />
+      </main>
+    </div>
   );
 }
