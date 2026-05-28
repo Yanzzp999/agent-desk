@@ -175,4 +175,15 @@ export const agentDeskApi = {
       { projectRoot, limit },
     );
   },
+
+  importProjectTasks(projectPath: string): Promise<ApiResult<{ ok: boolean; projectRoot: string; importedCount: number; tasks: any[] }>> {
+    return withFallback(
+      "/import-project",
+      {
+        method: "POST",
+        body: JSON.stringify({ projectPath }),
+      },
+      async () => ({ ok: true, projectRoot: projectPath, importedCount: 0, tasks: [] }), // mock
+    );
+  },
 };

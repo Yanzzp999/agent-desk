@@ -1427,3 +1427,159 @@ h2 {
     flex: 1;
   }
 }
+
+/* ===== Quick-win Projects 列表样式（beta 控制台） ===== */
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.project-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.project-pill:hover {
+  background: #f8fafc;
+}
+
+.project-pill.is-active {
+  background: #f1f5f9;
+  border-color: #64748b;
+  font-weight: 500;
+}
+
+.project-pill .project-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 0 5px;
+  border-radius: 4px;
+}
+
+.project-pill.project-all {
+  justify-content: center;
+  font-size: 11px;
+  color: #475569;
+}
+
+.task-project-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.2;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #475569;
+  white-space: nowrap;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+/* === 两种视图模式相关样式 === */
+.workspace-mode-subtitle {
+  font-size: 13px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.mode-hint {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mode-hint.success {
+  color: #166534;
+}
+
+.mode-hint .ghost-action.tiny {
+  font-size: 11px;
+  padding: 1px 6px;
+  height: auto;
+  min-height: 22px;
+}
+
+.form-hint {
+  font-size: 11px;
+  color: #64748b;
+  background: #f8fafc;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-top: -4px;
+}
+
+.sidebar-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.add-project-btn {
+  font-size: 11px !important;
+  padding: 2px 8px !important;
+  background: #e0f2fe;
+  color: #0369a1;
+  border-radius: 4px;
+}
+
+.empty-projects {
+  font-size: 12px;
+  color: #64748b;
+  padding: 8px;
+  background: #f8fafc;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.import-section {
+  margin-top: 8px;
+}
+
+.import-hint {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 8px;
+  line-height: 1.35;
+}
+
+.portfolio-mode-notice {
+  font-size: 12px;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+.portfolio-mode-notice .small {
+  font-size: 11px;
+  margin-top: 2px;
+  opacity: 0.85;
+}
+
+.tiny-note {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-top: 2px;
+  line-height: 1.2;
+}

@@ -135,6 +135,18 @@ const auditEventSchema = z.object({
   createdAt: nullableDateTime.optional(),
 }).strict();
 
+/**
+ * Overall Tasks SQLite 数据库路径解析
+ * 
+ * 设计原则（重要）：
+ * - 这个 tasks.sqlite 是**用户根目录级别**的全局数据库。
+ * - 它只应该存在于 ~/.agent-desk/tasks.sqlite（或用户显式指定的路径）。
+ * - **单个项目级别不应该拥有自己的 Overall Tasks SQLite**。
+ * - 每个项目自己的 .agent-desk/ 目录只存放传统的控制面任务（task.md、sessions 等），
+ *   不存放这个全局的 Overall Tasks 数据库。
+ * 
+ * 这样才能支持用户从根目录统一管理多个项目的任务 + 用户级规划任务。
+ */
 export function resolveTaskStoreDbPath(options = {}) {
   if (
     options.dbPath === TASK_STORE_MEMORY_PATH

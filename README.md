@@ -78,7 +78,11 @@ Or start both processes with one command:
 npm run dev:all -- --project /absolute/path/to/project
 ```
 
-Vite serves the app at `http://127.0.0.1:5173` by default. During development it proxies `/api/agentdesk` to the Node.js ESM HTTP API at `http://127.0.0.1:19731`; the API stores overall task metadata, period assignment, claim/dispatch state, and audit events in the user-level `~/.agent-desk/tasks.sqlite` by default. Pass `--sqlite-path <file>` to override it for a run.
+Vite serves the app at `http://127.0.0.1:5173` by default. During development it proxies `/api/agentdesk` to the Node.js ESM HTTP API at `http://127.0.0.1:19731`; the API stores overall task metadata, period assignment, claim/dispatch state, and audit events in the **user-root-level** `~/.agent-desk/tasks.sqlite` by default.
+
+**Key design principle**: This Overall Tasks SQLite database lives **only at the user root level** (`~/.agent-desk/tasks.sqlite`). Individual project directories should **not** contain their own copy of this database. Each project's `.agent-desk/` directory only holds traditional control-plane tasks (task.md, sessions, etc.). This design enables managing tasks across multiple projects + user-level planning tasks from the user's home directory.
+
+Pass `--sqlite-path <file>` to override it for a run.
 
 Expected local API routes:
 

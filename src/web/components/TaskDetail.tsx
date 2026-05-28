@@ -16,8 +16,11 @@ export function TaskDetail({ task, canMutate, isBusy, onClaim, onDispatch }: Tas
     return (
       <section className="panel detail-panel">
         <div className="panel-body">
-          <EmptyState title="Select a task">
-            Choose a task from the queue to inspect task.md, ownership, and dispatch state.
+          <EmptyState title="点击左侧任务查看详情">
+            <div style={{ textAlign: 'center', fontSize: '13px', color: '#64748b' }}>
+              用户根目录模式下，默认只展示任务简介（摘要）。<br />
+              点击任意任务卡片即可展开完整详情（包括完整 task.md 内容）。
+            </div>
           </EmptyState>
         </div>
       </section>

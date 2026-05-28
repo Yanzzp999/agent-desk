@@ -44,6 +44,11 @@ export function TaskList({ tasks, selectedTaskId, onSelect }: TaskListProps) {
               <PriorityBadge priority={task.priority} />
             </span>
 
+            {/* Quick-win 项目徽章（从任务自带的 projectRoot/scope 展示） */}
+            <span className="task-project-badge" title={task.scope === "user" ? "User-level task" : task.projectRoot}>
+              {task.scope === "user" ? "User" : (task.projectRoot?.split(/[\\/]/).pop() || "Project")}
+            </span>
+
             <span className="task-row-brief">{task.brief}</span>
 
             {task.tags.length > 0 && (

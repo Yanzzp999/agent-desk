@@ -14,7 +14,7 @@ const ranges: Array<{ value: TaskRange; label: string }> = [
 ];
 
 const defaultFilters: TaskFiltersValue = {
-  range: "week",
+  range: "day",   // 与 App.tsx 保持一致，默认每日视图
   status: "all",
   query: "",
   assignee: "",

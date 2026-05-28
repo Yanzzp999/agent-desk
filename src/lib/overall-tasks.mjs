@@ -282,6 +282,31 @@ export async function createOverallTaskApiStore(options = {}) {
       const result = await listSessions(context);
       return result.items.slice(0, limit).map(toUiSessionSummary);
     },
+    async importProjectTasks(projectPath) {
+      const absolutePath = normalizeProjectRootForStore(projectPath);
+      if (!absolutePath) {
+        throw new Error("projectPath is required");
+      }
+
+      // 使用已有的 backfill 能力，把该项目目录下的传统 task.md 导入到全局 Overall Tasks
+      const backfillResult = await backfillTaskMarkdownSources(store, {
+        projectRoot: absolutePath,
+        deskRoot: path.join(absolutePath, ".agent-desk"),
+        eventType: "import",
+        message: `Imported tasks from project at ${absolutePath}`,
+      });
+
+      return {
+        ok: true,
+        projectRoot: absolutePath,
+        importedCount: backfillResult.count,
+        tasks: backfillResult.items.map((t) => ({
+          taskId: t.id,
+          title: t.title,
+          source: t.sourcePath,
+        })),
+      };
+    },
     async close() {},
   };
 }
@@ -306,6 +331,8 @@ function normalizeOverallContext(contextLike, options = {}) {
 }
 
 async function withOverallTaskStore(context, callback) {
+  // 注意：这里打开的永远是用户根目录级别的全局 Overall Tasks SQLite
+  // （见 task-store.mjs 中的设计原则说明）。单个项目不拥有自己的这个数据库。
   const store = openTaskStore({
     projectRoot: context.projectRoot,
     deskRoot: context.taskStoreDeskRoot,

@@ -78,7 +78,11 @@ npm run dev
 npm run dev:all -- --project /absolute/path/to/project
 ```
 
-Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agentdesk` 代理到 `http://127.0.0.1:19731` 上的 Node.js ESM HTTP API；API 默认会把总体 task 元数据、周期归属、领取/分发状态和审计事件保存在用户级 `~/.agent-desk/tasks.sqlite`。单次运行需要覆盖路径时传 `--sqlite-path <file>`。
+Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agentdesk` 代理到 `http://127.0.0.1:19731` 上的 Node.js ESM HTTP API；API 默认会把总体 task 元数据、周期归属、领取/分发状态和审计事件保存在**用户根目录级**的 `~/.agent-desk/tasks.sqlite`。
+
+**重要设计原则**：这个 Overall Tasks 的 SQLite 数据库只存在于用户根目录级别（`~/.agent-desk/tasks.sqlite`）。单个项目目录下**不应该**有这个数据库。每个项目自己的 `.agent-desk/` 目录只存放传统的控制面任务（task.md、session 等）。这样才能支持从用户根目录统一管理多个项目的任务 + 用户级规划任务。
+
+单次运行需要覆盖路径时传 `--sqlite-path <file>`。
 
 预期本地 API routes：
 

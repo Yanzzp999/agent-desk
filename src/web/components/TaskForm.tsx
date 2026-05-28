@@ -6,6 +6,7 @@ interface TaskFormProps {
   mode: "create" | "edit";
   value: TaskMutationInput;
   projectRoot: string;
+  isPortfolioMode?: boolean;
   canSubmit: boolean;
   isBusy: boolean;
   onModeChange: (mode: "create" | "edit") => void;
@@ -25,6 +26,7 @@ export function TaskForm({
   mode,
   value,
   projectRoot,
+  isPortfolioMode = false,
   canSubmit,
   isBusy,
   onModeChange,
@@ -110,6 +112,12 @@ export function TaskForm({
             User
           </button>
         </div>
+
+        {isPortfolioMode && value.scope === "user" && (
+          <p className="form-hint">
+            用户根目录模式下，推荐创建 User 级任务（跨项目规划）
+          </p>
+        )}
 
         <div className="form-grid">
           <label className="field">

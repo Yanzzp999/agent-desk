@@ -481,6 +481,17 @@ async function handleRequest(request, response, options) {
     const result = await callStore(options.store, "createTask", body);
     return sendSuccess(response, 201, result, PassthroughObjectSchema);
   }
+
+  // 导入本地项目中的已有任务（.agent-desk/tasks 或 task/ 下的 markdown）
+  if (segments.length === 1 && segments[0] === "import-project" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    const projectPath = String(body?.projectPath || body?.path || "").trim();
+    if (!projectPath) {
+      throw new TaskApiError(400, "BAD_REQUEST", "projectPath is required");
+    }
+    const result = await callStore(options.store, "importProjectTasks", projectPath);
+    return sendSuccess(response, 200, result, PassthroughObjectSchema);
+  }
   if (segments.length === 2 && segments[0] === "sessions" && segments[1] === "recent" && request.method === "GET") {
     const query = parseWithSchema(RecentSessionsQuerySchema, queryObject(url), "query");
     const result = await callStore(options.store, "listRecentSessions", query.limit);
