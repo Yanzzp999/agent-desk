@@ -715,10 +715,16 @@ h2 {
   text-transform: uppercase;
 }
 
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* ============ Workspace grid ============ */
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(340px, 0.95fr) minmax(360px, 1.2fr) minmax(320px, 0.85fr);
+  grid-template-columns: minmax(420px, 1fr) minmax(380px, 0.9fr);
   gap: 16px;
   align-items: start;
 }
@@ -1561,6 +1567,150 @@ h2 {
   color: #64748b;
   margin-top: 8px;
   line-height: 1.35;
+}
+
+/* Simple modal for the task form — reduces permanent visual density in the main grid */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 19, 34, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  width: min(540px, 92vw);
+  max-height: 82vh;
+  overflow: auto;
+  box-shadow: var(--shadow-pop);
+  border: 1px solid var(--border);
+  position: relative;
+}
+
+/* ========== Markdown Renderer Styles (for user root-level rich tasks) ========== */
+.markdown-content {
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
+  font-weight: 600;
+  margin-top: 1.4em;
+  margin-bottom: 0.5em;
+  color: var(--text);
+}
+
+.markdown-content .md-h1 { font-size: 1.45em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.markdown-content .md-h2 { font-size: 1.25em; }
+.markdown-content .md-h3 { font-size: 1.1em; }
+
+.markdown-content .md-p {
+  margin: 0.6em 0;
+}
+
+.markdown-content .md-list {
+  padding-left: 1.4em;
+  margin: 0.5em 0;
+}
+
+.markdown-content .md-li {
+  margin: 0.25em 0;
+}
+
+.markdown-content .md-inline-code {
+  background: var(--neutral-100);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.markdown-content .md-code-block {
+  background: var(--neutral-900);
+  color: #e2e8f0;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin: 1em 0;
+  font-size: 13px;
+}
+
+.markdown-content .md-blockquote {
+  border-left: 4px solid var(--accent);
+  padding-left: 14px;
+  margin: 1em 0;
+  color: var(--text-soft);
+  font-style: italic;
+}
+
+.markdown-content .md-table-wrapper {
+  overflow-x: auto;
+  margin: 1em 0;
+}
+
+.markdown-content .md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.markdown-content .md-table th,
+.markdown-content .md-table td {
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.markdown-content .md-table th {
+  background: var(--neutral-100);
+  font-weight: 600;
+}
+
+.markdown-content .md-link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.markdown-content .md-link:hover {
+  color: var(--accent-strong);
+}
+
+.markdown-empty {
+  color: var(--muted);
+  font-style: italic;
+  padding: 12px 0;
+}
+
+/* Close button for the task editor modal */
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.modal-close:hover {
+  background: var(--neutral-100);
+  color: var(--text);
 }
 
 .portfolio-mode-notice {

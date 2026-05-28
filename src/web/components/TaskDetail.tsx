@@ -1,6 +1,7 @@
 import { CheckCircle2, FileText, FolderGit2, Play, Send, UserPlus, UserRound } from "lucide-react";
 
 import type { AgentDeskTaskDetail } from "../api/types";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import { EmptyState, formatDateTime, formatPercent, PriorityBadge, StatusBadge } from "./ui";
 
 interface TaskDetailProps {
@@ -96,9 +97,9 @@ export function TaskDetail({ task, canMutate, isBusy, onClaim, onDispatch }: Tas
         <div className="task-md-block">
           <div className="block-title">
             <FileText aria-hidden="true" size={14} />
-            <span>task.md</span>
+            <span>Content (Markdown)</span>
           </div>
-          <pre>{task.markdown}</pre>
+          <MarkdownRenderer content={task.markdown || task.brief} />
         </div>
 
         {task.recentSessions.length > 0 && (

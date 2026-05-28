@@ -7,14 +7,17 @@ interface TaskListProps {
   tasks: AgentDeskTask[];
   selectedTaskId?: string;
   onSelect: (taskId: string) => void;
+  isFocusedProject?: boolean;   // true when viewing one specific project
 }
 
-export function TaskList({ tasks, selectedTaskId, onSelect }: TaskListProps) {
+export function TaskList({ tasks, selectedTaskId, onSelect, isFocusedProject }: TaskListProps) {
   if (tasks.length === 0) {
     return (
       <div className="panel-body">
         <EmptyState title="No matching tasks">
-          Adjust the filters or create a new AgentDesk task for this project root.
+          {isFocusedProject 
+            ? "This project has no tasks matching the current filters (e.g. 'Day' range). Try switching to 'Week' or 'Month', or create a new task for this project."
+            : "Adjust the filters or create a new AgentDesk task for this project root."}
         </EmptyState>
       </div>
     );

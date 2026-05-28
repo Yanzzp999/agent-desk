@@ -29,6 +29,7 @@ import { TaskFilters } from "./components/TaskFilters";
 import { TaskForm } from "./components/TaskForm";
 import { TaskList } from "./components/TaskList";
 import "./styles/app.css";
+import '@uiw/react-md-editor/markdown-editor.css';
 
 const PROJECT_ROOT_STORAGE_KEY = "agentdesk.web.projectRoot";
 
@@ -117,12 +118,20 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionSummaryValue[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const [taskDetail, setTaskDetail] = useState<AgentDeskTaskDetail | null>(null);
-  const [formMode, setFormMode] = useState<"create" | "edit">("create");
+  // formMode is null by default so that refreshing the page does NOT auto-open the create task modal.
+  // The modal should only appear when the user explicitly clicks "+ New".
+  const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
   const [draft, setDraft] = useState<TaskMutationInput>(() => createBlankDraft(projectRoot.trim(), !projectRoot.trim()));
   const [apiNotice, setApiNotice] = useState<{ source: ApiSource; warning?: string }>({ source: "mock" });
   const [isLoading, setIsLoading] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+
+  // Separate list used only to populate the "My Projects" sidebar in Portfolio mode.
+  // We fetch this with a wider range ("month") so that after you import a project (e.g. AgentDesk),
+  // it appears in the sidebar and you can click it to switch/focus, regardless of your current
+  // list filters (Day/Week + status + assignee).
+  const [projectDiscoveryItems, setProjectDiscoveryItems] = useState<AgentDeskTask[]>([]);
 
   // === 两种视图模式定义（用户根目录模式 vs 单项目聚焦模式）===
   const trimmedProjectRoot = projectRoot.trim();
@@ -131,10 +140,15 @@ export default function App() {
 
 
 
-  // Quick-win: 从已加载的任务里客户端推导「已知项目」列表（零后端改动）
+  // Project list for the sidebar.
+  // In Portfolio mode we use a separate broader discovery list (fetched with wider range)
+  // so that the user can always see and switch to imported projects, regardless of the
+  // current list filters (Day/Week + status + assignee).
+  const sourceForKnownProjects = isPortfolioMode ? projectDiscoveryItems : tasks;
+
   const knownProjects = useMemo(() => {
     const map = new Map<string, { projectRoot: string; shortName: string; count: number }>();
-    for (const t of tasks) {
+    for (const t of sourceForKnownProjects) {
       if (t.scope === "project" && t.projectRoot) {
         const existing = map.get(t.projectRoot);
         if (existing) {
@@ -146,7 +160,7 @@ export default function App() {
       }
     }
     return Array.from(map.values()).sort((a, b) => a.shortName.localeCompare(b.shortName));
-  }, [tasks]);
+  }, [sourceForKnownProjects]);
 
   const projectRootValidation = useMemo(() => validateProjectRoot(projectRoot), [projectRoot]);
   const canMutate = !isMutating && (!taskDetail || taskDetail.scope === "user" || projectRootValidation.valid);
@@ -154,7 +168,7 @@ export default function App() {
     && draft.title.trim().length > 0
     && draft.brief.trim().length > 0
     && (draft.scope === "user" || projectRootValidation.valid)
-    && (formMode === "create" || Boolean(selectedTaskId));
+    && (formMode != null || Boolean(selectedTaskId));
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -168,7 +182,24 @@ export default function App() {
         taskType: current.taskType || "coding",
       }
       : current);
-  }, [projectRoot, isPortfolioMode]);
+
+    // When the user focuses a specific project (enters focus mode),
+    // automatically relax the time range filter and clear global filters
+    // like assignee. This ensures that the project's imported or historical
+    // tasks become visible.
+    if (focusedProjectRoot) {
+      const needsWiden = filters.range === "day";
+      const needsClearAssignee = !!filters.assignee;
+
+      if (needsWiden || needsClearAssignee) {
+        setFilters(f => ({
+          ...f,
+          range: needsWiden ? "month" : f.range,
+          assignee: needsClearAssignee ? "" : f.assignee,
+        }));
+      }
+    }
+  }, [projectRoot, isPortfolioMode, focusedProjectRoot]);
 
   useEffect(() => {
     let isActive = true;
@@ -176,9 +207,7 @@ export default function App() {
     async function loadDashboard() {
       setIsLoading(true);
 
-      // Portfolio 模式（用户根目录）下不传 projectRoot，获取全局视图（User + 所有项目任务）
-      // Focus 模式下才传具体项目路径
-      const effectiveProjectRootForApi = isPortfolioMode ? "" : focusedProjectRoot;
+      const effectiveProjectRootForApi = isPortfolioMode ? undefined : focusedProjectRoot;
 
       const [taskResult, sessionResult] = await Promise.all([
         agentDeskApi.listTasks(effectiveProjectRootForApi, filters),
@@ -201,6 +230,20 @@ export default function App() {
 
         return taskResult.data.items[0]?.taskId;
       });
+
+      // Same discovery logic as refreshDashboard for the project switcher in Portfolio mode
+      if (isPortfolioMode) {
+        const discoveryFilters = { ...filters, range: undefined as any };
+        try {
+          const discoveryResult = await agentDeskApi.listTasks(undefined, discoveryFilters);
+          setProjectDiscoveryItems(discoveryResult.data.items);
+        } catch {
+          setProjectDiscoveryItems(taskResult.data.items);
+        }
+      } else {
+        setProjectDiscoveryItems([]);
+      }
+
       setIsLoading(false);
     }
 
@@ -227,7 +270,7 @@ export default function App() {
         return;
       }
 
-      const effectiveProjectRootForApi = isPortfolioMode ? "" : focusedProjectRoot;
+      const effectiveProjectRootForApi = isPortfolioMode ? undefined : focusedProjectRoot;
       const result = await agentDeskApi.getTask(effectiveProjectRootForApi, selectedTaskId);
 
       if (!isActive) {
@@ -257,7 +300,7 @@ export default function App() {
   }, [formMode, projectRoot, selectedTaskId]);
 
   async function refreshDashboard() {
-    const effectiveProjectRootForApi = isPortfolioMode ? "" : focusedProjectRoot;
+    const effectiveProjectRootForApi = isPortfolioMode ? undefined : focusedProjectRoot;
 
     const [taskResult, sessionResult] = await Promise.all([
       agentDeskApi.listTasks(effectiveProjectRootForApi, filters),
@@ -268,6 +311,24 @@ export default function App() {
     setSummary(taskResult.data.summary);
     setSessions(sessionResult.data);
     setApiNotice(combineNotice([taskResult, sessionResult]));
+
+    // In Portfolio mode, also fetch a wider view just to populate the project switcher.
+    // This ensures that after importing a project, it appears in "My Projects" even if
+    // the user's current filters (e.g. "Day" + specific assignee) would hide its tasks
+    // from the main list.
+    if (isPortfolioMode) {
+      // For project discovery in Portfolio, deliberately do NOT send range/period filters.
+      // We want to surface all imported projects regardless of when their tasks were created.
+      const discoveryFilters = { ...filters, range: undefined as any };
+      try {
+        const discoveryResult = await agentDeskApi.listTasks(undefined, discoveryFilters);
+        setProjectDiscoveryItems(discoveryResult.data.items);
+      } catch {
+        setProjectDiscoveryItems(taskResult.data.items);
+      }
+    } else {
+      setProjectDiscoveryItems([]);
+    }
   }
 
   async function handleOpenFinderForImport() {
@@ -303,6 +364,45 @@ export default function App() {
           const result = await agentDeskApi.importProjectTasks(guessed);
           if (result.data?.ok && result.data.importedCount > 0) {
             await refreshDashboard();
+
+            // Optimistically surface the just-imported project in the sidebar immediately.
+            // This makes the "import → see in My Projects → click to switch/focus" flow feel complete and logical,
+            // even before the next full discovery query or if the current filters would hide its tasks.
+            if (isPortfolioMode) {
+              const importedProjectRoot = guessed; // the path we just successfully imported
+              const shortName = projectName;
+
+              setProjectDiscoveryItems((prev) => {
+                const alreadyPresent = prev.some(t => t.projectRoot === importedProjectRoot);
+                if (alreadyPresent) return prev;
+
+                // Create a synthetic task entry so knownProjects can pick it up right away
+                const synthetic: AgentDeskTask = {
+                  taskId: `import-${Date.now()}`,
+                  title: `${shortName} (imported)`,
+                  brief: `Imported via Finder at ${new Date().toISOString()}`,
+                  status: "ready",
+                  priority: "normal",
+                  scope: "project",
+                  taskType: "general",
+                  projectRoot: importedProjectRoot,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                  tags: [],
+                  subtaskCount: 0,
+                  completedSubtasks: 0,
+                  paths: { taskMd: "" },
+                };
+                return [...prev, synthetic];
+              });
+
+              // Widen the visible filter so the newly imported tasks have a chance to appear in the main list too.
+              // This makes the "import → see the project + its tasks" experience feel complete.
+              if (filters.range === "day") {
+                setFilters((f) => ({ ...f, range: "month" }));
+              }
+            }
+
             alert(`成功从 Finder 选中 "${projectName}" 导入 ${result.data.importedCount} 个任务！`);
             imported = true;
             break;
@@ -330,11 +430,30 @@ export default function App() {
     }
   }
 
-  function handleFormModeChange(mode: "create" | "edit") {
+  function handleFormModeChange(mode: "create" | "edit" | null) {
+    if (mode === null) {
+      // Just close the modal, keep the current draft for later
+      setFormMode(null);
+      return;
+    }
+
     setFormMode(mode);
 
     if (mode === "create") {
-      setDraft(createBlankDraft(projectRoot.trim(), isPortfolioMode));
+      // Force a fresh draft when the user explicitly clicks the "New" button
+      // inside the form (they want to start over). Otherwise keep draft for
+      // close/reopen behavior.
+      const isAlreadyCreating = formMode === "create";
+      if (isAlreadyCreating) {
+        // User clicked "New" while already creating → start completely fresh
+        setDraft(createBlankDraft(projectRoot.trim(), isPortfolioMode));
+      } else {
+        // Opening the modal for create — preserve existing draft if any
+        const hasExistingDraft = draft.title.trim() !== "" || draft.brief.trim() !== "";
+        if (!hasExistingDraft) {
+          setDraft(createBlankDraft(projectRoot.trim(), isPortfolioMode));
+        }
+      }
     } else if (taskDetail) {
       setDraft(taskToDraft(taskDetail));
     }
@@ -460,8 +579,7 @@ export default function App() {
 
           {isPortfolioMode && (
             <div className="portfolio-mode-notice">
-              <p>当前处于<strong>用户根目录模式</strong></p>
-              <p className="small">点击下方项目即可进入聚焦模式</p>
+              <p className="small">点击左侧项目即可聚焦查看该项目任务</p>
             </div>
           )}
         </div>
@@ -472,9 +590,6 @@ export default function App() {
             <p className="sidebar-label">
               {isPortfolioMode ? "My Projects" : "Other Projects"}
             </p>
-            {isPortfolioMode && (
-              <p className="tiny-note">Central tasks live in ~/.agent-desk/tasks.sqlite (user root only)</p>
-            )}
           </div>
 
           <div className="project-list">
@@ -486,7 +601,24 @@ export default function App() {
                     key={p.projectRoot}
                     type="button"
                     className={`project-pill ${isActive ? "is-active" : ""}`}
-                    onClick={() => setProjectRoot(p.projectRoot)}
+                    onClick={() => {
+                      setProjectRoot(p.projectRoot);
+                      // When the user explicitly clicks to focus a project,
+                      // immediately relax filters. This is the most reliable place
+                      // to ensure the project's tasks become visible right away.
+                      setFilters(f => ({
+                        ...f,
+                        range: f.range === "day" ? "month" : f.range,
+                        assignee: "",
+                      }));
+                      // Force a refresh so the list updates with the new (wider) filters
+                      // right after the user clicks the project.
+                      setTimeout(() => {
+                        // We can't call refreshDashboard directly here easily because of closure,
+                        // but changing filters + projectRoot will trigger the effects.
+                        // As a belt-and-suspenders, we can also directly refresh if needed.
+                      }, 0);
+                    }}
                     title={`点击聚焦到 ${p.projectRoot}`}
                   >
                     <FolderGit2 aria-hidden="true" size={13} />
@@ -497,7 +629,9 @@ export default function App() {
               })
             ) : (
               <div className="empty-projects">
-                还没有项目。点击上方“从 Finder 添加”导入你的代码仓库。
+                {isPortfolioMode 
+                  ? <>还没有导入任何项目。<br />点击上方的「从 Finder 选择项目导入任务」按钮来添加。</>
+                  : "No other projects imported yet."}
               </div>
             )}
 
@@ -515,7 +649,6 @@ export default function App() {
         {/* Portfolio 模式下的导入项目任务 - 用 Finder 打开选择 */}
         {isPortfolioMode && (
           <div className="sidebar-section import-section">
-            <p className="sidebar-label">Import Project Tasks</p>
             <button
               type="button"
               className="primary-action"
@@ -524,26 +657,8 @@ export default function App() {
             >
               {isImporting ? "导入中..." : "从 Finder 选择项目导入任务"}
             </button>
-            <p className="import-hint">
-              点击后会打开 Finder 选择文件夹，导入该项目已有的传统任务到**用户根目录级**的 Overall Tasks（~/.agent-desk/tasks.sqlite）。单个项目不拥有自己的这个数据库。
-            </p>
           </div>
         )}
-
-        <div className="sidebar-section">
-          <p className="sidebar-label">Overview</p>
-          <div className="summary-stack" aria-label="Task list summary">
-            {summaryItems.map(({ key, label, icon: Icon }) => (
-              <div key={key} className={`summary-row summary-${key}`}>
-                <span className="summary-icon" aria-hidden="true">
-                  <Icon size={16} />
-                </span>
-                <span>{label}</span>
-                <strong>{summary[key]}</strong>
-              </div>
-            ))}
-          </div>
-        </div>
 
         <div className="sidebar-footer" aria-live="polite">
           <span className={`runtime-pill source-${apiNotice.source}`}>
@@ -565,14 +680,13 @@ export default function App() {
       <main className="app-content">
         <header className="content-header">
           <div>
-            <p className="eyebrow">Task operations</p>
             <h1>
               {isPortfolioMode ? "Portfolio Dashboard" : "Project Dashboard"}
             </h1>
             <p className="workspace-mode-subtitle">
               {isPortfolioMode 
-                ? "用户根目录模式 · 查看全部项目 + 用户级任务" 
-                : `聚焦模式 · ${focusedProjectRoot}`}
+                ? "跨项目任务总览（用户根目录）" 
+                : `当前聚焦：${focusedProjectRoot}`}
             </p>
           </div>
           <div className="content-actions">
@@ -586,12 +700,25 @@ export default function App() {
           <section className="panel task-panel" aria-label="Overall task list">
             <div className="panel-heading">
               <div>
-                <p className="eyebrow">Queue</p>
                 <h2>Tasks</h2>
               </div>
-              <span className="section-count">{tasks.length}</span>
+              <div className="panel-actions">
+                <span className="section-count">{tasks.length}</span>
+                <button
+                  type="button"
+                  className="ghost-action"
+                  onClick={() => handleFormModeChange("create")}
+                >
+                  + New
+                </button>
+              </div>
             </div>
-            <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onSelect={setSelectedTaskId} />
+            <TaskList 
+              tasks={tasks} 
+              selectedTaskId={selectedTaskId} 
+              onSelect={setSelectedTaskId}
+              isFocusedProject={!isPortfolioMode}
+            />
           </section>
 
           <TaskDetail
@@ -601,19 +728,36 @@ export default function App() {
             onClaim={claimSelectedTask}
             onDispatch={dispatchSelectedTask}
           />
-
-          <TaskForm
-            mode={formMode}
-            value={draft}
-            projectRoot={projectRoot.trim()}
-            isPortfolioMode={isPortfolioMode}
-            canSubmit={canSubmit}
-            isBusy={isMutating}
-            onModeChange={handleFormModeChange}
-            onChange={setDraft}
-            onSubmit={submitTaskForm}
-          />
         </section>
+
+        {/* Task creation / editing is now contextual rather than permanently occupying screen real estate */}
+        {formMode === "create" && (
+          <div className="modal-backdrop" onClick={() => handleFormModeChange(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              {/* Close button */}
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => handleFormModeChange(null)}
+                aria-label="Close task editor"
+              >
+                ×
+              </button>
+
+              <TaskForm
+                mode={formMode}
+                value={draft}
+                projectRoot={projectRoot.trim()}
+                isPortfolioMode={isPortfolioMode}
+                canSubmit={canSubmit}
+                isBusy={isMutating}
+                onModeChange={(mode) => handleFormModeChange(mode)}
+                onChange={setDraft}
+                onSubmit={submitTaskForm}
+              />
+            </div>
+          </div>
+        )}
 
         <SessionSummary sessions={sessions} />
       </main>

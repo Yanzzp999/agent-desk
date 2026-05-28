@@ -32,6 +32,13 @@ const childEnv = {
   AGENT_DESK_TASK_API_BASE_PATH: apiBasePath,
 };
 
+// Determine whether to use Node's built-in file watcher for the API process.
+// This must be declared early because it's used in the startup logs below.
+const useApiWatch = !process.env.AGENT_DESK_NO_WATCH;
+const apiNodeArgs = useApiWatch
+  ? ["--watch", "--watch-preserve-output"]
+  : [];
+
 const children = [];
 let shuttingDown = false;
 let requestedExitCode = 0;
@@ -39,9 +46,16 @@ let requestedExitCode = 0;
 console.log("Starting AgentDesk local development servers...");
 console.log(`API: http://${apiHost}:${apiPort}${apiBasePath}`);
 console.log("Web: Vite dev server, usually http://127.0.0.1:5173");
+if (useApiWatch) {
+  console.log("API: auto-restarts on code changes (Node --watch). Set AGENT_DESK_NO_WATCH=1 to disable.");
+} else {
+  console.log("API: running without auto-restart (AGENT_DESK_NO_WATCH set).");
+}
+console.log("Frontend: Vite with HMR (full restarts usually not needed).");
 console.log("Press Ctrl+C to stop both processes.");
 
 startChild("api", process.execPath, [
+  ...apiNodeArgs,
   path.join(REPO_ROOT, "bin/verunectl.mjs"),
   "api",
   ...apiArgs,
@@ -173,7 +187,11 @@ Examples:
   npm run dev:all -- --project . --sqlite-path /tmp/agent-desk.sqlite
 
 This starts:
-  API: ./bin/verunectl.mjs api ...
-  Web: npm run dev
+  API: node --watch bin/verunectl.mjs api ...   (auto-restarts when src/ or bin/ files change)
+  Web: npm run dev                                (Vite with fast HMR — full restart rarely needed)
+
+Tip: API auto-restart uses Node --watch.
+  - To disable: AGENT_DESK_NO_WATCH=1 npm run dev:all
+  - Or run the API standalone: ./scripts/verunectl.sh api --project ...
 `);
 }

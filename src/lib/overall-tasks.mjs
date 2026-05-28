@@ -289,23 +289,25 @@ export async function createOverallTaskApiStore(options = {}) {
       }
 
       // 使用已有的 backfill 能力，把该项目目录下的传统 task.md 导入到全局 Overall Tasks
-      const backfillResult = await backfillTaskMarkdownSources(store, {
-        projectRoot: absolutePath,
-        deskRoot: path.join(absolutePath, ".agent-desk"),
-        eventType: "import",
-        message: `Imported tasks from project at ${absolutePath}`,
-      });
+      return withOverallTaskStore(context, async (store) => {
+        const backfillResult = await backfillTaskMarkdownSources(store, {
+          projectRoot: absolutePath,
+          deskRoot: path.join(absolutePath, ".agent-desk"),
+          eventType: "import",
+          message: `Imported tasks from project at ${absolutePath}`,
+        });
 
-      return {
-        ok: true,
-        projectRoot: absolutePath,
-        importedCount: backfillResult.count,
-        tasks: backfillResult.items.map((t) => ({
-          taskId: t.id,
-          title: t.title,
-          source: t.sourcePath,
-        })),
-      };
+        return {
+          ok: true,
+          projectRoot: absolutePath,
+          importedCount: backfillResult.count,
+          tasks: backfillResult.items.map((t) => ({
+            taskId: t.id,
+            title: t.title,
+            source: t.sourcePath,
+          })),
+        };
+      });
     },
     async close() {},
   };

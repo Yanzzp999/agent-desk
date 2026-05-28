@@ -1,4 +1,5 @@
 import { Edit3, FolderGit2, Plus, Save, UserRound } from "lucide-react";
+import MDEditor from '@uiw/react-md-editor';
 
 import { TASK_STATUSES, type TaskMutationInput, type TaskPriority } from "../api/types";
 
@@ -9,7 +10,7 @@ interface TaskFormProps {
   isPortfolioMode?: boolean;
   canSubmit: boolean;
   isBusy: boolean;
-  onModeChange: (mode: "create" | "edit") => void;
+  onModeChange: (mode: "create" | "edit" | null) => void;
   onChange: (value: TaskMutationInput) => void;
   onSubmit: () => void;
 }
@@ -73,13 +74,22 @@ export function TaskForm({
         </label>
 
         <label className="field">
-          <span>Brief</span>
-          <textarea
-            value={value.brief}
-            placeholder="Goal, scope, acceptance criteria, and anything agents should avoid."
-            rows={5}
-            onChange={(event) => onChange({ ...value, brief: event.target.value })}
-          />
+          <span>Content (Markdown)</span>
+          <div data-color-mode="light" style={{ marginTop: 4 }}>
+            <MDEditor
+              value={value.brief}
+              onChange={(val) => onChange({ ...value, brief: val || '' })}
+              height={220}
+              preview="edit"
+              visibleDragbar={false}
+              textareaProps={{
+                placeholder: 'Write in Markdown...\n\n# Goal\n\n- Item 1\n- Item 2\n\n> Acceptance criteria here',
+              }}
+            />
+          </div>
+          <p className="form-hint" style={{ marginTop: 6, fontSize: '12px' }}>
+            支持 Markdown 语法（标题、列表、代码块、引用等）。用户根目录任务推荐使用富文本格式。
+          </p>
         </label>
 
         <div className="segmented-control compact scope-control" aria-label="Task scope">
