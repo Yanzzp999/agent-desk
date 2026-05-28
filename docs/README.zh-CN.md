@@ -63,7 +63,10 @@ codex mcp add agent-desk-my-project \
 
 ## Beta 本地 Web UI
 
-可选 beta Web UI 首屏就是 task 管理。它包含 day/week/month 规划切换、过滤器、总体 task 列表、task 详情、创建/编辑表单、领取和分发动作、coding `projectRoot` 校验，以及最近 session 摘要。
+可选 beta Web UI 已升级为「项目-任务树」Agent 工作区模式（类似 Codex / Claude Code）：
+左侧为可折叠的项目分组 + 任务树（支持搜索、展开持久化），中央是专注任务工作区（Markdown 编辑、进度、会话历史 + 底部 Composer 追加指令），右侧为输出面板占位。
+仍保留 Finder 导入、Claim/Dispatch、projectRoot 校验等核心能力。Web UI 仍是**可选 beta**，默认路径为 CLI/MCP + `task.md` + Codex subagent。
+旧的 Portfolio dashboard 视图已由新树导航取代。
 
 先启动本地 SQLite-backed API，再运行 Vite：
 

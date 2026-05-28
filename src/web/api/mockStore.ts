@@ -1,4 +1,4 @@
-import { buildFixtureTaskDetail, fixtureSessions, fixtureTasks } from "./fixtures";
+import { buildFixtureTaskDetail, extraDemoTasks, fixtureSessions, fixtureTasks } from "./fixtures";
 import type {
   AgentDeskTask,
   AgentDeskTaskDetail,
@@ -40,7 +40,12 @@ function writeStore<T>(key: string, value: T): void {
 }
 
 function readTasks(): AgentDeskTask[] {
-  return readStore(TASK_STORE_KEY, fixtureTasks);
+  const base = readStore(TASK_STORE_KEY, fixtureTasks);
+  // 合并额外演示任务（仅当没有本地存储时展示多项目树）
+  if (base === fixtureTasks) {
+    return [...fixtureTasks, ...extraDemoTasks];
+  }
+  return base;
 }
 
 function writeTasks(tasks: AgentDeskTask[]): void {
@@ -145,6 +150,12 @@ export const mockAgentDeskApi = {
   },
 
   async getTask(taskId: string): Promise<AgentDeskTaskDetail> {
+    // 优先从全量（含 extraDemoTasks）中查找
+    const all = readTasks();
+    const found = all.find((t) => t.taskId === taskId);
+    if (found) {
+      return buildFixtureTaskDetail(found);
+    }
     return buildFixtureTaskDetail(findTaskOrThrow(taskId));
   },
 

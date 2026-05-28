@@ -1,14 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
-  CheckCircle2,
-  CircleDot,
-  CirclePlay,
-  FolderGit2,
-  ListChecks,
   RefreshCw,
-  ShieldAlert,
-  Trophy,
 } from "lucide-react";
 
 import { agentDeskApi } from "./api/client";
@@ -24,10 +16,10 @@ import type {
   TaskMutationInput,
 } from "./api/types";
 import { SessionSummary } from "./components/SessionSummary";
-import { TaskDetail } from "./components/TaskDetail";
-import { TaskFilters } from "./components/TaskFilters";
 import { TaskForm } from "./components/TaskForm";
-import { TaskList } from "./components/TaskList";
+import { TaskWorkspace } from "./components/TaskWorkspace";
+import { WorkspaceNav } from "./components/WorkspaceNav";
+import type { ComposerLaunchParams, WorkspaceProjectGroup, WorkspaceNavTask } from "./api/types";
 import "./styles/app.css";
 import '@uiw/react-md-editor/markdown-editor.css';
 
@@ -47,14 +39,6 @@ const emptySummary: TaskListSummary = {
   blocked: 0,
   succeeded: 0,
 };
-
-const summaryItems = [
-  { key: "total", label: "Total", icon: ListChecks },
-  { key: "ready", label: "Ready", icon: CircleDot },
-  { key: "running", label: "Running", icon: CirclePlay },
-  { key: "blocked", label: "Blocked", icon: ShieldAlert },
-  { key: "succeeded", label: "Succeeded", icon: Trophy },
-] as const;
 
 function readInitialProjectRoot(): string {
   if (typeof window === "undefined") {
@@ -110,11 +94,76 @@ function combineNotice(results: Array<ApiResult<unknown>>): { source: ApiSource;
   return { source: "api" };
 }
 
+// ============================================================
+// Workspace 树分组辅助函数（前端聚合，零后端依赖）
+// 将扁平 AgentDeskTask 列表转为 WorkspaceProjectGroup[]，供 WorkspaceNav 使用
+// ============================================================
+function buildWorkspaceGroups(allTasks: AgentDeskTask[]): WorkspaceProjectGroup[] {
+  const projectMap = new Map<string, { projectRoot: string; shortName: string; tasks: AgentDeskTask[] }>();
+
+  for (const task of allTasks) {
+    if (task.scope === "user" || !task.projectRoot) {
+      // 用户级任务归入特殊 key
+      const key = "__user__";
+      if (!projectMap.has(key)) {
+        projectMap.set(key, { projectRoot: "", shortName: "User Tasks", tasks: [] });
+      }
+      projectMap.get(key)!.tasks.push(task);
+    } else {
+      const key = task.projectRoot;
+      if (!projectMap.has(key)) {
+        const shortName = task.projectRoot.split(/[\\/]/).pop() || task.projectRoot;
+        projectMap.set(key, { projectRoot: key, shortName, tasks: [] });
+      }
+      projectMap.get(key)!.tasks.push(task);
+    }
+  }
+
+  const groups: WorkspaceProjectGroup[] = [];
+
+  for (const [key, entry] of projectMap.entries()) {
+    const sortedTasks = [...entry.tasks].sort((a, b) =>
+      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
+
+    const navTasks: WorkspaceNavTask[] = sortedTasks.map((t) => ({
+      taskId: t.taskId,
+      title: t.title,
+      status: t.status,
+      priority: t.priority,
+      updatedAt: t.updatedAt,
+      claimedBy: t.claimedBy,
+      subtaskProgress: t.subtaskCount > 0 ? Math.round((t.completedSubtasks / t.subtaskCount) * 100) : 0,
+      hasActiveSession: !!t.activeSessionId,
+    }));
+
+    const lastUpdated = sortedTasks[0]?.updatedAt || new Date().toISOString();
+
+    groups.push({
+      project: {
+        projectRoot: entry.projectRoot,
+        shortName: entry.shortName,
+        taskCount: entry.tasks.length,
+        lastUpdatedAt: lastUpdated,
+      },
+      tasks: navTasks,
+      defaultExpanded: key === "__user__",
+    });
+  }
+
+  // User Tasks 永远排在最前，其余按最近活动排序
+  return groups.sort((a, b) => {
+    if (a.project.projectRoot === "") return -1;
+    if (b.project.projectRoot === "") return 1;
+    return new Date(b.project.lastUpdatedAt).getTime() - new Date(a.project.lastUpdatedAt).getTime();
+  });
+}
+
 export default function App() {
   const [projectRoot, setProjectRoot] = useState(readInitialProjectRoot);
   const [filters, setFilters] = useState<TaskFiltersValue>(defaultFilters);
   const [tasks, setTasks] = useState<AgentDeskTask[]>([]);
-  const [summary, setSummary] = useState<TaskListSummary>(emptySummary);
+  const [_summary, setSummary] = useState<TaskListSummary>(emptySummary);
   const [sessions, setSessions] = useState<SessionSummaryValue[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const [taskDetail, setTaskDetail] = useState<AgentDeskTaskDetail | null>(null);
@@ -126,6 +175,11 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+
+  // === Workspace 树导航新状态（类 Codex / Claude Code 模式）===
+  const [navSearchQuery, setNavSearchQuery] = useState("");
+  const [expandedProjectRoots, setExpandedProjectRoots] = useState<Set<string>>(new Set(["__user__"]));
+  const [showRightOutput, setShowRightOutput] = useState(true); // 右侧输出面板（MVP 可折叠）
 
   // Separate list used only to populate the "My Projects" sidebar in Portfolio mode.
   // We fetch this with a wider range ("month") so that after you import a project (e.g. AgentDesk),
@@ -146,7 +200,8 @@ export default function App() {
   // current list filters (Day/Week + status + assignee).
   const sourceForKnownProjects = isPortfolioMode ? projectDiscoveryItems : tasks;
 
-  const knownProjects = useMemo(() => {
+  // _knownProjects 仅为兼容旧发现逻辑保留，当前 WorkspaceNav 使用 workspaceGroups 替代
+  const _knownProjects = useMemo(() => {
     const map = new Map<string, { projectRoot: string; shortName: string; count: number }>();
     for (const t of sourceForKnownProjects) {
       if (t.scope === "project" && t.projectRoot) {
@@ -161,6 +216,7 @@ export default function App() {
     }
     return Array.from(map.values()).sort((a, b) => a.shortName.localeCompare(b.shortName));
   }, [sourceForKnownProjects]);
+  void _knownProjects;
 
   const projectRootValidation = useMemo(() => validateProjectRoot(projectRoot), [projectRoot]);
   const canMutate = !isMutating && (!taskDetail || taskDetail.scope === "user" || projectRootValidation.valid);
@@ -207,7 +263,7 @@ export default function App() {
     async function loadDashboard() {
       setIsLoading(true);
 
-      const effectiveProjectRootForApi = isPortfolioMode ? undefined : focusedProjectRoot;
+      const effectiveProjectRootForApi = isPortfolioMode ? "" : focusedProjectRoot;
 
       const [taskResult, sessionResult] = await Promise.all([
         agentDeskApi.listTasks(effectiveProjectRootForApi, filters),
@@ -235,7 +291,7 @@ export default function App() {
       if (isPortfolioMode) {
         const discoveryFilters = { ...filters, range: undefined as any };
         try {
-          const discoveryResult = await agentDeskApi.listTasks(undefined, discoveryFilters);
+          const discoveryResult = await agentDeskApi.listTasks("", discoveryFilters);
           setProjectDiscoveryItems(discoveryResult.data.items);
         } catch {
           setProjectDiscoveryItems(taskResult.data.items);
@@ -270,8 +326,8 @@ export default function App() {
         return;
       }
 
-      const effectiveProjectRootForApi = isPortfolioMode ? undefined : focusedProjectRoot;
-      const result = await agentDeskApi.getTask(effectiveProjectRootForApi, selectedTaskId);
+      const effectiveProjectRootForApi = isPortfolioMode ? "" : focusedProjectRoot;
+      const result = await agentDeskApi.getTask(effectiveProjectRootForApi || "", selectedTaskId);
 
       if (!isActive) {
         return;
@@ -300,7 +356,7 @@ export default function App() {
   }, [formMode, projectRoot, selectedTaskId]);
 
   async function refreshDashboard() {
-    const effectiveProjectRootForApi = isPortfolioMode ? undefined : focusedProjectRoot;
+    const effectiveProjectRootForApi = isPortfolioMode ? "" : focusedProjectRoot;
 
     const [taskResult, sessionResult] = await Promise.all([
       agentDeskApi.listTasks(effectiveProjectRootForApi, filters),
@@ -321,13 +377,101 @@ export default function App() {
       // We want to surface all imported projects regardless of when their tasks were created.
       const discoveryFilters = { ...filters, range: undefined as any };
       try {
-        const discoveryResult = await agentDeskApi.listTasks(undefined, discoveryFilters);
+        const discoveryResult = await agentDeskApi.listTasks("", discoveryFilters);
         setProjectDiscoveryItems(discoveryResult.data.items);
       } catch {
         setProjectDiscoveryItems(taskResult.data.items);
       }
     } else {
       setProjectDiscoveryItems([]);
+    }
+  }
+
+  // === Workspace 树交互处理器 ===
+  function toggleProject(root: string) {
+    setExpandedProjectRoots((prev) => {
+      const next = new Set(prev);
+      if (next.has(root)) {
+        next.delete(root);
+      } else {
+        next.add(root);
+      }
+      return next;
+    });
+  }
+
+  function handleSelectTask(taskId: string, projectRoot?: string) {
+    setSelectedTaskId(taskId);
+    // 如果传入了 projectRoot，自动切换聚焦（符合用户“点任务即切换项目”习惯）
+    if (projectRoot && projectRoot !== focusedProjectRoot) {
+      setProjectRoot(projectRoot);
+    }
+    // 自动展开对应项目
+    if (projectRoot) {
+      setExpandedProjectRoots((prev) => new Set(prev).add(projectRoot));
+    }
+  }
+
+  // Composer 发送处理（追加到当前任务 或 创建新任务）
+  async function handleComposerSend(
+    text: string,
+    launchParams: ComposerLaunchParams,
+    action: "append" | "new-task"
+  ) {
+    if (!text.trim()) return;
+
+    if (action === "new-task" || !taskDetail) {
+      // 创建新任务（复用现有草稿 + create 逻辑）
+      const newDraft: TaskMutationInput = {
+        ...createBlankDraft(projectRoot.trim(), isPortfolioMode),
+        title: text.length > 60 ? text.slice(0, 57) + "..." : text,
+        brief: text,
+        status: "ready",
+      };
+      setDraft(newDraft);
+      setFormMode("create");
+      // 实际提交留给用户在弹窗确认（或未来可一键直达 dispatch）
+      return;
+    }
+
+    // 追加到当前任务的 brief
+    const currentBrief = taskDetail.brief || taskDetail.markdown || "";
+    const newBrief = currentBrief.trim()
+      ? `${currentBrief.trim()}\n\n### 来自 Web Composer (${new Date().toLocaleString()})\n${text}`
+      : text;
+
+    setIsMutating(true);
+    try {
+      const result = await agentDeskApi.updateTask(taskDetail.taskId, {
+        ...taskToDraft(taskDetail),
+        brief: newBrief,
+      });
+      setTaskDetail(result.data);
+      setApiNotice({ source: result.source, warning: result.warning });
+      await refreshDashboard();
+
+      // 可选：发送后立即 dispatch（符合 agent 模式习惯）
+      // 这里先不自动 dispatch，给用户明确控制权
+    } finally {
+      setIsMutating(false);
+    }
+  }
+
+  // 内联更新 task brief（TaskWorkspace 编辑器保存）
+  async function handleInlineBriefUpdate(newBrief: string) {
+    if (!taskDetail) return;
+    setIsMutating(true);
+    try {
+      const result = await agentDeskApi.updateTask(taskDetail.taskId, {
+        ...taskToDraft(taskDetail),
+        brief: newBrief,
+      });
+      setTaskDetail(result.data);
+      setDraft(taskToDraft(result.data));
+      setApiNotice({ source: result.source, warning: result.warning });
+      await refreshDashboard();
+    } finally {
+      setIsMutating(false);
     }
   }
 
@@ -357,7 +501,6 @@ export default function App() {
       ];
 
       let imported = false;
-      let lastError = '';
 
       for (const guessed of guessedPaths) {
         try {
@@ -408,7 +551,8 @@ export default function App() {
             break;
           }
         } catch (e: any) {
-          lastError = e?.message || String(e);
+          // 诊断用，静默
+          void e;
         }
       }
 
@@ -425,6 +569,7 @@ export default function App() {
         console.error(err);
         alert('选择文件夹时出错：' + (err?.message || err));
       }
+      void err; // 显式消费，避免 noUnusedLocals
     } finally {
       setIsImporting(false);
     }
@@ -532,139 +677,59 @@ export default function App() {
     setIsMutating(false);
   }
 
+  // 计算 Workspace 树数据（基于当前 tasks）
+  const workspaceGroups = useMemo(() => {
+    const source = isPortfolioMode ? projectDiscoveryItems.length > 0 ? projectDiscoveryItems : tasks : tasks;
+    return buildWorkspaceGroups(source);
+  }, [tasks, projectDiscoveryItems, isPortfolioMode]);
+
   return (
-    <div className="app-shell">
-      <aside className="app-sidebar" aria-label="Workspace navigation">
+    <div className="workspace-shell">
+      {/* 左侧：项目-任务树导航（核心新体验） */}
+      <aside className="app-sidebar workspace-nav-shell" aria-label="项目与任务导航">
         <div className="sidebar-brand">
           <span className="brand-mark" aria-hidden="true">AD</span>
           <div className="brand-text">
             <strong>AgentDesk</strong>
-            <span>Beta console</span>
+            <span>Beta · Agent Workspace</span>
           </div>
         </div>
 
-        {/* === 视图模式区分：用户根目录模式 vs 单项目聚焦模式 === */}
-        <div className="sidebar-section">
-          <p className="sidebar-label">
-            {isPortfolioMode ? "Workspace (User Root)" : "Focus Project"}
-          </p>
+        {/* 新的 WorkspaceNav 树组件 */}
+        <WorkspaceNav
+          groups={workspaceGroups}
+          expandedRoots={expandedProjectRoots}
+          onToggleProject={toggleProject}
+          searchQuery={navSearchQuery}
+          onSearchChange={setNavSearchQuery}
+          selectedTaskId={selectedTaskId}
+          onSelectTask={handleSelectTask}
+          onRefresh={() => void refreshDashboard()}
+          isLoading={isLoading}
+          userTasksExpanded={expandedProjectRoots.has("__user__")}
+          onToggleUserTasks={() => toggleProject("__user__")}
+        />
 
-          {/* 在 Portfolio 模式下隐藏手动输入框，改为通过项目列表点击切换 */}
-          {!isPortfolioMode && (
-            <div className="project-root-control">
-              <label className="field">
-                <span>Current Focus</span>
-                <div className="input-with-icon project-input">
-                  <FolderGit2 aria-hidden="true" size={15} />
-                  <input
-                    value={projectRoot}
-                    placeholder="/path/to/project"
-                    onChange={(event) => setProjectRoot(event.target.value)}
-                  />
-                </div>
-              </label>
-
-              <div className="mode-hint">
-                当前处于 <strong>单项目聚焦模式</strong>
-                <button 
-                  type="button" 
-                  className="ghost-action tiny" 
-                  onClick={() => setProjectRoot("")}
-                >
-                  返回用户根目录模式
-                </button>
-              </div>
-            </div>
-          )}
-
-          {isPortfolioMode && (
-            <div className="portfolio-mode-notice">
-              <p className="small">点击左侧项目即可聚焦查看该项目任务</p>
-            </div>
-          )}
-        </div>
-
-        {/* My Projects 列表 - Portfolio 模式下的主要导航入口（点击即可聚焦） */}
-        <div className="sidebar-section">
-          <div className="sidebar-label-row">
-            <p className="sidebar-label">
-              {isPortfolioMode ? "My Projects" : "Other Projects"}
-            </p>
-          </div>
-
-          <div className="project-list">
-            {knownProjects.length > 0 ? (
-              knownProjects.map((p) => {
-                const isActive = p.projectRoot === focusedProjectRoot;
-                return (
-                  <button
-                    key={p.projectRoot}
-                    type="button"
-                    className={`project-pill ${isActive ? "is-active" : ""}`}
-                    onClick={() => {
-                      setProjectRoot(p.projectRoot);
-                      // When the user explicitly clicks to focus a project,
-                      // immediately relax filters. This is the most reliable place
-                      // to ensure the project's tasks become visible right away.
-                      setFilters(f => ({
-                        ...f,
-                        range: f.range === "day" ? "month" : f.range,
-                        assignee: "",
-                      }));
-                      // Force a refresh so the list updates with the new (wider) filters
-                      // right after the user clicks the project.
-                      setTimeout(() => {
-                        // We can't call refreshDashboard directly here easily because of closure,
-                        // but changing filters + projectRoot will trigger the effects.
-                        // As a belt-and-suspenders, we can also directly refresh if needed.
-                      }, 0);
-                    }}
-                    title={`点击聚焦到 ${p.projectRoot}`}
-                  >
-                    <FolderGit2 aria-hidden="true" size={13} />
-                    <span>{p.shortName}</span>
-                    <span className="project-count">{p.count}</span>
-                  </button>
-                );
-              })
-            ) : (
-              <div className="empty-projects">
-                {isPortfolioMode 
-                  ? <>还没有导入任何项目。<br />点击上方的「从 Finder 选择项目导入任务」按钮来添加。</>
-                  : "No other projects imported yet."}
-              </div>
-            )}
-
-            <button
-              type="button"
-              className="project-pill project-all"
-              onClick={() => setProjectRoot("")}
-              title="返回用户根目录模式，查看所有项目 + 用户级任务"
-            >
-              {isPortfolioMode ? "显示全部（含用户级任务）" : "返回用户根目录模式"}
-            </button>
-          </div>
-        </div>
-
-        {/* Portfolio 模式下的导入项目任务 - 用 Finder 打开选择 */}
+        {/* 保留 Finder 导入入口（符合用户已有习惯） */}
         {isPortfolioMode && (
-          <div className="sidebar-section import-section">
+          <div className="sidebar-section import-section" style={{ padding: "0 12px 12px" }}>
             <button
               type="button"
               className="primary-action"
               disabled={isImporting}
               onClick={() => void handleOpenFinderForImport()}
+              style={{ width: "100%", fontSize: 12.5 }}
             >
-              {isImporting ? "导入中..." : "从 Finder 选择项目导入任务"}
+              {isImporting ? "导入中..." : "从 Finder 导入项目"}
             </button>
           </div>
         )}
 
-        <div className="sidebar-footer" aria-live="polite">
+        <div className="sidebar-footer" aria-live="polite" style={{ marginTop: "auto" }}>
           <span className={`runtime-pill source-${apiNotice.source}`}>
             {apiNotice.source === "api" ? "Local API" : "Demo data"}
           </span>
-          <p className="runtime-note">{apiNotice.warning || "Node ESM HTTP API is responding."}</p>
+          <p className="runtime-note">{apiNotice.warning || "Node ESM HTTP API"}</p>
           <button
             type="button"
             className="sidebar-refresh"
@@ -672,69 +737,54 @@ export default function App() {
             disabled={isLoading}
           >
             <RefreshCw aria-hidden="true" size={14} />
-            {isLoading ? "Refreshing..." : "Refresh"}
+            {isLoading ? "刷新中" : "刷新"}
           </button>
         </div>
       </aside>
 
-      <main className="app-content">
-        <header className="content-header">
-          <div>
-            <h1>
-              {isPortfolioMode ? "Portfolio Dashboard" : "Project Dashboard"}
-            </h1>
-            <p className="workspace-mode-subtitle">
-              {isPortfolioMode 
-                ? "跨项目任务总览（用户根目录）" 
-                : `当前聚焦：${focusedProjectRoot}`}
-            </p>
+      {/* 中央：专注任务工作区（取代旧的 list + detail 网格） */}
+      <main className="task-workspace-main">
+        {/* 极简顶部工具栏（保留少量全局操作） */}
+        <div className="workspace-topbar">
+          <div className="topbar-left">
+            <span className="topbar-title">
+              {isPortfolioMode ? "所有项目" : focusedProjectRoot.split(/[\\/]/).pop() || "当前项目"}
+            </span>
+            {isLoading && <span className="loading-pill">加载中</span>}
           </div>
-          <div className="content-actions">
-            {isLoading && <span className="loading-pill">Loading</span>}
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className="ghost-action"
+              onClick={() => handleFormModeChange("create")}
+            >
+              + 新建任务
+            </button>
+            <button
+              type="button"
+              className="ghost-action"
+              onClick={() => setShowRightOutput(v => !v)}
+            >
+              {showRightOutput ? "隐藏输出" : "显示输出"}
+            </button>
           </div>
-        </header>
+        </div>
 
-        <TaskFilters filters={filters} onChange={setFilters} />
+        <TaskWorkspace
+          task={taskDetail}
+          canMutate={canMutate}
+          isBusy={isMutating}
+          onClaim={claimSelectedTask}
+          onDispatch={dispatchSelectedTask}
+          onUpdateBrief={handleInlineBriefUpdate}
+          onComposerSend={handleComposerSend}
+          isPortfolioMode={isPortfolioMode}
+        />
 
-        <section className="workspace-grid">
-          <section className="panel task-panel" aria-label="Overall task list">
-            <div className="panel-heading">
-              <div>
-                <h2>Tasks</h2>
-              </div>
-              <div className="panel-actions">
-                <span className="section-count">{tasks.length}</span>
-                <button
-                  type="button"
-                  className="ghost-action"
-                  onClick={() => handleFormModeChange("create")}
-                >
-                  + New
-                </button>
-              </div>
-            </div>
-            <TaskList 
-              tasks={tasks} 
-              selectedTaskId={selectedTaskId} 
-              onSelect={setSelectedTaskId}
-              isFocusedProject={!isPortfolioMode}
-            />
-          </section>
-
-          <TaskDetail
-            task={taskDetail}
-            canMutate={canMutate}
-            isBusy={isMutating}
-            onClaim={claimSelectedTask}
-            onDispatch={dispatchSelectedTask}
-          />
-        </section>
-
-        {/* Task creation / editing is now contextual rather than permanently occupying screen real estate */}
+        {/* 旧的创建/编辑弹窗保留作为后备（不破坏已有流程） */}
         {formMode === "create" && (
           <div className="modal-backdrop" onClick={() => handleFormModeChange(null)}>
             <div className="modal" onClick={e => e.stopPropagation()}>
-              {/* Close button */}
               <button
                 type="button"
                 className="modal-close"
@@ -743,7 +793,6 @@ export default function App() {
               >
                 ×
               </button>
-
               <TaskForm
                 mode={formMode}
                 value={draft}
@@ -758,9 +807,25 @@ export default function App() {
             </div>
           </div>
         )}
-
-        <SessionSummary sessions={sessions} />
       </main>
+
+      {/* 右侧：输出 / Artifacts 面板（可折叠占位，匹配参考图） */}
+      {showRightOutput && (
+        <aside className="workspace-output" aria-label="输出与产物">
+          <h3>输出面板（Beta）</h3>
+          <div style={{ opacity: 0.7, fontSize: 12, lineHeight: 1.5 }}>
+            最近一次 Dispatch 的 subagent 摘要、文件变更和 token 消耗将在后续迭代中接入。<br /><br />
+            当前版本重点优化左侧项目-任务树导航体验。
+          </div>
+
+          {sessions.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 11, color: "var(--workspace-muted)", marginBottom: 6 }}>最近会话</div>
+              <SessionSummary sessions={sessions} />
+            </div>
+          )}
+        </aside>
+      )}
     </div>
   );
 }
