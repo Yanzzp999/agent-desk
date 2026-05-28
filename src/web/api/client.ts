@@ -186,4 +186,12 @@ export const agentDeskApi = {
       async () => ({ ok: true, projectRoot: projectPath, importedCount: 0, tasks: [] }), // mock
     );
   },
+
+  deleteTask(taskId: string): Promise<ApiResult<{ ok: boolean }>> {
+    return withFallback(
+      AGENTDESK_API_ROUTES.task(taskId),
+      { method: "DELETE" },
+      async () => mockAgentDeskApi.deleteTask(taskId),
+    );
+  },
 };

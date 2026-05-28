@@ -307,4 +307,10 @@ export const mockAgentDeskApi = {
       .filter((session) => taskIds.has(session.taskId))
       .slice(0, limit);
   },
+
+  async deleteTask(taskId: string): Promise<{ ok: boolean }> {
+    const tasks = readTasks().filter((task) => task.taskId !== taskId);
+    writeTasks(tasks);
+    return { ok: true };
+  },
 };
