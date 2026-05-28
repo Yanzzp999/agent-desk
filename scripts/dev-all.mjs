@@ -35,8 +35,19 @@ const childEnv = {
 // Determine whether to use Node's built-in file watcher for the API process.
 // This must be declared early because it's used in the startup logs below.
 const useApiWatch = !process.env.AGENT_DESK_NO_WATCH;
+
+// Strengthen Node's built-in watcher with explicit paths for reliability.
+// This makes the API restart much more consistently when you edit backend code.
 const apiNodeArgs = useApiWatch
-  ? ["--watch", "--watch-preserve-output"]
+  ? [
+      "--watch",
+      "--watch-preserve-output",
+      "--watch-path=src",
+      "--watch-path=bin",
+      "--watch-path=package.json",
+      // Note: no root tsconfig.json exists (only tsconfig.web.json for the Vite web app).
+      // The API backend uses plain .mjs files; watching tsconfig.web.json is not needed here.
+    ]
   : [];
 
 const children = [];
@@ -46,12 +57,22 @@ let requestedExitCode = 0;
 console.log("Starting AgentDesk local development servers...");
 console.log(`API: http://${apiHost}:${apiPort}${apiBasePath}`);
 console.log("Web: Vite dev server, usually http://127.0.0.1:5173");
+
+console.log("");
+console.log("Behavior:");
+console.log("  - Backend changes → API process restarts automatically (Node --watch)");
+console.log("  - Most frontend changes → Instant HMR updates (no server restart needed)");
+console.log("  - For vite.config.ts, dependency, or major config changes → You may need to restart this command");
+console.log("");
 if (useApiWatch) {
-  console.log("API: auto-restarts on code changes (Node --watch). Set AGENT_DESK_NO_WATCH=1 to disable.");
+  console.log("API: auto-restarts on code changes (Node --watch with explicit paths).");
+  console.log("     Set AGENT_DESK_NO_WATCH=1 to disable auto-restart.");
 } else {
   console.log("API: running without auto-restart (AGENT_DESK_NO_WATCH set).");
 }
-console.log("Frontend: Vite with HMR (full restarts usually not needed).");
+console.log("Frontend: Vite dev server with Hot Module Replacement (HMR).");
+console.log("          Most frontend changes update instantly without full restart.");
+console.log("          Full Vite restart is only needed for vite.config.ts, new dependencies, etc.");
 console.log("Press Ctrl+C to stop both processes.");
 
 startChild("api", process.execPath, [
@@ -186,12 +207,14 @@ Examples:
   npm run dev:all -- --project /absolute/path/to/project
   npm run dev:all -- --project . --sqlite-path /tmp/agent-desk.sqlite
 
-This starts:
-  API: node --watch bin/verunectl.mjs api ...   (auto-restarts when src/ or bin/ files change)
-  Web: npm run dev                                (Vite with fast HMR — full restart rarely needed)
+Behavior:
+  - Backend (API): Auto-restarts on code changes using Node --watch.
+  - Frontend: Uses Vite with Hot Module Replacement (HMR).
+    → Most .tsx / .css changes update instantly without restarting the dev server.
+    → You only need to restart "dev:all" for vite.config.ts, new dependencies, or major config changes.
 
-Tip: API auto-restart uses Node --watch.
-  - To disable: AGENT_DESK_NO_WATCH=1 npm run dev:all
-  - Or run the API standalone: ./scripts/verunectl.sh api --project ...
+Tip:
+  - Disable API auto-restart: AGENT_DESK_NO_WATCH=1 npm run dev:all
+  - Run only backend:      ./scripts/verunectl.sh api --project ...
 `);
 }
