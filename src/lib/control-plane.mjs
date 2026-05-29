@@ -2021,22 +2021,57 @@ function buildCurrentBranchSubagentPrompt(task, taskMarkdown, taskMemory, sessio
 }
 
 export function parseTaskMarkdownItems(markdown) {
+  // Delegate to the new checklist parser (which tracks checked state) for the core detection logic.
+  // Legacy callers only need titles, so we map back to the old {title, detail} shape.
+  const checklist = parseMarkdownChecklist(markdown);
+  if (checklist.length > 0) {
+    return checklist.map((item) => ({ title: item.title, detail: "" }));
+  }
+
+  // Fallback behavior for tasks that have no checklist at all (original behavior)
+  const fallback = extractMarkdownTitle(markdown) || firstSentence(markdown);
+  return fallback
+    ? [{ title: fallback, detail: "" }]
+    : [];
+}
+
+function uniqueTaskItems(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = item.title.toLowerCase();
+    if (!item.title || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Parse checkbox-style checklist items from markdown.
+ * Returns items with their checked state preserved.
+ * Supports both direct `- [ ] foo` / `- [x] bar` lists and items under a "## Subtasks" section.
+ * This is the source of truth for subtask progress in the beta Web UI Overall Tasks layer.
+ */
+export function parseMarkdownChecklist(markdown) {
   const lines = String(markdown || "").split(/\r?\n/);
-  const checklistItems = [];
+  const items = [];
+
+  // Style 1: explicit checkbox items anywhere (preferred for MCP task/*.task.md)
   for (const line of lines) {
-    const match = line.match(/^\s*(?:[-*+]|\d+[.)])\s+\[(?: |x|X)\]\s+(.+?)\s*$/);
+    const match = line.match(/^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s+(.+?)\s*$/);
     if (match) {
-      checklistItems.push({
-        title: match[1].trim(),
-        detail: "",
+      items.push({
+        title: match[2].trim(),
+        checked: /^[xX]$/.test(match[1]),
       });
     }
   }
-  if (checklistItems.length > 0) {
-    return uniqueTaskItems(checklistItems);
+  if (items.length > 0) {
+    return uniqueChecklistItems(items);
   }
 
-  const subtasks = [];
+  // Style 2: legacy "under ## Subtasks" heading (plain bullets, treated as unchecked for progress)
   let insideSubtasks = false;
   for (const line of lines) {
     if (/^##+\s+subtasks\b/i.test(line)) {
@@ -2051,23 +2086,20 @@ export function parseTaskMarkdownItems(markdown) {
     }
     const match = line.match(/^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/);
     if (match) {
-      subtasks.push({
+      items.push({
         title: match[1].trim(),
-        detail: "",
+        checked: false,
       });
     }
   }
-  if (subtasks.length > 0) {
-    return uniqueTaskItems(subtasks);
+  if (items.length > 0) {
+    return uniqueChecklistItems(items);
   }
 
-  const fallback = extractMarkdownTitle(markdown) || firstSentence(markdown);
-  return fallback
-    ? [{ title: fallback, detail: "" }]
-    : [];
+  return [];
 }
 
-function uniqueTaskItems(items) {
+function uniqueChecklistItems(items) {
   const seen = new Set();
   return items.filter((item) => {
     const key = item.title.toLowerCase();

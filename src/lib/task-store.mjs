@@ -310,9 +310,20 @@ export class TaskStore {
       projectRoot: this.projectRoot,
       preserveCreatedAt: true,
     });
-    const existing = normalized.sourcePath
+
+    // First try by sourcePath (normal case for a given checkout).
+    let existing = normalized.sourcePath
       ? this.getTaskBySourcePath(normalized.sourcePath)
-      : this.getTask(normalized.id);
+      : null;
+
+    // Fallback: if a task with this stable id already exists (e.g. project moved
+    // or different checkout of the same repo), claim/update the existing record
+    // instead of attempting an INSERT that would collide on the PRIMARY KEY id.
+    // This resolves the id collision crash when re-importing from a relocated path.
+    if (!existing && normalized.id) {
+      existing = this.getTask(normalized.id);
+    }
+
     if (!existing) {
       return this.createTask({
         ...normalized,

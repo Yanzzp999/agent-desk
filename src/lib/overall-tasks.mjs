@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod/v4";
-import { createContext, listSessions } from "./control-plane.mjs";
+import { createContext, listSessions, parseMarkdownChecklist } from "./control-plane.mjs";
 import { canonicalizeTaskPeriodKey, validateTaskPeriod } from "./task-periods.mjs";
 import { validateTaskProjectRoot } from "./task-validation.mjs";
 import { backfillTaskMarkdownSources, openTaskStore } from "./task-store.mjs";
@@ -557,7 +558,30 @@ function latestAuditEvent(events, eventType) {
   return null;
 }
 
+function loadSourceMarkdown(sourcePath) {
+  if (!sourcePath) return "";
+  try {
+    return fs.readFileSync(sourcePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function computeSubtaskStats(sourcePathOrMarkdown) {
+  let markdown = "";
+  if (typeof sourcePathOrMarkdown === "string" && sourcePathOrMarkdown.includes("\n")) {
+    markdown = sourcePathOrMarkdown;
+  } else if (sourcePathOrMarkdown) {
+    markdown = loadSourceMarkdown(sourcePathOrMarkdown);
+  }
+  const items = parseMarkdownChecklist(markdown);
+  const total = items.length;
+  const done = items.filter((i) => i.checked).length;
+  return { subtaskCount: total, completedSubtasks: done };
+}
+
 function toUiTaskSummary(task) {
+  const stats = computeSubtaskStats(task.sourcePath);
   return {
     taskId: task.id,
     title: task.title,
@@ -572,8 +596,8 @@ function toUiTaskSummary(task) {
     updatedAt: task.updatedAt,
     dueAt: task.dueAt || undefined,
     tags: [task.projectRoot ? "project" : "user", task.periodType, task.taskType].filter(Boolean),
-    subtaskCount: 0,
-    completedSubtasks: 0,
+    subtaskCount: stats.subtaskCount,
+    completedSubtasks: stats.completedSubtasks,
     claimedBy: task.claimedBy || undefined,
     activeSessionId: task.dispatchSessionId || undefined,
     activeSessionStatus: task.dispatchSessionId ? "running" : undefined,
@@ -584,9 +608,15 @@ function toUiTaskSummary(task) {
 }
 
 function toUiTaskDetail(task) {
+  const base = toUiTaskSummary(task);
+  // Prefer real markdown from the source file for imported/backfilled tasks (MCP task/*.task.md
+  // or .agent-desk/tasks/*/task.md). Fall back to any in-memory value or a minimal header.
+  const rawMarkdown = task.markdown
+    || loadSourceMarkdown(task.sourcePath)
+    || `# ${task.title}\n\n${task.description || ""}\n`;
   return {
-    ...toUiTaskSummary(task),
-    markdown: task.markdown || `# ${task.title}\n\n${task.description || ""}\n`,
+    ...base,
+    markdown: rawMarkdown,
     memory: "",
     recentSessions: task.recentSessions || [],
   };

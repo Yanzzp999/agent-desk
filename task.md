@@ -117,3 +117,8 @@ AgentDesk 当前已经从支持的产品入口上变成 CLI-only：
 - 2026-05-13：完成 CLI-only 迁移，移除支持的 GUI/Web 产品面，增加 session 配置参数和校验，增加 fake Codex E2E 覆盖，并验证所有测试和 CLI smoke check。
 - 2026-05-13：按要求将 `README.md` 和 `task.md` 改成中文文档。
 - 2026-05-13：新增 MCP stdio server 入口，支持在其他项目的 `task/` 目录生成 `<title-slug>.task.md`，并强制任务条目为 markdown checkbox 待办清单。
+- 2026-05-29：从 Claude 会话 `28e5c1ba-9efe-4969-8968-6b56edeb0e2d` 继续（用户 Claude 额度耗尽）。修复 beta Web UI Overall Tasks 层三个问题：
+  - 导入 id 碰撞崩溃：`upsertTask` 现在在 source_path 未命中时回退按 id 查找，已存在则更新 source_path（支持项目移动/多 checkout 场景）。
+  - subtask 进度始终为 0：新增 `parseMarkdownChecklist`（导出）正确解析 `[x]` 状态；`toUiTaskSummary`/`toUiTaskDetail` 在有 `sourcePath` 时从磁盘读取 markdown 并计算真实 `subtaskCount` / `completedSubtasks`。
+  - 详情页无真实 markdown/子任务：`toUiTaskDetail` 优先从 `sourcePath` 加载完整内容。
+  - 所有 88 个测试通过；parser 行为经验证（含 checked 状态）；继续保持 Web UI 为可选 beta 面，不影响 CLI/MCP 主路径。
