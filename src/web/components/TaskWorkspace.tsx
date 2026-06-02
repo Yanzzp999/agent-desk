@@ -5,7 +5,6 @@ import {
   FileText,
   FolderGit2,
   Play,
-  Send,
   Trash2,
   UserPlus,
   UserRound,
@@ -13,9 +12,11 @@ import {
   ArrowLeft,
 } from "lucide-react";
 
-import type { AgentDeskTask, AgentDeskTaskDetail, ComposerLaunchParams } from "../api/types";
+import type { AgentDeskTask, AgentDeskTaskDetail, ComposerLaunchParams, SubtaskRow } from "../api/types";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { Composer } from "./Composer";
+import { DispatchPanel, type DispatchParams } from "./DispatchPanel";
+import { SubtaskBreakdownPanel } from "./SubtaskBreakdownPanel";
 import { EmptyState, formatDateTime, formatPercent, PriorityBadge, StatusBadge } from "./ui";
 
 interface TaskWorkspaceProps {
@@ -26,8 +27,10 @@ interface TaskWorkspaceProps {
   canMutate: boolean;
   isBusy: boolean;
   onClaim: () => void | Promise<void>;
-  onDispatch: () => void | Promise<void>;
+  onDispatch: (params: DispatchParams) => void | Promise<void>;
   onUpdateBrief: (newBrief: string) => void | Promise<void>;
+  onAiBreakdown: () => Promise<SubtaskRow[]>;
+  onSaveSubtasks: (rows: SubtaskRow[]) => void | Promise<void>;
   onComposerSend: (
     text: string,
     params: ComposerLaunchParams,
@@ -67,6 +70,8 @@ export function TaskWorkspace({
   onClaim,
   onDispatch,
   onUpdateBrief,
+  onAiBreakdown,
+  onSaveSubtasks,
   onComposerSend,
   onSelectTask,
   onDeleteTask,
@@ -132,7 +137,7 @@ export function TaskWorkspace({
             </button>
           )}
           <div className="eyebrow">
-            {selectedProjectRoot ? "Project" : "My Tasks"} · {tasks.length} 任务
+            {selectedProjectRoot ? "项目" : "用户级"} · {tasks.length} 任务
           </div>
           <h1>{selectedProjectName}</h1>
         </div>
@@ -170,15 +175,12 @@ export function TaskWorkspace({
                 <UserPlus size={14} />
                 Claim
               </button>
-              <button
-                type="button"
-                className="primary-action"
-                disabled={!canMutate || isBusy}
-                onClick={onDispatch}
-              >
-                <Send size={14} />
-                Dispatch (6x)
-              </button>
+              <DispatchPanel
+                subtaskCount={taskDetail!.subtaskCount}
+                disabled={!canMutate}
+                isBusy={isBusy}
+                onDispatch={onDispatch}
+              />
               <button
                 type="button"
                 className="ghost-action"
@@ -227,6 +229,17 @@ export function TaskWorkspace({
               <div className="progress-fill" style={{ width: `${progress}%` }} />
             </div>
           </div>
+
+          {/* Subtask breakdown — project-scoped tasks only (stage 2: refine + set concurrency) */}
+          {taskDetail!.scope === "project" && (
+            <SubtaskBreakdownPanel
+              subtasks={taskDetail!.subtasks ?? []}
+              defaultParallel={6}
+              isBusy={isBusy}
+              onAiBreakdown={onAiBreakdown}
+              onSave={onSaveSubtasks}
+            />
+          )}
 
           {/* Markdown content */}
           <section className="workspace-section markdown-section">

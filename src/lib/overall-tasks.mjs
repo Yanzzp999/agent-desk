@@ -1,7 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod/v4";
-import { createContext, listSessions, parseMarkdownChecklist } from "./control-plane.mjs";
+import {
+  createContext,
+  createSession,
+  generateSubtaskBreakdown,
+  listSessions,
+  materializeControlPlaneTask,
+  parseMarkdownChecklist,
+  parseTaskMarkdownItems,
+  DEFAULT_PARALLELISM,
+  DEFAULT_LAUNCH_BATCH_SIZE,
+} from "./control-plane.mjs";
+import { execFileSync } from "node:child_process";
 import { canonicalizeTaskPeriodKey, validateTaskPeriod } from "./task-periods.mjs";
 import { validateTaskProjectRoot } from "./task-validation.mjs";
 import { backfillTaskMarkdownSources, openTaskStore } from "./task-store.mjs";
@@ -79,7 +90,51 @@ const dispatchOverallTaskSchema = z.object({
   taskId: z.string().optional(),
   note: z.string().optional(),
   force: z.boolean().optional(),
+  // Real-execution params (web UI Dispatch panel). Presence triggers the control-plane bridge.
+  parallel: z.number().int().positive().optional(),
+  parallelism: z.number().int().positive().optional(),
+  launchBatchSize: z.number().int().positive().optional(),
+  model: z.string().optional(),
+  reasoning: z.string().optional(),
+  serviceTier: z.string().optional(),
+  executionMode: z.string().optional(),
+  subagentLauncher: z.string().optional(),
+  baseBranch: z.string().optional(),
+  base_branch: z.string().optional(),
 }).passthrough();
+
+const breakdownOverallTaskSchema = z.object({
+  model: z.string().optional(),
+  reasoning: z.string().optional(),
+  serviceTier: z.string().optional(),
+}).passthrough();
+
+export async function breakdownOverallTask(contextLike, overallTaskId, request = {}) {
+  const context = normalizeContext(contextLike);
+  const parsed = breakdownOverallTaskSchema.parse(request);
+  return withOverallTaskStore(context, async (store) => {
+    const before = requireTask(store, overallTaskId);
+    if (!before.projectRoot) {
+      throw new Error("subtask breakdown requires a project-bound task (projectRoot)");
+    }
+    const projectContext = createContext({ projectRoot: before.projectRoot });
+    const existingMarkdown = loadSourceMarkdown(before.sourcePath) || before.markdown || "";
+    const { markdown } = await generateSubtaskBreakdown(projectContext, {
+      title: before.title,
+      brief: before.description,
+      existingMarkdown,
+      model: parsed.model,
+      reasoning: parsed.reasoning,
+      serviceTier: parsed.serviceTier,
+    });
+    const subtasks = parseMarkdownChecklist(markdown).map((item) => ({
+      title: item.title,
+      checked: Boolean(item.checked),
+      ...(item.parallel ? { parallel: item.parallel } : {}),
+    }));
+    return { ok: true, taskId: overallTaskId, markdown, subtasks };
+  });
+}
 
 export function serializeAgentDeskError(error) {
   return {
@@ -181,24 +236,93 @@ export async function claimOverallTask(contextLike, overallTaskId, request = {})
 export async function dispatchOverallTask(contextLike, overallTaskId, request = {}) {
   const context = normalizeContext(contextLike);
   const parsed = dispatchOverallTaskSchema.parse(request);
-  const sessionId = requiredText(parsed.sessionId || parsed.session, "sessionId");
+  const requestedSessionId = requiredText(parsed.sessionId || parsed.session, "sessionId");
   return withOverallTaskStore(context, async (store) => {
     const before = requireTask(store, overallTaskId);
     if (before.taskType === "coding" && !before.projectRoot) {
       throw new Error("coding overall task requires projectRoot before dispatch");
     }
+
+    // Bridge to real codex execution when this is a project-bound coding task, the request
+    // carries execution params (the web UI always sends parallel/model), and the project is a
+    // git repository (the control-plane session runner creates a git worktree per subagent).
+    // Otherwise fall back to recording dispatch state only (legacy behavior).
+    let realSessionId = "";
+    let executed = false;
+    let executionNote = "";
+    const wantsExecution = hasExecutionParams(parsed);
+    if (before.taskType === "coding" && before.projectRoot && wantsExecution) {
+      if (!isGitRepository(before.projectRoot)) {
+        executionNote = `projectRoot is not a git repository; recorded dispatch only: ${before.projectRoot}`;
+      } else {
+        try {
+          const projectContext = createContext({ projectRoot: before.projectRoot });
+          const markdown = loadSourceMarkdown(before.sourcePath)
+            || `# ${before.title}\n\n## Subtasks\n\n- [ ] ${before.title}\n`;
+          await materializeControlPlaneTask(projectContext, {
+            taskId: overallTaskId,
+            title: before.title,
+            brief: before.description,
+            markdown,
+          });
+          const session = await createSession(projectContext, overallTaskId, {
+            parallelism: resolveDispatchParallelism(parsed),
+            launchBatchSize: parsed.launchBatchSize || DEFAULT_LAUNCH_BATCH_SIZE,
+            model: parsed.model,
+            reasoning: parsed.reasoning,
+            serviceTier: parsed.serviceTier,
+            executionMode: parsed.executionMode,
+            subagentLauncher: parsed.subagentLauncher,
+            baseBranch: parsed.baseBranch || parsed.base_branch || parsed.branch,
+            waitForCompletion: false,
+            allowDuplicateSession: Boolean(parsed.force),
+          });
+          realSessionId = session.sessionId || "";
+          executed = Boolean(realSessionId);
+        } catch (error) {
+          // Surface a clear, recoverable message instead of a generic 500; still record dispatch.
+          executionNote = `codex execution failed to start, recorded dispatch only: ${error.message}`;
+        }
+      }
+    }
+
     const task = store.dispatchTask(overallTaskId, {
       assignee: parsed.assignee || parsed.owner || before.assignee,
-      sessionId,
+      sessionId: realSessionId || requestedSessionId,
       actor: parsed.actor || parsed.assignee || parsed.owner,
       branch: parsed.branch,
       target: parsed.dispatchTarget || parsed.target,
-      agentdeskTaskId: parsed.agentdeskTaskId || parsed.taskId,
+      agentdeskTaskId: parsed.agentdeskTaskId || parsed.taskId || (executed ? overallTaskId : undefined),
       message: parsed.note,
       force: Boolean(parsed.force),
     });
-    return { ok: true, task: toOverallTask(store, task) };
+    return { ok: true, task: toOverallTask(store, task), executed, ...(executionNote ? { note: executionNote } : {}) };
   });
+}
+
+function hasExecutionParams(request = {}) {
+  return request.parallel !== undefined
+    || request.parallelism !== undefined
+    || request.model !== undefined
+    || request.reasoning !== undefined
+    || request.launchBatchSize !== undefined;
+}
+
+function resolveDispatchParallelism(request = {}) {
+  const value = request.parallelism ?? request.parallel ?? DEFAULT_PARALLELISM;
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_PARALLELISM;
+}
+
+function isGitRepository(projectRoot) {
+  if (!projectRoot) return false;
+  try {
+    execFileSync("git", ["-C", projectRoot, "rev-parse", "--is-inside-work-tree"], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function createOverallTaskApiStore(options = {}) {
@@ -242,6 +366,9 @@ export async function createOverallTaskApiStore(options = {}) {
         sessionId: request.sessionId || `ui-dispatch-${Date.now()}`,
       });
       return toUiTaskDetail(result.task);
+    },
+    async generateBreakdown(taskId, request) {
+      return breakdownOverallTask(context, taskId, request);
     },
     async getTaskStatus(taskId) {
       const result = await getOverallTask(context, taskId);
@@ -496,6 +623,12 @@ function normalizeApiQuery(query = {}) {
   if (query.projectRoot !== undefined) {
     normalized.projectRoot = query.projectRoot;
   }
+  // The user-level view passes scope=user. Force an explicit empty projectRoot so the store
+  // returns only user-scoped tasks AND skips project markdown backfill (which would otherwise
+  // scan the ambient project root and pull in unrelated task files).
+  if (normalizeOptionalString(query.scope) === "user") {
+    normalized.projectRoot = "";
+  }
   return normalized;
 }
 
@@ -614,10 +747,16 @@ function toUiTaskDetail(task) {
   const rawMarkdown = task.markdown
     || loadSourceMarkdown(task.sourcePath)
     || `# ${task.title}\n\n${task.description || ""}\n`;
+  const subtasks = parseMarkdownChecklist(rawMarkdown).map((item) => ({
+    title: item.title,
+    checked: Boolean(item.checked),
+    ...(item.parallel ? { parallel: item.parallel } : {}),
+  }));
   return {
     ...base,
     markdown: rawMarkdown,
     memory: "",
+    subtasks,
     recentSessions: task.recentSessions || [],
   };
 }

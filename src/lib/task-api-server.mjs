@@ -29,6 +29,7 @@ export const TASK_API_STORE_METHODS = Object.freeze([
   "updateTask",
   "claimTask",
   "dispatchTask",
+  "generateBreakdown",
   "getStatus",
   "getTaskStatus",
   "listAudit",
@@ -58,7 +59,8 @@ const ROUTES = Object.freeze([
   { method: "GET", path: "/tasks/:taskId", description: "Read an overall task detail." },
   { method: "PATCH", path: "/tasks/:taskId", description: "Update overall task metadata." },
   { method: "POST", path: "/tasks/:taskId/claim", description: "Claim an overall task." },
-  { method: "POST", path: "/tasks/:taskId/dispatch", description: "Record dispatch/session state for an overall task." },
+  { method: "POST", path: "/tasks/:taskId/dispatch", description: "Dispatch an overall task (records state, and runs codex subagents for git-backed coding tasks)." },
+  { method: "POST", path: "/tasks/:taskId/breakdown", description: "AI-assisted subtask breakdown; returns proposed checklist markdown (draft, not saved)." },
   { method: "GET", path: "/tasks/:taskId/status", description: "Read compact task execution status." },
   { method: "GET", path: "/tasks/:taskId/audit", description: "Read local audit events for a task." },
   { method: "GET", path: "/tasks/:taskId/sessions/summary", description: "Summarize task sessions for the UI." },
@@ -78,6 +80,7 @@ const ListTasksQuerySchema = z.object({
   periodKey: z.string().trim().min(1).optional(),
   assignee: z.string().trim().min(1).optional(),
   projectRoot: z.string().optional(),
+  scope: z.enum(["user", "project"]).optional(),
 }).passthrough();
 const RecentSessionsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(6),
@@ -139,6 +142,12 @@ const DispatchTaskRequestSchema = z.object({
   waitForCompletion: z.boolean().optional(),
   allowDuplicateSession: z.boolean().optional(),
   force: z.boolean().optional(),
+}).passthrough();
+
+const BreakdownTaskRequestSchema = z.object({
+  model: z.string().trim().min(1).optional(),
+  reasoning: z.string().trim().min(1).optional(),
+  serviceTier: z.string().trim().min(1).optional(),
 }).passthrough();
 
 const PassthroughObjectSchema = z.object({}).passthrough();
@@ -520,6 +529,11 @@ async function handleRequest(request, response, options) {
     const body = parseWithSchema(DispatchTaskRequestSchema, await readJsonBody(request), "body");
     const result = await callStore(options.store, "dispatchTask", taskId, body);
     return sendSuccess(response, 202, result, PassthroughObjectSchema);
+  }
+  if (segments.length === 3 && segments[2] === "breakdown" && request.method === "POST") {
+    const body = parseWithSchema(BreakdownTaskRequestSchema, await readJsonBody(request), "body");
+    const result = await callStore(options.store, "generateBreakdown", taskId, body);
+    return sendSuccess(response, 200, result, PassthroughObjectSchema);
   }
   if (segments.length === 3 && segments[2] === "status" && request.method === "GET") {
     const result = await callStore(options.store, "getTaskStatus", taskId);

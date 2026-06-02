@@ -506,6 +506,134 @@ export async function runTaskGenerationJob(context, taskId) {
   return getTask(context, taskId);
 }
 
+function buildSubtaskBreakdownPrompt({ title, brief, existingMarkdown } = {}) {
+  const lines = [
+    "You are breaking down an AgentDesk coding task into concrete subtasks.",
+    "",
+    "Output markdown only. Do not return JSON. Do not add prose before or after.",
+    "Return exactly one section:",
+    "",
+    "## Subtasks",
+    "",
+    "Subtask rules:",
+    "- Use markdown checkboxes like `- [ ] ...`, one per line.",
+    "- Each subtask should be implementable by a single Codex subagent.",
+    "- Prefer 4 to 12 subtasks; keep them concrete and code-oriented.",
+    "- Mention concrete file or module paths when that helps avoid conflicting work.",
+    "- A subtask that MUST run alone (touches shared files, migrations, or is otherwise unsafe to parallelize) may be annotated by appending `<!-- ad:parallel=1 -->` to its line.",
+    "- Do not turn coordinator duties (concurrency planning, launcher choice, final report aggregation) into subtasks.",
+    "",
+    `Task title: ${title || "(untitled)"}`,
+    "",
+    "Task brief:",
+    brief || "(no brief provided)",
+  ];
+  if (existingMarkdown && existingMarkdown.trim()) {
+    lines.push(
+      "",
+      "Existing task document (refine its subtasks; preserve already-checked items where still relevant):",
+      existingMarkdown.trim(),
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Generate a subtask checklist for a coding task by invoking Codex synchronously.
+ * Returns the proposed `## Subtasks` markdown (a draft) — the caller decides whether to persist it.
+ * Reuses the same codex exec utility as task generation. The project context's projectRoot is
+ * used as cwd; --skip-git-repo-check means breakdown works even for non-git projects.
+ */
+export async function generateSubtaskBreakdown(context, options = {}) {
+  await assertExecutable(context.codexCli || "codex", "codex CLI");
+  const prompt = buildSubtaskBreakdownPrompt(options);
+  const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agentdesk-breakdown-"));
+  const outputFile = path.join(tmpDir, "subtasks.md");
+  const stdoutLog = path.join(tmpDir, "stdout.log");
+  const stderrLog = path.join(tmpDir, "stderr.log");
+  try {
+    const result = await runCodexPrompt({
+      context,
+      cwd: context.projectRoot,
+      model: options.model || DEFAULT_SUBAGENT_MODEL,
+      reasoning: options.reasoning || DEFAULT_SUBAGENT_REASONING,
+      serviceTier: options.serviceTier || DEFAULT_SERVICE_TIER,
+      prompt,
+      outputFile,
+      stdoutLog,
+      stderrLog,
+      skipGitRepoCheck: true,
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(describeCommandFailure(result, "subtask breakdown failed"));
+    }
+    const markdown = (await readTextSafe(outputFile)).trim();
+    if (!markdown) {
+      throw new Error("Codex returned an empty subtask breakdown");
+    }
+    return { markdown };
+  } finally {
+    await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Ensure a control-plane task directory exists for an Overall Task so the existing session
+ * runner can execute it. Writes meta.json + task.md (+ supporting files) under
+ * `<projectRoot>/.agent-desk/tasks/<taskId>/`. The Overall Task id is reused as the
+ * control-plane taskId so the two layers stay linked. Idempotent: refreshes task.md/meta on
+ * each dispatch. Returns the control-plane task meta.
+ */
+export async function materializeControlPlaneTask(context, { taskId, title, brief, markdown } = {}) {
+  if (!taskId) {
+    throw new Error("taskId is required to materialize a control-plane task");
+  }
+  const taskDir = path.join(context.tasksRoot, taskId);
+  await fsp.mkdir(taskDir, { recursive: true });
+  const now = new Date().toISOString();
+  const taskMarkdown = (markdown && markdown.trim())
+    ? markdown
+    : `# ${title || taskId}\n\n## Subtasks\n\n- [ ] ${title || "Implement task"}\n`;
+  const subtaskCount = parseTaskMarkdownItems(taskMarkdown).length;
+  const paths = {
+    taskDir,
+    briefMd: path.join(taskDir, "brief.md"),
+    promptMd: path.join(taskDir, "prompt.md"),
+    taskMd: path.join(taskDir, "task.md"),
+    memoryMd: path.join(taskDir, DEFAULT_TASK_MEMORY_FILENAME),
+    metaJson: path.join(taskDir, "meta.json"),
+    stdoutLog: path.join(taskDir, "stdout.log"),
+    stderrLog: path.join(taskDir, "stderr.log"),
+  };
+  const existingMeta = await readJsonSafe(paths.metaJson);
+  const meta = {
+    schemaVersion: SCHEMA_VERSION,
+    taskId,
+    name: title || taskId,
+    title: title || taskId,
+    brief: brief || "",
+    status: "ready",
+    createdAt: existingMeta?.createdAt || now,
+    updatedAt: now,
+    completedAt: null,
+    lastError: "",
+    subtaskCount,
+    activeSessionId: existingMeta?.activeSessionId || "",
+    activeSessionStartedAt: existingMeta?.activeSessionStartedAt || null,
+    activeSessionStatus: existingMeta?.activeSessionStatus || "",
+    paths,
+  };
+  await fsp.writeFile(paths.taskMd, taskMarkdown, "utf8");
+  await fsp.writeFile(paths.briefMd, brief || "", "utf8");
+  if (!existingMeta) {
+    await fsp.writeFile(paths.memoryMd, renderInitialTaskMemory(meta), "utf8");
+    await fsp.writeFile(paths.stdoutLog, "", "utf8");
+    await fsp.writeFile(paths.stderrLog, "", "utf8");
+  }
+  await writeJsonAtomic(paths.metaJson, meta);
+  return meta;
+}
+
 export async function listSessions(context, options = {}) {
   const entries = await readdirSafe(context.sessionsRoot, { withFileTypes: true });
   const items = [];
@@ -1023,6 +1151,9 @@ export async function runSessionJob(context, sessionId) {
       order: index + 1,
       title: item.title,
       detail: item.detail,
+      // Optional per-subtask concurrency override parsed from the task.md checklist
+      // (`<!-- ad:parallel=N -->`). `parallel === 1` means this subtask runs exclusively.
+      parallel: item.parallel,
       status: "queued",
       launchToken: buildAgentLaunchToken(sessionId, agentId),
       branchName,
@@ -1076,15 +1207,27 @@ export async function runSessionJob(context, sessionId) {
     const availableSlots = Math.max(0, session.parallelism - running.size);
     const launchCount = Math.min(DEFAULT_LAUNCH_BATCH_SIZE, availableSlots, pending.length);
     for (let index = 0; index < launchCount; index += 1) {
-      const nextAgent = pending.shift();
+      const nextAgent = pending[0];
       if (!nextAgent) {
         break;
       }
+      // Per-subtask concurrency override: an agent declaring `parallel === 1` requires an
+      // exclusive slot — defer it until nothing else is running, and don't co-launch others
+      // in the same batch after it. Agents without an override behave exactly as before.
+      const wantsExclusive = nextAgent.parallel === 1;
+      if (wantsExclusive && running.size > 0) {
+        break;
+      }
+      pending.shift();
       await syncTaskChecklistItemStatusSafe(context, task, sessionId, nextAgent, "running", session.paths.stderrLog);
       const promise = runSingleAgent(context, task, session, sessionId, nextAgent)
         .then((result) => ({ agentId: nextAgent.id, result }))
         .catch((error) => ({ agentId: nextAgent.id, error }));
       running.set(nextAgent.id, promise);
+      if (wantsExclusive) {
+        // An exclusive subtask holds the session alone; stop filling this batch.
+        break;
+      }
     }
 
     if (running.size === 0) {
@@ -2025,7 +2168,7 @@ export function parseTaskMarkdownItems(markdown) {
   // Legacy callers only need titles, so we map back to the old {title, detail} shape.
   const checklist = parseMarkdownChecklist(markdown);
   if (checklist.length > 0) {
-    return checklist.map((item) => ({ title: item.title, detail: "" }));
+    return checklist.map((item) => ({ title: item.title, detail: "", parallel: item.parallel }));
   }
 
   // Fallback behavior for tasks that have no checklist at all (original behavior)
@@ -2053,6 +2196,28 @@ function uniqueTaskItems(items) {
  * Supports both direct `- [ ] foo` / `- [x] bar` lists and items under a "## Subtasks" section.
  * This is the source of truth for subtask progress in the beta Web UI Overall Tasks layer.
  */
+// Optional per-subtask concurrency annotation that may trail a checklist item.
+// Canonical form is an HTML comment (invisible in markdown preview); a brace form
+// is also accepted. Example: `- [ ] Do thing  <!-- ad:parallel=2 -->`
+const SUBTASK_PARALLEL_RE = /\s*(?:<!--\s*ad:parallel=(\d+)\s*-->|\{\s*ad:parallel=(\d+)\s*\})\s*$/i;
+
+/**
+ * Strip a trailing `ad:parallel=N` annotation from a checklist title.
+ * Returns the cleaned title plus the parsed parallel value (or undefined).
+ * Lines without the annotation are returned unchanged so existing tasks are unaffected.
+ */
+function extractSubtaskParallel(rawTitle) {
+  const match = String(rawTitle).match(SUBTASK_PARALLEL_RE);
+  if (!match) {
+    return { title: String(rawTitle).trim(), parallel: undefined };
+  }
+  const value = Number(match[1] ?? match[2]);
+  return {
+    title: String(rawTitle).replace(SUBTASK_PARALLEL_RE, "").trim(),
+    parallel: Number.isFinite(value) && value > 0 ? value : undefined,
+  };
+}
+
 export function parseMarkdownChecklist(markdown) {
   const lines = String(markdown || "").split(/\r?\n/);
   const items = [];
@@ -2061,9 +2226,11 @@ export function parseMarkdownChecklist(markdown) {
   for (const line of lines) {
     const match = line.match(/^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s+(.+?)\s*$/);
     if (match) {
+      const { title, parallel } = extractSubtaskParallel(match[2]);
       items.push({
-        title: match[2].trim(),
+        title,
         checked: /^[xX]$/.test(match[1]),
+        ...(parallel ? { parallel } : {}),
       });
     }
   }
@@ -2086,9 +2253,11 @@ export function parseMarkdownChecklist(markdown) {
     }
     const match = line.match(/^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/);
     if (match) {
+      const { title, parallel } = extractSubtaskParallel(match[1]);
       items.push({
-        title: match[1].trim(),
+        title,
         checked: false,
+        ...(parallel ? { parallel } : {}),
       });
     }
   }

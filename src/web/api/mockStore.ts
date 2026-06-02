@@ -1,7 +1,9 @@
 import { buildFixtureTaskDetail, extraDemoTasks, fixtureSessions, fixtureTasks } from "./fixtures";
+import { parseSubtaskRows } from "./subtaskMarkdown";
 import type {
   AgentDeskTask,
   AgentDeskTaskDetail,
+  BreakdownResult,
   ClaimTaskInput,
   DispatchTaskInput,
   SessionSummary,
@@ -136,12 +138,19 @@ function findTaskOrThrow(taskId: string): AgentDeskTask {
 }
 
 export const mockAgentDeskApi = {
-  async listTasks(projectRoot: string, filters: TaskFilters): Promise<TaskListResponse> {
+  async listTasks(
+    projectRoot: string,
+    filters: TaskFilters,
+    options: { scope?: "user" | "project" } = {},
+  ): Promise<TaskListResponse> {
     const tasks = readTasks().map((task) => ({
       ...task,
       projectRoot: task.scope === "user" ? "" : projectRoot || task.projectRoot,
     }));
-    const items = applyFilters(tasks, filters);
+    const scoped = options.scope === "user"
+      ? tasks.filter((task) => task.scope === "user" || !task.projectRoot)
+      : tasks;
+    const items = applyFilters(scoped, filters);
 
     return {
       items,
@@ -295,6 +304,19 @@ export const mockAgentDeskApi = {
     writeTasks(tasks);
     writeSessions([session, ...readSessions()]);
     return buildFixtureTaskDetail(dispatchedTask);
+  },
+
+  async breakdownTask(taskId: string, _options: { model?: string; reasoning?: string; serviceTier?: string } = {}): Promise<BreakdownResult> {
+    const task = findTaskOrThrow(taskId);
+    const markdown = [
+      "## Subtasks",
+      "",
+      `- [ ] Scaffold module for ${task.title}`,
+      "- [ ] Implement core logic and wire dependencies",
+      "- [ ] Add unit tests covering the new behavior  <!-- ad:parallel=1 -->",
+      "- [ ] Update documentation and examples",
+    ].join("\n");
+    return { taskId, markdown, subtasks: parseSubtaskRows(markdown) };
   },
 
   async listRecentSessions(projectRoot: string, limit = 6): Promise<SessionSummary[]> {

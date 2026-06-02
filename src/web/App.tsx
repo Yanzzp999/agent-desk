@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 
 import { agentDeskApi } from "./api/client";
 import { validateProjectRoot } from "./api/projectRoot";
+import { applySubtaskRows } from "./api/subtaskMarkdown";
 import type {
   AgentDeskTask,
   AgentDeskTaskDetail,
   ApiResult,
   ApiSource,
+  SubtaskRow,
   TaskFilters as TaskFiltersValue,
   TaskListSummary,
   TaskMutationInput,
@@ -14,11 +16,10 @@ import type {
 import { TaskForm } from "./components/TaskForm";
 import { TaskWorkspace } from "./components/TaskWorkspace";
 import { WorkspaceNav } from "./components/WorkspaceNav";
-import type { ComposerLaunchParams, WorkspaceProjectGroup, WorkspaceNavTask } from "./api/types";
+import type { DispatchParams } from "./components/DispatchPanel";
+import type { ComposerLaunchParams, WorkspaceProject, WorkspaceProjectGroup, WorkspaceNavTask } from "./api/types";
 import "./styles/app.css";
 import '@uiw/react-md-editor/markdown-editor.css';
-
-const PROJECT_ROOT_STORAGE_KEY = "agentdesk.web.projectRoot";
 
 const defaultFilters: TaskFiltersValue = {
   range: "month",
@@ -36,12 +37,10 @@ const emptySummary: TaskListSummary = {
 };
 
 function readInitialProjectRoot(): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  return window.localStorage.getItem(PROJECT_ROOT_STORAGE_KEY)
-    || import.meta.env.VITE_AGENTDESK_PROJECT_ROOT
-    || "";
+  // The app always opens on the user-level task view (no project focused). We intentionally do
+  // NOT restore the last-selected project from localStorage so `npm run dev:all` (run from the
+  // user root, no --project) lands on the user view every time.
+  return "";
 }
 
 function createBlankDraft(projectRoot: string, isPortfolioMode: boolean): TaskMutationInput {
@@ -86,11 +85,14 @@ function combineNotice(results: Array<ApiResult<unknown>>): { source: ApiSource;
 function buildWorkspaceGroups(allTasks: AgentDeskTask[]): WorkspaceProjectGroup[] {
   const projectMap = new Map<string, { projectRoot: string; shortName: string; tasks: AgentDeskTask[] }>();
 
+  // The user-level group always exists and sits first — it's the default landing view.
+  projectMap.set("__user__", { projectRoot: "", shortName: "我的任务", tasks: [] });
+
   for (const task of allTasks) {
     if (task.scope === "user" || !task.projectRoot) {
       const key = "__user__";
       if (!projectMap.has(key)) {
-        projectMap.set(key, { projectRoot: "", shortName: "My Tasks", tasks: [] });
+        projectMap.set(key, { projectRoot: "", shortName: "我的任务", tasks: [] });
       }
       projectMap.get(key)!.tasks.push(task);
     } else {
@@ -164,17 +166,17 @@ export default function App() {
   const focusedProjectRoot = trimmedProjectRoot;
 
   const canMutate = !isMutating && (!taskDetail || taskDetail.scope === "user" || validateProjectRoot(projectRoot).valid);
+  // For project-scoped drafts, accept either the form's own projectRoot (portfolio picker) or the ambient one.
+  const draftProjectRootValid = validateProjectRoot(draft.projectRoot?.trim() || projectRoot).valid;
   const canSubmit = !isMutating
     && draft.title.trim().length > 0
     && draft.brief.trim().length > 0
-    && (draft.scope === "user" || validateProjectRoot(projectRoot).valid)
+    && (draft.scope === "user" || draftProjectRootValid)
     && (formMode != null || Boolean(selectedTaskId));
 
-  // Persist project root
+  // Keep the create-form draft's projectRoot in sync with the focused project.
+  // (We deliberately do NOT persist the focused project; the app always opens on the user view.)
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(PROJECT_ROOT_STORAGE_KEY, projectRoot);
-    }
     setDraft((current) => current.scope === "project"
       ? { ...current, projectRoot: projectRoot.trim(), taskType: current.taskType || "coding" }
       : current);
@@ -187,8 +189,13 @@ export default function App() {
     async function loadDashboard() {
       setIsLoading(true);
       const effectiveProjectRootForApi = isPortfolioMode ? "" : focusedProjectRoot;
+      // In the user view, fetch only user-scoped tasks (and skip project backfill) via scope=user.
       const [taskResult] = await Promise.all([
-        agentDeskApi.listTasks(effectiveProjectRootForApi, filters),
+        agentDeskApi.listTasks(
+          effectiveProjectRootForApi,
+          filters,
+          isPortfolioMode ? { scope: "user" } : {},
+        ),
       ]);
 
       if (!isActive) return;
@@ -263,7 +270,11 @@ export default function App() {
   async function refreshDashboard() {
     const effectiveProjectRootForApi = isPortfolioMode ? "" : focusedProjectRoot;
     const [taskResult] = await Promise.all([
-      agentDeskApi.listTasks(effectiveProjectRootForApi, filters),
+      agentDeskApi.listTasks(
+        effectiveProjectRootForApi,
+        filters,
+        isPortfolioMode ? { scope: "user" } : {},
+      ),
     ]);
 
     setTasks(taskResult.data.items);
@@ -474,9 +485,12 @@ export default function App() {
     if (!canSubmit) return;
     setIsMutating(true);
 
+    // In portfolio mode the form's project picker drives draft.projectRoot; in focus mode the
+    // ambient projectRoot is used. Either way a project-scoped task must carry a projectRoot.
+    const resolvedProjectRoot = draft.projectRoot?.trim() || projectRoot.trim();
     const input: TaskMutationInput = {
       ...draft,
-      projectRoot: draft.scope === "project" ? projectRoot.trim() : "",
+      projectRoot: draft.scope === "project" ? resolvedProjectRoot : "",
       taskType: draft.scope === "project" ? "coding" : "general",
       title: draft.title.trim(),
       brief: draft.brief.trim(),
@@ -510,15 +524,15 @@ export default function App() {
     setIsMutating(false);
   }
 
-  async function dispatchSelectedTask() {
+  async function dispatchSelectedTask(params: DispatchParams) {
     if (!taskDetail || !canMutate) return;
     setIsMutating(true);
     const result = await agentDeskApi.dispatchTask(taskDetail.taskId, {
       projectRoot: taskDetail.projectRoot || projectRoot.trim(),
-      model: "gpt-5.5",
-      reasoning: "xhigh",
+      model: params.model,
+      reasoning: params.reasoning,
       serviceTier: "fast",
-      parallel: 6,
+      parallel: params.parallel,
       launchBatchSize: 6,
     });
     setTaskDetail(result.data);
@@ -526,6 +540,33 @@ export default function App() {
     setApiNotice({ source: result.source, warning: result.warning });
     await refreshDashboard();
     setIsMutating(false);
+  }
+
+  // Stage 2: AI-assisted subtask breakdown (project-scoped tasks). Returns proposed rows.
+  async function handleAiBreakdown(): Promise<SubtaskRow[]> {
+    if (!taskDetail) return [];
+    const result = await agentDeskApi.breakdownTask(taskDetail.taskId, {});
+    setApiNotice({ source: result.source, warning: result.warning });
+    return result.data.subtasks;
+  }
+
+  // Persist edited subtask rows back into the task markdown (preserving non-subtask content).
+  async function handleSaveSubtasks(rows: SubtaskRow[]) {
+    if (!taskDetail) return;
+    const nextMarkdown = applySubtaskRows(taskDetail.markdown || taskDetail.brief || "", rows);
+    setIsMutating(true);
+    try {
+      const result = await agentDeskApi.updateTask(taskDetail.taskId, {
+        ...taskToDraft(taskDetail),
+        brief: nextMarkdown,
+      });
+      setTaskDetail(result.data);
+      setDraft(taskToDraft(result.data));
+      setApiNotice({ source: result.source, warning: result.warning });
+      await refreshDashboard();
+    } finally {
+      setIsMutating(false);
+    }
   }
 
   // Compute workspace groups for sidebar
@@ -559,20 +600,31 @@ export default function App() {
     return groups;
   }, [tasks, projectDiscoveryItems, isPortfolioMode, focusedProjectRoot]);
 
-  // Get selected project name for the header
+  // Known projects (excluding the user "My Tasks" pseudo-group) for the create-form project picker.
+  const knownProjects = useMemo<WorkspaceProject[]>(
+    () => workspaceGroups
+      .filter((g) => g.project.projectRoot)
+      .map((g) => g.project),
+    [workspaceGroups],
+  );
+
+  // Get the header title: the focused project name, or the user-level view label.
   const selectedProjectName = useMemo(() => {
     const group = workspaceGroups.find(g => g.project.projectRoot === focusedProjectRoot);
     if (group) return group.project.shortName;
     if (focusedProjectRoot) return focusedProjectRoot.split(/[\\/]/).pop() || focusedProjectRoot;
-    return "所有项目";
+    return "我的任务";
   }, [workspaceGroups, focusedProjectRoot]);
 
-  // Filter tasks for the currently selected project
+  // Tasks shown in the center panel.
+  // - User view (portfolio mode): only user-scoped tasks (cross-project planning / personal todos).
+  //   Project tasks remain reachable from the sidebar.
+  // - Project view (focus mode): tasks belonging to the focused project.
   const projectTasks = useMemo(() => {
     if (isPortfolioMode) {
-      return tasks;
+      return tasks.filter((t) => t.scope === "user" || !t.projectRoot);
     }
-    return tasks.filter(t =>
+    return tasks.filter((t) =>
       t.projectRoot === focusedProjectRoot || (t.scope === "user" && !focusedProjectRoot)
     );
   }, [tasks, isPortfolioMode, focusedProjectRoot]);
@@ -621,6 +673,8 @@ export default function App() {
           onClaim={claimSelectedTask}
           onDispatch={dispatchSelectedTask}
           onUpdateBrief={handleInlineBriefUpdate}
+          onAiBreakdown={handleAiBreakdown}
+          onSaveSubtasks={handleSaveSubtasks}
           onComposerSend={handleComposerSend}
           onSelectTask={handleSelectTask}
           onDeleteTask={handleDeleteTask}
@@ -645,6 +699,7 @@ export default function App() {
                 value={draft}
                 projectRoot={projectRoot.trim()}
                 isPortfolioMode={isPortfolioMode}
+                projects={knownProjects}
                 canSubmit={canSubmit}
                 isBusy={isMutating}
                 onModeChange={(mode) => handleFormModeChange(mode)}

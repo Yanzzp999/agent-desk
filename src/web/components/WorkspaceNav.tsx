@@ -54,7 +54,7 @@ export function WorkspaceNav({
   const allProjects = useMemo(() => {
     return groups.map((g) => ({
       projectRoot: g.project.projectRoot,
-      shortName: g.project.projectRoot === "" ? "My Tasks" : g.project.shortName,
+      shortName: g.project.projectRoot === "" ? "我的任务" : g.project.shortName,
       taskCount: g.project.taskCount,
       lastUpdatedAt: g.project.lastUpdatedAt,
       stats: getStatusAggregate(g.tasks),

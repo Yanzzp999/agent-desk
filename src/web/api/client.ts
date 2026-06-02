@@ -2,6 +2,7 @@ import { mockAgentDeskApi } from "./mockStore";
 import type {
   AgentDeskTaskDetail,
   ApiResult,
+  BreakdownResult,
   ClaimTaskInput,
   DispatchTaskInput,
   SessionSummary,
@@ -15,8 +16,15 @@ export const AGENTDESK_API_ROUTES = {
   task: (taskId: string) => `/tasks/${encodeURIComponent(taskId)}`,
   claimTask: (taskId: string) => `/tasks/${encodeURIComponent(taskId)}/claim`,
   dispatchTask: (taskId: string) => `/tasks/${encodeURIComponent(taskId)}/dispatch`,
+  breakdownTask: (taskId: string) => `/tasks/${encodeURIComponent(taskId)}/breakdown`,
   recentSessions: "/sessions/recent",
 };
+
+export interface BreakdownTaskOptions {
+  model?: string;
+  reasoning?: string;
+  serviceTier?: string;
+}
 
 function getApiBaseUrl(): string {
   return import.meta.env.VITE_AGENTDESK_API_BASE_URL || "/api/agentdesk";
@@ -99,13 +107,18 @@ async function withFallback<T>(
 }
 
 export const agentDeskApi = {
-  listTasks(projectRoot: string, filters: TaskFilters): Promise<ApiResult<TaskListResponse>> {
+  listTasks(
+    projectRoot: string,
+    filters: TaskFilters,
+    options: { scope?: "user" | "project" } = {},
+  ): Promise<ApiResult<TaskListResponse>> {
     return withFallback(
       AGENTDESK_API_ROUTES.tasks,
       undefined,
-      () => mockAgentDeskApi.listTasks(projectRoot, filters),
+      () => mockAgentDeskApi.listTasks(projectRoot, filters, options),
       {
         projectRoot,
+        scope: options.scope,
         range: filters.range,
         status: filters.status === "all" ? undefined : filters.status,
         query: filters.query,
@@ -164,6 +177,17 @@ export const agentDeskApi = {
         body: JSON.stringify(input),
       },
       () => mockAgentDeskApi.dispatchTask(taskId, input),
+    );
+  },
+
+  breakdownTask(taskId: string, options: BreakdownTaskOptions = {}): Promise<ApiResult<BreakdownResult>> {
+    return withFallback(
+      AGENTDESK_API_ROUTES.breakdownTask(taskId),
+      {
+        method: "POST",
+        body: JSON.stringify(options),
+      },
+      () => mockAgentDeskApi.breakdownTask(taskId, options),
     );
   },
 

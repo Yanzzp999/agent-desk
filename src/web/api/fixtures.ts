@@ -1,3 +1,4 @@
+import { parseSubtaskRows } from "./subtaskMarkdown";
 import type { AgentDeskTask, AgentDeskTaskDetail, SessionSummary } from "./types";
 
 const DEMO_PROJECT_ROOT = "/Users/example/work/checkout-service";
@@ -251,20 +252,23 @@ export const fixtureSessions: SessionSummary[] = [
 export function buildFixtureTaskDetail(task: AgentDeskTask): AgentDeskTaskDetail {
   const recentSessions = fixtureSessions.filter((session) => session.taskId === task.taskId);
 
+  const markdown = [
+    `# ${task.title}`,
+    "",
+    "## Goal",
+    task.brief,
+    "",
+    "## Subtasks",
+    "- [x] Confirm task.md remains the visible source of work.",
+    "- [x] Keep MCP stdio and verunectl as primary interfaces.",
+    "- [ ] Validate local HTTP API integration.",
+    "- [ ] Record session history after dispatch.",
+  ].join("\n");
+
   return {
     ...task,
-    markdown: [
-      `# ${task.title}`,
-      "",
-      "## Goal",
-      task.brief,
-      "",
-      "## Subtasks",
-      "- [x] Confirm task.md remains the visible source of work.",
-      "- [x] Keep MCP stdio and verunectl as primary interfaces.",
-      "- [ ] Validate local HTTP API integration.",
-      "- [ ] Record session history after dispatch.",
-    ].join("\n"),
+    markdown,
+    subtasks: parseSubtaskRows(markdown),
     memory: [
       `# Task Memory: ${task.title}`,
       "",

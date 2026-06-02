@@ -1,19 +1,23 @@
+import { useState } from "react";
 import { Edit3, FolderGit2, Plus, Save, UserRound } from "lucide-react";
 import MDEditor from '@uiw/react-md-editor';
 
-import { TASK_STATUSES, type TaskMutationInput, type TaskPriority } from "../api/types";
+import { TASK_STATUSES, type TaskMutationInput, type TaskPriority, type WorkspaceProject } from "../api/types";
 
 interface TaskFormProps {
   mode: "create" | "edit";
   value: TaskMutationInput;
   projectRoot: string;
   isPortfolioMode?: boolean;
+  projects?: WorkspaceProject[];
   canSubmit: boolean;
   isBusy: boolean;
   onModeChange: (mode: "create" | "edit" | null) => void;
   onChange: (value: TaskMutationInput) => void;
   onSubmit: () => void;
 }
+
+const CUSTOM_PATH_SENTINEL = "__custom__";
 
 const priorities: TaskPriority[] = ["low", "normal", "high", "urgent"];
 
@@ -28,12 +32,32 @@ export function TaskForm({
   value,
   projectRoot,
   isPortfolioMode = false,
+  projects = [],
   canSubmit,
   isBusy,
   onModeChange,
   onChange,
   onSubmit,
 }: TaskFormProps) {
+  // When the chosen project root isn't one of the known projects, fall through to a free-text path.
+  const knownRoots = projects.map((project) => project.projectRoot);
+  const [customMode, setCustomMode] = useState(
+    () => value.scope === "project" && Boolean(value.projectRoot) && !knownRoots.includes(value.projectRoot),
+  );
+
+  // The project picker is only needed in portfolio mode; in focus mode the ambient project is implied.
+  const showProjectPicker = value.scope === "project" && isPortfolioMode;
+
+  function handlePickProject(selected: string) {
+    if (selected === CUSTOM_PATH_SENTINEL) {
+      setCustomMode(true);
+      onChange({ ...value, projectRoot: "" });
+      return;
+    }
+    setCustomMode(false);
+    onChange({ ...value, projectRoot: selected });
+  }
+
   return (
     <section className="panel form-panel" aria-label="Create or edit task">
       <div className="panel-heading compact-heading">
@@ -101,7 +125,8 @@ export function TaskForm({
               ...value,
               scope: "project",
               taskType: "coding",
-              projectRoot,
+              // Keep an explicitly-picked project; otherwise default to the ambient (focus) project.
+              projectRoot: value.projectRoot || projectRoot,
             })}
           >
             <FolderGit2 aria-hidden="true" size={13} />
@@ -127,6 +152,45 @@ export function TaskForm({
           <p className="form-hint">
             用户根目录模式下，推荐创建 User 级任务（跨项目规划）
           </p>
+        )}
+
+        {showProjectPicker && (
+          <label className="field">
+            <span>关联项目</span>
+            {projects.length > 0 && !customMode ? (
+              <select
+                value={knownRoots.includes(value.projectRoot) ? value.projectRoot : ""}
+                onChange={(event) => handlePickProject(event.target.value)}
+              >
+                <option value="" disabled>选择一个项目…</option>
+                {projects.map((project) => (
+                  <option key={project.projectRoot} value={project.projectRoot}>
+                    {project.shortName} · {project.projectRoot}
+                  </option>
+                ))}
+                <option value={CUSTOM_PATH_SENTINEL}>其他路径…</option>
+              </select>
+            ) : (
+              <input
+                value={value.projectRoot}
+                placeholder="/absolute/path/to/project"
+                onChange={(event) => onChange({ ...value, projectRoot: event.target.value })}
+              />
+            )}
+            <p className="form-hint" style={{ marginTop: 6 }}>
+              粗任务关联到项目后，可进入项目视图拆分子任务并设置并发度。
+              {projects.length > 0 && customMode && (
+                <button
+                  type="button"
+                  className="link-button"
+                  style={{ marginLeft: 6 }}
+                  onClick={() => { setCustomMode(false); onChange({ ...value, projectRoot: "" }); }}
+                >
+                  从已有项目选择
+                </button>
+              )}
+            </p>
+          </label>
         )}
 
         <div className="form-grid">

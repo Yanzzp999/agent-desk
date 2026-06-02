@@ -54,10 +54,27 @@ export interface AgentDeskTask {
   };
 }
 
+/** A single subtask parsed from the task markdown checklist. */
+export interface SubtaskRow {
+  title: string;
+  checked: boolean;
+  /** Optional per-subtask concurrency override; 1 means "run exclusively". Empty = inherit task default. */
+  parallel?: number;
+}
+
 export interface AgentDeskTaskDetail extends AgentDeskTask {
   markdown: string;
   memory: string;
+  /** Structured subtasks derived server-side from the markdown checklist. */
+  subtasks?: SubtaskRow[];
   recentSessions: SessionSummary[];
+}
+
+/** Result of the AI-assisted subtask breakdown endpoint (a draft, not yet saved). */
+export interface BreakdownResult {
+  taskId: string;
+  markdown: string;
+  subtasks: SubtaskRow[];
 }
 
 export type SessionStatus =

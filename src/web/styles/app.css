@@ -1388,3 +1388,293 @@ textarea:focus-visible {
     flex-wrap: wrap;
   }
 }
+
+/* ============ Dispatch panel (task-level concurrency) ============ */
+.dispatch-panel {
+  position: relative;
+  display: inline-flex;
+}
+
+.dispatch-primary {
+  display: inline-flex;
+}
+
+.dispatch-primary .primary-action {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.dispatch-toggle {
+  min-width: 32px;
+  padding: 0 8px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-left: -1px;
+}
+
+.dispatch-controls {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 250px;
+  padding: 12px 14px;
+  background: var(--workspace-elevated);
+  border: 1px solid var(--workspace-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dispatch-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--workspace-muted);
+}
+
+.dispatch-field > span {
+  min-width: 44px;
+}
+
+.dispatch-field input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.dispatch-value {
+  min-width: 18px;
+  text-align: right;
+  color: var(--workspace-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.dispatch-field select {
+  flex: 1;
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-line);
+  border-radius: var(--radius-sm);
+  color: var(--workspace-text);
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.dispatch-field-row {
+  display: flex;
+  gap: 10px;
+}
+
+.dispatch-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--workspace-muted);
+  line-height: 1.4;
+}
+
+/* ============ Subtask breakdown panel (stage 2) ============ */
+.subtask-progress-chip {
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--workspace-text);
+  background: var(--nav-active);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: 2px;
+}
+
+.ai-breakdown-btn {
+  color: var(--accent);
+}
+
+.ai-breakdown-btn:not(:disabled):hover {
+  color: #b7b5ff;
+}
+
+.subtask-error {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  color: #ff8a85;
+}
+
+.subtask-empty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--workspace-muted);
+}
+
+.subtask-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.subtask-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--workspace-line);
+  background: var(--workspace-elevated);
+}
+
+.subtask-row.is-done .subtask-title-input {
+  color: var(--workspace-muted);
+  text-decoration: line-through;
+}
+
+.subtask-check {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1.5px solid var(--workspace-muted);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.subtask-check.is-checked {
+  background: var(--status-running);
+  border-color: var(--status-running);
+}
+
+.subtask-title-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--workspace-text);
+  font-size: 13px;
+  padding: 2px 0;
+}
+
+.subtask-title-input:focus {
+  outline: none;
+}
+
+.subtask-parallel {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--workspace-muted);
+  font-size: 11px;
+}
+
+.subtask-parallel.is-exclusive {
+  color: var(--status-claimed);
+}
+
+.subtask-parallel-x {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.subtask-parallel input {
+  width: 38px;
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-line);
+  border-radius: var(--radius-sm);
+  color: var(--workspace-text);
+  font-size: 12px;
+  padding: 2px 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.subtask-remove {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--workspace-muted);
+  cursor: pointer;
+}
+
+.subtask-remove:not(:disabled):hover {
+  background: rgba(201, 48, 48, 0.12);
+  color: #ff8a85;
+}
+
+.subtask-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.subtask-hint {
+  font-size: 11px;
+  color: var(--workspace-muted);
+  line-height: 1.4;
+}
+
+.subtask-footer-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.secondary-action.tiny,
+.ghost.tiny {
+  font-size: 11.5px;
+  padding: 0 10px;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ghost.tiny {
+  background: transparent;
+  border: 1px solid var(--workspace-line);
+  border-radius: var(--radius-sm);
+  color: var(--workspace-muted);
+  cursor: pointer;
+}
+
+.ghost.tiny:not(:disabled):hover {
+  background: var(--nav-hover);
+  color: var(--workspace-text);
+}
+
+.secondary-action.tiny {
+  border-radius: var(--radius-sm);
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+@keyframes ad-spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: ad-spin 1s linear infinite;
+}

@@ -201,11 +201,16 @@ function printHelp() {
   console.log(`AgentDesk local dev helper
 
 Usage:
-  npm run dev:all -- [verunectl api options]
+  npm run dev:all                       # runs at the user root; opens the user-level task view
+
+The app stores all tasks in the user-level store (~/.agent-desk/tasks.sqlite) and opens on the
+user-level task view by default. You do NOT need to pass --project; pick a project from the
+sidebar (or create/import one) when you want to drill into project work.
 
 Examples:
-  npm run dev:all -- --project /absolute/path/to/project
-  npm run dev:all -- --project . --sqlite-path /tmp/agent-desk.sqlite
+  npm run dev:all                                  # default: user root
+  npm run dev:all -- --port 19800                  # custom API port
+  npm run dev:all -- --sqlite-path /tmp/ad.sqlite  # custom task store (testing)
 
 Behavior:
   - Backend (API): Auto-restarts on code changes using Node --watch.
@@ -215,6 +220,5 @@ Behavior:
 
 Tip:
   - Disable API auto-restart: AGENT_DESK_NO_WATCH=1 npm run dev:all
-  - Run only backend:      ./scripts/verunectl.sh api --project ...
 `);
 }
