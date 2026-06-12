@@ -8,6 +8,7 @@ import {
   formatTable,
   getAgentLogs,
   getCodexAppLaunchPlan,
+  isHostDirectLauncher,
   readAgentDeskConfig,
   getSession,
   getTask,
@@ -407,7 +408,7 @@ async function waitForShutdown(listener) {
 }
 
 async function attachCodexAppLaunchPlan(context, session) {
-  if (session.subagentLauncher !== "codex-app") {
+  if (!isHostDirectLauncher(session.subagentLauncher)) {
     return session;
   }
   const appLaunchPlan = await getCodexAppLaunchPlan(context, session.sessionId);
@@ -572,7 +573,7 @@ Session start options:
   --concurrency N        Alias for --parallel.
   --codex-count N        Alias for --parallel.
   --execution-mode MODE  auto, worktree, or current-branch. Default: auto.
-  --subagent-launcher L  codex-cli or codex-app for current-branch mode.
+  --subagent-launcher L  codex-cli (external) or codex-app (codex)/claude-direct/grok-direct/direct (internal host subagent). Defaults now favor internal host-direct launch (codex-app etc) for codex/claude/grok.
   --base-branch BRANCH   Local branch used as the base for worktree sessions. Default: current checkout branch.
   --worktree-integration MODE
                           agent-branch or fast-forward. Default: agent-branch.

@@ -9,6 +9,7 @@ import {
   getCodexAppLaunchPlan,
   getSession,
   getTask,
+  isHostDirectLauncher,
   listSessions,
   listTasks,
   recordCodexAppSubagentResult,
@@ -421,14 +422,14 @@ export function createAgentDeskMcpServer(options = {}) {
 
   server.registerTool("start_subagent_session", {
     title: "Start Subagent Session",
-    description: "Start an AgentDesk subagent session. The main agent should use auto/current-branch when worktree isolation is unnecessary, and worktree only for parallel work that needs branch isolation. codex-cli sessions are launched by AgentDesk and wait up to 5 minutes for completion by default. codex-app sessions create a tracked launch plan for the Codex App host to spawn directly.",
+    description: "Start an AgentDesk subagent session. The main agent should use auto/current-branch when worktree isolation is unnecessary, and worktree only for parallel work that needs branch isolation. codex-cli sessions are launched by AgentDesk (external CLI) and wait up to 5 minutes for completion by default. codex-app/claude-direct/grok-direct sessions create a tracked launch plan for the host (Codex App / Claude / Grok) to spawn subagents internally using the host's native subagent mechanism; the host then records results back via record_codex_app_subagent_result. Defaults favor internal host-direct launch for codex/claude/grok.",
     inputSchema: {
       taskId: z.string().min(1).describe("Ready AgentDesk task id under <project>/.agent-desk/tasks."),
       parallelism: z.number().optional().describe("Maximum concurrent subagents. Default 6, max 24."),
       model: z.string().optional().describe("Codex model for subagents. Default: gpt-5.5."),
       reasoning: z.enum(["low", "medium", "high", "xhigh"]).optional().describe("Codex reasoning effort. Default: xhigh."),
       executionMode: z.enum(["auto", "worktree", "current-branch"]).optional().describe("Execution mode. Default auto lets the main agent avoid worktrees for simple or non-conflicting tasks. codex-app uses current-branch."),
-      subagentLauncher: z.enum(["codex-cli", "codex-app"]).optional().describe("Subagent launcher. Default: codex-cli."),
+      subagentLauncher: z.enum(["codex-cli", "codex-app", "claude-direct", "grok-direct", "direct"]).optional().describe("Subagent launcher. Default for current-branch/internal: codex-app (Codex), use claude-direct/grok-direct when the calling host is Claude or Grok for native internal subagent spawn instead of CLI."),
       baseBranch: z.string().optional().describe("Local branch used as the base for worktree sessions. Defaults to the current checkout branch."),
       worktreeIntegration: z.enum(["agent-branch", "fast-forward"]).optional().describe("Worktree completion policy. Default agent-branch keeps completed subagent branches for review without advancing the base branch."),
       pushWorktreeIntegration: z.boolean().optional().describe("Whether fast-forward worktree integration should push the configured base branch upstream. Default false."),
@@ -446,7 +447,7 @@ export function createAgentDeskMcpServer(options = {}) {
       parallelism: args.parallelism,
       model: args.model,
       reasoning: args.reasoning,
-      executionMode: args.executionMode || (args.subagentLauncher === "codex-app" ? "current-branch" : undefined),
+      executionMode: args.executionMode || (isHostDirectLauncher(args.subagentLauncher) ? "current-branch" : undefined),
       subagentLauncher: args.subagentLauncher,
       baseBranch: args.baseBranch,
       worktreeIntegration: args.worktreeIntegration,
@@ -470,7 +471,7 @@ export function createAgentDeskMcpServer(options = {}) {
       waitTimedOut = waitResult.timedOut;
       waitElapsedMs = waitResult.elapsedMs;
     }
-    const appLaunchPlan = resolvedLauncher === "codex-app"
+    const appLaunchPlan = isHostDirectLauncher(resolvedLauncher)
       ? await getCodexAppLaunchPlan(context, result.sessionId)
       : emptyAppLaunchPlan(result.sessionId, result.parallelism);
     const payload = {
@@ -484,7 +485,7 @@ export function createAgentDeskMcpServer(options = {}) {
       appLaunchPlan,
     };
     const text = appLaunchPlan.requiresHostLaunch
-      ? `Prepared ${appLaunchPlan.subagents.length} Codex App subagent prompt(s) for session ${result.name || result.sessionId} (${result.sessionId})`
+      ? `Prepared ${appLaunchPlan.subagents.length} host-direct (${appLaunchPlan.launcher || "codex-app"}) subagent prompt(s) for session ${result.name || result.sessionId} (${result.sessionId})`
       : waitTimedOut
         ? `Started AgentDesk Codex CLI session ${result.name || result.sessionId} (${result.sessionId}); it is still ${result.status} after ${formatDuration(waitTimeoutMs)}. Use read_subagent_session to check progress.`
         : waitForCompletion
@@ -520,7 +521,7 @@ export function createAgentDeskMcpServer(options = {}) {
   }, async (args) => {
     const context = createMcpContext(args, options);
     const result = await getSession(context, args.sessionId);
-    const appLaunchPlan = result.subagentLauncher === "codex-app"
+    const appLaunchPlan = isHostDirectLauncher(result.subagentLauncher)
       ? await getCodexAppLaunchPlan(context, result.sessionId)
       : emptyAppLaunchPlan(result.sessionId, result.parallelism);
     const payload = {

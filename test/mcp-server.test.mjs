@@ -1036,7 +1036,7 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
     assert.equal(started.structuredContent.requiresHostLaunch, true);
     assert.equal(started.structuredContent.waitedForCompletion, false);
     assert.equal(started.structuredContent.succeededAgents, 0);
-    assert.match(started.content[0].text, /Prepared 3 Codex App subagent prompt/);
+    assert.match(started.content[0].text, /Prepared 3 host-direct \(codex-app\) subagent prompt/);
     assert.doesNotMatch(started.content[0].text, /Completed AgentDesk Codex CLI session/);
     const launchPlan = started.structuredContent.appLaunchPlan;
     assert.equal(launchPlan.requiresHostLaunch, true);

@@ -383,7 +383,7 @@ test("normalizes configurable session defaults and overrides", () => {
   assert.throws(() => normalizeSessionRequest({ model: "bad model" }), /single Codex CLI model id/);
   assert.throws(() => normalizeSessionRequest({ reasoning: "extreme" }), /unsupported reasoning effort/);
   assert.throws(() => normalizeSessionRequest({ serviceTier: "standard" }), /unsupported service tier/);
-  assert.equal(normalizeSessionRequest({ executionMode: "current-branch" }).subagentLauncher, "codex-cli");
+  assert.equal(normalizeSessionRequest({ executionMode: "current-branch" }).subagentLauncher, "codex-app");
   assert.throws(() => normalizeSessionRequest({ executionMode: "sidecar" }), /unsupported execution mode/);
 });
 

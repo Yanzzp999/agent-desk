@@ -24,11 +24,12 @@ export const DEFAULT_LAUNCH_BATCH_SIZE = 6;
 export const MAX_PARALLELISM = 24;
 export const DEFAULT_EXECUTION_MODE = "auto";
 export const DEFAULT_WORKTREE_SUBAGENT_LAUNCHER = "codex-cli";
+export const DEFAULT_CURRENT_BRANCH_SUBAGENT_LAUNCHER = "codex-app";
 export const DEFAULT_WORKTREE_INTEGRATION = "agent-branch";
 export const WORKTREE_INTEGRATION_MODES = Object.freeze([DEFAULT_WORKTREE_INTEGRATION, "fast-forward"]);
 export const CONCRETE_EXECUTION_MODES = Object.freeze(["worktree", "current-branch"]);
 export const EXECUTION_MODES = Object.freeze([DEFAULT_EXECUTION_MODE, ...CONCRETE_EXECUTION_MODES]);
-export const CURRENT_BRANCH_SUBAGENT_LAUNCHERS = Object.freeze(["codex-cli", "codex-app"]);
+export const CURRENT_BRANCH_SUBAGENT_LAUNCHERS = Object.freeze(["codex-cli", "codex-app", "claude-direct", "grok-direct", "direct"]);
 export const DEFAULT_CONFIG_FILENAME = "config.toml";
 export const DEFAULT_TASK_MEMORY_FILENAME = "memory.md";
 export const AGENT_TASK_SNAPSHOT_FILENAME = "task.snapshot.md";
@@ -742,7 +743,7 @@ export async function createSession(context, taskId, request = {}) {
   });
   const sessionId = meta.sessionId;
 
-  if (sessionRequest.executionMode === "current-branch" && sessionRequest.subagentLauncher === "codex-app") {
+  if (sessionRequest.executionMode === "current-branch" && isHostDirectLauncher(sessionRequest.subagentLauncher)) {
     try {
       await prepareCodexAppSession(context, claimedTask, sessionId);
       return enrichSessionSummary(context, await readSessionMeta(context, sessionId));
@@ -902,7 +903,8 @@ async function runSessionJobAndReturnStatus(context, taskId, sessionId) {
 
 export async function getCodexAppLaunchPlan(context, sessionId) {
   const session = await getSession(context, sessionId);
-  const requiresHostLaunch = getSessionSubagentLauncher(session) === "codex-app";
+  const launcher = getSessionSubagentLauncher(session);
+  const requiresHostLaunch = isHostDirectLauncher(launcher);
   const subagents = requiresHostLaunch
     ? await Promise.all((session.agents || []).map(async (agent) => {
       const paths = agent.paths || {};
@@ -920,10 +922,18 @@ export async function getCodexAppLaunchPlan(context, sessionId) {
       };
     }))
     : [];
+  let launchTool = "";
+  if (requiresHostLaunch) {
+    if (launcher === "codex-app") launchTool = "spawn_agent";
+    else if (launcher === "claude-direct") launchTool = "claude_subagent";
+    else if (launcher === "grok-direct" || launcher === "direct") launchTool = "grok_subagent";
+    else launchTool = "host_spawn";
+  }
   return {
     sessionId,
     requiresHostLaunch,
-    launchTool: requiresHostLaunch ? "spawn_agent" : "",
+    launchTool,
+    launcher,
     parallelism: session.parallelism,
     model: session.model || DEFAULT_SUBAGENT_MODEL,
     reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
@@ -934,8 +944,8 @@ export async function getCodexAppLaunchPlan(context, sessionId) {
 
 export async function recordCodexAppSubagentResult(context, sessionId, agentId, request = {}) {
   const session = await readSessionMeta(context, sessionId);
-  if (getSessionSubagentLauncher(session) !== "codex-app") {
-    throw new Error("codex app result recording is only supported for codex-app sessions");
+  if (!isHostDirectLauncher(getSessionSubagentLauncher(session))) {
+    throw new Error("host direct result recording is only supported for codex-app / claude-direct / grok-direct sessions");
   }
   if (session.status !== "waiting_for_app") {
     throw new Error(`codex app session is not waiting for host results: ${session.status}`);
@@ -1089,7 +1099,7 @@ async function prepareCodexAppSession(context, task, sessionId) {
 }
 
 async function settleCodexAppLaunchPlanSession(context, session) {
-  if (getSessionSubagentLauncher(session) !== "codex-app" || session.status !== "waiting_for_app") {
+  if (!isHostDirectLauncher(getSessionSubagentLauncher(session)) || session.status !== "waiting_for_app") {
     return session;
   }
   const now = new Date().toISOString();
@@ -1676,12 +1686,12 @@ export function chooseExecutionModeForTask(taskMarkdown, request = {}) {
     };
   }
 
-  if (subagentLauncher === "codex-app") {
+  if (isHostDirectLauncher(subagentLauncher)) {
     return {
       executionMode: "current-branch",
       requestedExecutionMode,
       requiresWorktree: false,
-      reason: "codex-app launches are coordinated by the main agent in the current checkout",
+      reason: `${subagentLauncher} launches are coordinated by the main agent (codex/claude/grok host) in the current checkout`,
       signals: {
         subtaskCount: items.length,
         parallelism,
@@ -1936,7 +1946,7 @@ function normalizeSubagentLauncher(value, executionMode) {
     }
     return selected;
   }
-  const selected = launcher || DEFAULT_WORKTREE_SUBAGENT_LAUNCHER;
+  const selected = launcher || DEFAULT_CURRENT_BRANCH_SUBAGENT_LAUNCHER;
   if (!CURRENT_BRANCH_SUBAGENT_LAUNCHERS.includes(selected)) {
     throw new Error(`unsupported current-branch subagent launcher: ${selected}`);
   }
@@ -1956,6 +1966,11 @@ function getSessionSubagentLauncher(session) {
   return getSessionExecutionMode(session) === "worktree"
     ? DEFAULT_WORKTREE_SUBAGENT_LAUNCHER
     : "";
+}
+
+export function isHostDirectLauncher(launcher) {
+  const l = normalizeOptionalString(launcher);
+  return !!l && l !== "codex-cli";
 }
 
 function normalizeFastMetadata(fast) {
