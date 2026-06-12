@@ -63,7 +63,10 @@ codex mcp add agent-desk-my-project \
 
 ## Beta 本地 Web UI
 
-可选 beta Web UI 首屏就是 task 管理。它包含 day/week/month 规划切换、过滤器、总体 task 列表、task 详情、创建/编辑表单、领取和分发动作、coding `projectRoot` 校验，以及最近 session 摘要。
+可选 beta Web UI 已升级为「项目-任务树」Agent 工作区模式（类似 Codex / Claude Code）：
+左侧为可折叠的项目分组 + 任务树（支持搜索、展开持久化），中央是专注任务工作区（Markdown 编辑、进度、会话历史 + 底部 Composer 追加指令），右侧为输出面板占位。
+仍保留 Finder 导入、Claim/Dispatch、projectRoot 校验等核心能力。Web UI 仍是**可选 beta**，默认路径为 CLI/MCP + `task.md` + Codex subagent。
+旧的 Portfolio dashboard 视图已由新树导航取代。
 
 先启动本地 SQLite-backed API，再运行 Vite：
 
@@ -78,7 +81,11 @@ npm run dev
 npm run dev:all -- --project /absolute/path/to/project
 ```
 
-Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agentdesk` 代理到 `http://127.0.0.1:19731` 上的 Node.js ESM HTTP API；API 默认会把总体 task 元数据、周期归属、领取/分发状态和审计事件保存在用户级 `~/.agent-desk/tasks.sqlite`。单次运行需要覆盖路径时传 `--sqlite-path <file>`。
+Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agentdesk` 代理到 `http://127.0.0.1:19731` 上的 Node.js ESM HTTP API；API 默认会把总体 task 元数据、周期归属、领取/分发状态和审计事件保存在**用户根目录级**的 `~/.agent-desk/tasks.sqlite`。
+
+**重要设计原则**：这个 Overall Tasks 的 SQLite 数据库只存在于用户根目录级别（`~/.agent-desk/tasks.sqlite`）。单个项目目录下**不应该**有这个数据库。每个项目自己的 `.agent-desk/` 目录只存放传统的控制面任务（task.md、session 等）。这样才能支持从用户根目录统一管理多个项目的任务 + 用户级规划任务。
+
+单次运行需要覆盖路径时传 `--sqlite-path <file>`。
 
 预期本地 API routes：
 

@@ -19,7 +19,7 @@ test("verunectl help exposes CLI-only task and session commands", async () => {
   assert.match(result.stdout, /--model MODEL/);
   assert.match(result.stdout, /--reasoning EFFORT/);
   assert.match(result.stdout, /--parallel N/);
-  assert.match(result.stdout, /Service tier: fast/);
+  assert.match(result.stdout, /Service tier: unset by default/);
   assert.match(result.stdout, /Launch batch size: 6/);
   assert.match(result.stdout, /keep subagent branches/);
   assert.doesNotMatch(result.stdout, /\bgui\b/i);
@@ -243,7 +243,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.equal(sessionMeta.name, "CLI configured orchestration");
   assert.equal(sessionMeta.model, "gpt-5.5");
   assert.equal(sessionMeta.reasoning, "high");
-  assert.equal(sessionMeta.serviceTier, "fast");
+  assert.equal(sessionMeta.serviceTier, "");
   assert.equal(sessionMeta.parallelism, 2);
   assert.equal(sessionMeta.batchSize, 6);
   assert.equal(sessionMeta.requestedExecutionMode, "auto");
@@ -283,7 +283,7 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
   assert.match(sessionDoc, new RegExp(`Session ID: ${escapeRegExp(sessionSummary.sessionId)}`));
   assert.match(sessionDoc, /- Model: gpt-5\.5/);
   assert.match(sessionDoc, /- Reasoning: high/);
-  assert.match(sessionDoc, /- Service tier: fast/);
+  assert.match(sessionDoc, /- Service tier: /);
   assert.match(sessionDoc, /- Execution mode: worktree/);
   assert.match(sessionDoc, /- Requested execution mode: auto/);
   assert.match(sessionDoc, new RegExp(`- Worktree decision: ${escapeRegExp(sessionMeta.worktreeDecision.reason)}`));
@@ -346,7 +346,6 @@ test("verunectl creates a task and runs configured Codex CLI subagents", { timeo
     assert.equal(entry.model, "gpt-5.5");
     assert.deepEqual(entry.configs, [
       "model_reasoning_effort=\"high\"",
-      "service_tier=\"priority\"",
     ]);
   }
 
@@ -832,12 +831,82 @@ test("verunectl sessions start/show/list distinguish Codex App handoff from Code
     assert.equal(entry.args.includes("-o"), false);
     assert.equal(entry.args.includes("--output-schema"), false);
     assert.equal(entry.args.includes("--no-alt-screen"), true);
-    assert.equal(entry.model, "gpt-5.5");
+    assert.equal(entry.model, "o4-mini");
     assert.match(entry.prompt, /Subagent launcher: codex-cli/);
     assert.match(entry.prompt, /Report JSON path:/);
     assert.match(entry.prompt, /AgentDesk launch token: agentdesk-/);
     assert.match(entry.prompt, /You are one AgentDesk implementation subagent running in the shared current checkout\./);
     assert.match(entry.prompt, /No separate git worktree was created/);
+  }
+});
+
+test("verunectl runs Claude Code CLI subagents with weakest default model", { timeout: 30000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-desk-claude-cli-"));
+  const projectRoot = path.join(root, "project");
+  const worktreesRoot = path.join(root, "worktrees");
+  const fakeClaude = path.join(root, "fake-claude.mjs");
+  const fakeLog = path.join(root, "fake-claude-log.jsonl");
+  const taskId = "task-claude-code-cli";
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await writeFakeClaude(fakeClaude);
+  await initializeGitProject(projectRoot);
+  await writeReadyAgentDeskTask(projectRoot, taskId, "Claude Code CLI smoke");
+
+  const env = {
+    ...process.env,
+    CLAUDE_CODE_CLI: fakeClaude,
+    FAKE_CLAUDE_LOG: fakeLog,
+    FAKE_CLAUDE_DELAY_MS: "100",
+    AGENT_DESK_CLAUDE_REPORT_TIMEOUT_MS: "30000",
+  };
+  const commandOptions = { cwd: REPO_ROOT, env };
+
+  const startResult = await run(process.execPath, [
+    VERUNECTL,
+    "sessions",
+    "start",
+    taskId,
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--execution-mode",
+    "current-branch",
+    "--subagent-launcher",
+    "claude-code-cli",
+    "--parallel",
+    "2",
+    "--json",
+  ], commandOptions);
+  assert.equal(startResult.exitCode, 0, startResult.stderr);
+  const start = JSON.parse(startResult.stdout);
+  assert.equal(start.subagentLauncher, "claude-code-cli");
+
+  const session = await waitForCliJson([
+    "sessions",
+    "show",
+    start.sessionId,
+    "--project",
+    projectRoot,
+    "--worktrees-root",
+    worktreesRoot,
+    "--json",
+  ], commandOptions, (payload) => payload.status === "succeeded" ? payload : null);
+  assert.equal(session.model, "haiku");
+  assert.equal(session.totalAgents, 3);
+  assert.equal(session.succeededAgents, 3);
+  for (const agent of session.agents) {
+    assert.match(agent.claudeSessionId, /^fake-claude-session-/);
+    assert.equal(agent.claudeResumeCommand, `claude --resume ${agent.claudeSessionId}`);
+    assert.equal(JSON.parse(await fs.readFile(agent.paths.reportJson, "utf8")).summary, `${agent.id} completed via fake Claude`);
+  }
+
+  const invocations = await readJsonLines(fakeLog);
+  assert.equal(invocations.length, 3);
+  for (const entry of invocations) {
+    assert.equal(entry.model, "haiku");
+    assert.match(entry.prompt, /Subagent launcher: claude-code-cli/);
   }
 });
 
@@ -1053,6 +1122,78 @@ async function writeReadyAgentDeskTask(projectRoot, taskId, title) {
       stderrLog: path.join(taskDir, "stderr.log"),
     },
   }, null, 2)}\n`, "utf8");
+}
+
+async function writeFakeClaude(filePath) {
+  await fs.writeFile(filePath, `#!/usr/bin/env node
+import fs from "node:fs/promises";
+import path from "node:path";
+
+const args = process.argv.slice(2);
+
+if (args.includes("--version")) {
+  console.log("claude-code-cli-test 0.0.0");
+  process.exit(0);
+}
+
+const promptIndex = args.indexOf("-p");
+const prompt = promptIndex === -1 ? "" : String(args[promptIndex + 1] || "");
+const outputFile = reportPathFromPrompt(prompt);
+const agentId = agentIdFromOutput(outputFile);
+const sessionId = "fake-claude-session-" + agentId + "-" + process.pid + "-" + Date.now();
+
+await appendInvocation({
+  args,
+  cwd: process.cwd(),
+  model: argAfter("--model", args),
+  outputFile,
+  prompt,
+});
+
+await sleep(Number(process.env.FAKE_CLAUDE_DELAY_MS || 0));
+await fs.mkdir(path.dirname(outputFile), { recursive: true });
+await fs.writeFile(outputFile, JSON.stringify({
+  summary: agentId + " completed via fake Claude",
+  tests_run: ["fake claude"],
+  risks: [],
+  notes: ["Prompt length " + prompt.length],
+}, null, 2) + "\\n", "utf8");
+console.log(JSON.stringify({
+  type: "result",
+  session_id: sessionId,
+  result: "done",
+}));
+
+function reportPathFromPrompt(value) {
+  const match = String(value || "").match(/^Report JSON path:\\s*(.+)$/m);
+  return match ? match[1].trim() : "";
+}
+
+function agentIdFromOutput(outputFile) {
+  const parts = String(outputFile || "").split(path.sep);
+  const index = parts.lastIndexOf("agents");
+  return index === -1 ? "agent-unknown" : parts[index + 1] || "agent-unknown";
+}
+
+function argAfter(flag, sourceArgs) {
+  const index = sourceArgs.indexOf(flag);
+  return index === -1 ? "" : String(sourceArgs[index + 1] || "");
+}
+
+async function appendInvocation(entry) {
+  const logPath = process.env.FAKE_CLAUDE_LOG;
+  if (!logPath) {
+    return;
+  }
+  await fs.mkdir(path.dirname(logPath), { recursive: true });
+  await fs.appendFile(logPath, JSON.stringify({ ...entry, at: new Date().toISOString() }) + "\\n", "utf8");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+`, "utf8");
+  await fs.chmod(filePath, 0o755);
 }
 
 async function writeFakeCodex(filePath) {

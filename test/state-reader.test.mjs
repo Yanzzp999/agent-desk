@@ -438,11 +438,26 @@ test("upserts task memory entries by session and agent marker", async () => {
 test("normalizes configurable session defaults and overrides", () => {
   assert.deepEqual(normalizeSessionRequest(), {
     parallelism: 6,
-    model: "gpt-5.5",
-    reasoning: "xhigh",
-    serviceTier: "fast",
+    model: "o4-mini",
+    reasoning: "low",
+    serviceTier: "",
     executionMode: "auto",
     subagentLauncher: "codex-cli",
+    baseBranch: "",
+    worktreeIntegration: "agent-branch",
+    pushWorktreeIntegration: false,
+    launchPrompt: "",
+  });
+
+  assert.deepEqual(normalizeSessionRequest({
+    subagentLauncher: "claude-code-cli",
+  }), {
+    parallelism: 6,
+    model: "haiku",
+    reasoning: "low",
+    serviceTier: "",
+    executionMode: "auto",
+    subagentLauncher: "claude-code-cli",
     baseBranch: "",
     worktreeIntegration: "agent-branch",
     pushWorktreeIntegration: false,
@@ -472,10 +487,10 @@ test("normalizes configurable session defaults and overrides", () => {
 
   assert.equal(normalizeSessionRequest({ parallelism: "999" }).parallelism, 24);
   assert.throws(() => normalizeSessionRequest({ parallelism: "0" }), /positive number/);
-  assert.throws(() => normalizeSessionRequest({ model: "bad model" }), /single Codex CLI model id/);
+  assert.throws(() => normalizeSessionRequest({ model: "bad model" }), /single subagent model id/);
   assert.throws(() => normalizeSessionRequest({ reasoning: "extreme" }), /unsupported reasoning effort/);
   assert.throws(() => normalizeSessionRequest({ serviceTier: "standard" }), /unsupported service tier/);
-  assert.equal(normalizeSessionRequest({ executionMode: "current-branch" }).subagentLauncher, "codex-cli");
+  assert.equal(normalizeSessionRequest({ executionMode: "current-branch" }).subagentLauncher, "codex-app");
   assert.throws(() => normalizeSessionRequest({ executionMode: "sidecar" }), /unsupported execution mode/);
 });
 
@@ -616,6 +631,29 @@ test("builds Codex interactive args for resumable subagents", () => {
     "service_tier=\"fast\"",
     "-s",
     "workspace-write",
+    "-C",
+    "/tmp/project-worktree",
+    "--no-alt-screen",
+    "Implement the assigned task.",
+  ]);
+});
+
+test("omits Codex service tier when unset for weakest defaults", () => {
+  assert.deepEqual(buildCodexInteractiveArgs({
+    cwd: "/tmp/project-worktree",
+    model: "o4-mini",
+    reasoning: "low",
+    serviceTier: "",
+    prompt: "Implement the assigned task.",
+  }), [
+    "-a",
+    "never",
+    "-m",
+    "o4-mini",
+    "--config",
+    "model_reasoning_effort=\"low\"",
+    "-s",
+    "danger-full-access",
     "-C",
     "/tmp/project-worktree",
     "--no-alt-screen",

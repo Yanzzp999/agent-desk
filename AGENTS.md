@@ -34,6 +34,6 @@
 
 - Keep AgentDesk centered on project configuration/selection through CLI/MCP, `task.md` generation, session history, and Codex subagent orchestration.
 - Treat the skills-led MCP/CLI flow as the default product path; keep the Web UI clearly labeled as beta and optional.
-- Do not reintroduce `prd.json`, Gemini CLI, or Claude Code compatibility features.
-- Session execution defaults should remain explicit in user-facing docs: `gpt-5.5`, `xhigh`, `fast`, batched launches of 6, and this repository's Codex development baseline of `agentdesk/next`.
+- Do not reintroduce `prd.json`, Gemini CLI, or the legacy Claude Code compatibility layer. External `claude-code-cli` launcher support is allowed alongside `codex-cli`.
+- Session execution defaults should remain explicit in user-facing docs: Codex launchers use `o4-mini` + `low`, Claude launchers use `haiku`, Grok launchers use `composer-2.5-fast`, service tier unset by default, batched launches of 6, and this repository's Codex development baseline of `agentdesk/next`.
 - Prefer the MCP stdio server and `verunectl` terminal commands as the primary interface.

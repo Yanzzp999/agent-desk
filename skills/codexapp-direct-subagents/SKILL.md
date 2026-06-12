@@ -1,6 +1,6 @@
 ---
 name: codexapp-direct-subagents
-description: "Use when the user explicitly writes `$codexapp-direct-subagents` or `codexapp-direct-subagents`, or explicitly asks to dispatch Codex App subagents directly without creating or writing an AgentDesk task. This skill bypasses AgentDesk task/session generation and uses Codex App subagents directly, defaulting to model `gpt-5.5` and reasoning `xhigh`."
+description: "Use when the user explicitly writes `$codexapp-direct-subagents` or `codexapp-direct-subagents`, or explicitly asks to dispatch Codex App subagents directly without creating or writing an AgentDesk task. This skill bypasses AgentDesk task/session generation and uses Codex App subagents directly, defaulting to model `o4-mini` and reasoning `low`."
 ---
 
 # Codex App Direct Subagents
@@ -13,12 +13,12 @@ This is a lightweight Codex App fanout path. Do not create `task.md`, call `crea
 
 ## Defaults
 
-- Model: `gpt-5.5`
-- Reasoning effort: `xhigh`
+- Model: `o4-mini`
+- Reasoning effort: `low`
 - Default maximum batch size: `6`
 - Launcher: Codex App host `spawn_agent`
 
-When calling `spawn_agent`, set `model: "gpt-5.5"` and `reasoning_effort: "xhigh"` unless the user explicitly asks for different values. Leave service tier unset unless the user explicitly requests one and the host tool supports it.
+When calling `spawn_agent`, set `model: "o4-mini"` and `reasoning_effort: "low"` unless the user explicitly asks for different values. Leave service tier unset unless the user explicitly requests one and the host tool supports it.
 
 ## Workflow
 

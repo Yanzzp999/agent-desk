@@ -78,7 +78,11 @@ Or start both processes with one command:
 npm run dev:all -- --project /absolute/path/to/project
 ```
 
-Vite serves the app at `http://127.0.0.1:5173` by default. During development it proxies `/api/agentdesk` to the Node.js ESM HTTP API at `http://127.0.0.1:19731`; the API stores overall task metadata, period assignment, claim/dispatch state, and audit events in the user-level `~/.agent-desk/tasks.sqlite` by default. Pass `--sqlite-path <file>` to override it for a run.
+Vite serves the app at `http://127.0.0.1:5173` by default. During development it proxies `/api/agentdesk` to the Node.js ESM HTTP API at `http://127.0.0.1:19731`; the API stores overall task metadata, period assignment, claim/dispatch state, and audit events in the **user-root-level** `~/.agent-desk/tasks.sqlite` by default.
+
+**Key design principle**: This Overall Tasks SQLite database lives **only at the user root level** (`~/.agent-desk/tasks.sqlite`). Individual project directories should **not** contain their own copy of this database. Each project's `.agent-desk/` directory only holds traditional control-plane tasks (task.md, sessions, etc.). This design enables managing tasks across multiple projects + user-level planning tasks from the user's home directory.
+
+Pass `--sqlite-path <file>` to override it for a run.
 
 Expected local API routes:
 
@@ -90,7 +94,7 @@ Expected local API routes:
 - `POST /api/agentdesk/tasks/:taskId/dispatch`
 - `GET /api/agentdesk/sessions/recent`
 
-Overall tasks can be user-level (`projectRoot` empty) or project-bound (`projectRoot` absolute). Coding tasks require a project root before dispatch; project-filtered views include matching project tasks plus user-level planning tasks. Task and session dispatch keeps the documented defaults of model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, and launch batch size `6`.
+Overall tasks can be user-level (`projectRoot` empty) or project-bound (`projectRoot` absolute). Coding tasks require a project root before dispatch; project-filtered views include matching project tasks plus user-level planning tasks. Task and session dispatch keeps the documented weakest-model defaults: Codex launchers use `o4-mini` + `low`, Claude launchers use `haiku`, Grok launchers use `composer-2.5-fast`, service tier unset by default, and launch batch size `6`.
 
 Frontend checks:
 
@@ -124,8 +128,8 @@ Start a session:
 ```sh
 ./scripts/verunectl.sh sessions start <taskId> \
   --project /absolute/path/to/project \
-  --model gpt-5.5 \
-  --reasoning xhigh \
+  --model o4-mini \
+  --reasoning low \
   --parallel 6
 ```
 
@@ -137,7 +141,7 @@ Useful session commands:
 ./scripts/verunectl.sh sessions logs <sessionId> <agentId> --project /absolute/path/to/project
 ```
 
-Defaults: model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, execution mode `auto`, launch batch size `6`, and maximum parallelism `6`.
+Defaults: Codex launchers use model `o4-mini` and reasoning `low`; Claude launchers use `haiku`; Grok launchers use `composer-2.5-fast`; service tier is unset by default; execution mode `auto`; launch batch size `6`; maximum parallelism `6`. External CLI launchers: `codex-cli` and `claude-code-cli`.
 
 `codex-cli` subagents are launched as resumable interactive Codex CLI sessions. `sessions show` and `session.md` include each agent's primary `codex resume <sessionId>` command, plus `codex resume --all <sessionId>` for resuming from another working directory.
 

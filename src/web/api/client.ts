@@ -2,6 +2,7 @@ import { mockAgentDeskApi } from "./mockStore";
 import type {
   AgentDeskTaskDetail,
   ApiResult,
+  BreakdownResult,
   ClaimTaskInput,
   DispatchTaskInput,
   SessionSummary,
@@ -15,8 +16,15 @@ export const AGENTDESK_API_ROUTES = {
   task: (taskId: string) => `/tasks/${encodeURIComponent(taskId)}`,
   claimTask: (taskId: string) => `/tasks/${encodeURIComponent(taskId)}/claim`,
   dispatchTask: (taskId: string) => `/tasks/${encodeURIComponent(taskId)}/dispatch`,
+  breakdownTask: (taskId: string) => `/tasks/${encodeURIComponent(taskId)}/breakdown`,
   recentSessions: "/sessions/recent",
 };
+
+export interface BreakdownTaskOptions {
+  model?: string;
+  reasoning?: string;
+  serviceTier?: string;
+}
 
 function getApiBaseUrl(): string {
   return import.meta.env.VITE_AGENTDESK_API_BASE_URL || "/api/agentdesk";
@@ -99,13 +107,18 @@ async function withFallback<T>(
 }
 
 export const agentDeskApi = {
-  listTasks(projectRoot: string, filters: TaskFilters): Promise<ApiResult<TaskListResponse>> {
+  listTasks(
+    projectRoot: string,
+    filters: TaskFilters,
+    options: { scope?: "user" | "project" } = {},
+  ): Promise<ApiResult<TaskListResponse>> {
     return withFallback(
       AGENTDESK_API_ROUTES.tasks,
       undefined,
-      () => mockAgentDeskApi.listTasks(projectRoot, filters),
+      () => mockAgentDeskApi.listTasks(projectRoot, filters, options),
       {
         projectRoot,
+        scope: options.scope,
         range: filters.range,
         status: filters.status === "all" ? undefined : filters.status,
         query: filters.query,
@@ -167,12 +180,42 @@ export const agentDeskApi = {
     );
   },
 
+  breakdownTask(taskId: string, options: BreakdownTaskOptions = {}): Promise<ApiResult<BreakdownResult>> {
+    return withFallback(
+      AGENTDESK_API_ROUTES.breakdownTask(taskId),
+      {
+        method: "POST",
+        body: JSON.stringify(options),
+      },
+      () => mockAgentDeskApi.breakdownTask(taskId, options),
+    );
+  },
+
   listRecentSessions(projectRoot: string, limit = 6): Promise<ApiResult<SessionSummary[]>> {
     return withFallback(
       AGENTDESK_API_ROUTES.recentSessions,
       undefined,
       () => mockAgentDeskApi.listRecentSessions(projectRoot, limit),
       { projectRoot, limit },
+    );
+  },
+
+  importProjectTasks(projectPath: string): Promise<ApiResult<{ ok: boolean; projectRoot: string; importedCount: number; tasks: any[] }>> {
+    return withFallback(
+      "/import-project",
+      {
+        method: "POST",
+        body: JSON.stringify({ projectPath }),
+      },
+      async () => ({ ok: true, projectRoot: projectPath, importedCount: 0, tasks: [] }), // mock
+    );
+  },
+
+  deleteTask(taskId: string): Promise<ApiResult<{ ok: boolean }>> {
+    return withFallback(
+      AGENTDESK_API_ROUTES.task(taskId),
+      { method: "DELETE" },
+      async () => mockAgentDeskApi.deleteTask(taskId),
     );
   },
 };

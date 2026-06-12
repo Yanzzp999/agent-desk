@@ -1,7 +1,9 @@
-import { buildFixtureTaskDetail, fixtureSessions, fixtureTasks } from "./fixtures";
+import { buildFixtureTaskDetail, extraDemoTasks, fixtureSessions, fixtureTasks } from "./fixtures";
+import { parseSubtaskRows } from "./subtaskMarkdown";
 import type {
   AgentDeskTask,
   AgentDeskTaskDetail,
+  BreakdownResult,
   ClaimTaskInput,
   DispatchTaskInput,
   SessionSummary,
@@ -40,7 +42,12 @@ function writeStore<T>(key: string, value: T): void {
 }
 
 function readTasks(): AgentDeskTask[] {
-  return readStore(TASK_STORE_KEY, fixtureTasks);
+  const base = readStore(TASK_STORE_KEY, fixtureTasks);
+  // 合并额外演示任务（仅当没有本地存储时展示多项目树）
+  if (base === fixtureTasks) {
+    return [...fixtureTasks, ...extraDemoTasks];
+  }
+  return base;
 }
 
 function writeTasks(tasks: AgentDeskTask[]): void {
@@ -131,12 +138,19 @@ function findTaskOrThrow(taskId: string): AgentDeskTask {
 }
 
 export const mockAgentDeskApi = {
-  async listTasks(projectRoot: string, filters: TaskFilters): Promise<TaskListResponse> {
+  async listTasks(
+    projectRoot: string,
+    filters: TaskFilters,
+    options: { scope?: "user" | "project" } = {},
+  ): Promise<TaskListResponse> {
     const tasks = readTasks().map((task) => ({
       ...task,
       projectRoot: task.scope === "user" ? "" : projectRoot || task.projectRoot,
     }));
-    const items = applyFilters(tasks, filters);
+    const scoped = options.scope === "user"
+      ? tasks.filter((task) => task.scope === "user" || !task.projectRoot)
+      : tasks;
+    const items = applyFilters(scoped, filters);
 
     return {
       items,
@@ -145,6 +159,12 @@ export const mockAgentDeskApi = {
   },
 
   async getTask(taskId: string): Promise<AgentDeskTaskDetail> {
+    // 优先从全量（含 extraDemoTasks）中查找
+    const all = readTasks();
+    const found = all.find((t) => t.taskId === taskId);
+    if (found) {
+      return buildFixtureTaskDetail(found);
+    }
     return buildFixtureTaskDetail(findTaskOrThrow(taskId));
   },
 
@@ -286,6 +306,19 @@ export const mockAgentDeskApi = {
     return buildFixtureTaskDetail(dispatchedTask);
   },
 
+  async breakdownTask(taskId: string, _options: { model?: string; reasoning?: string; serviceTier?: string } = {}): Promise<BreakdownResult> {
+    const task = findTaskOrThrow(taskId);
+    const markdown = [
+      "## Subtasks",
+      "",
+      `- [ ] Scaffold module for ${task.title}`,
+      "- [ ] Implement core logic and wire dependencies",
+      "- [ ] Add unit tests covering the new behavior  <!-- ad:parallel=1 -->",
+      "- [ ] Update documentation and examples",
+    ].join("\n");
+    return { taskId, markdown, subtasks: parseSubtaskRows(markdown) };
+  },
+
   async listRecentSessions(projectRoot: string, limit = 6): Promise<SessionSummary[]> {
     const tasks = readTasks();
     const matchingTasks = tasks.filter((task) => !projectRoot || task.projectRoot === projectRoot);
@@ -295,5 +328,11 @@ export const mockAgentDeskApi = {
     return readSessions()
       .filter((session) => taskIds.has(session.taskId))
       .slice(0, limit);
+  },
+
+  async deleteTask(taskId: string): Promise<{ ok: boolean }> {
+    const tasks = readTasks().filter((task) => task.taskId !== taskId);
+    writeTasks(tasks);
+    return { ok: true };
   },
 };
