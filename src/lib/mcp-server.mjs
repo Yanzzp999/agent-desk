@@ -9,6 +9,7 @@ import {
   getCodexAppLaunchPlan,
   getSession,
   getTask,
+  isExternalCliLauncher,
   isHostDirectLauncher,
   listSessions,
   listTasks,
@@ -422,20 +423,20 @@ export function createAgentDeskMcpServer(options = {}) {
 
   server.registerTool("start_subagent_session", {
     title: "Start Subagent Session",
-    description: "Start an AgentDesk subagent session. The main agent should use auto/current-branch when worktree isolation is unnecessary, and worktree only for parallel work that needs branch isolation. codex-cli sessions are launched by AgentDesk (external CLI) and wait up to 5 minutes for completion by default. codex-app/claude-direct/grok-direct sessions create a tracked launch plan for the host (Codex App / Claude / Grok) to spawn subagents internally using the host's native subagent mechanism; the host then records results back via record_codex_app_subagent_result. Defaults favor internal host-direct launch for codex/claude/grok.",
+    description: "Start an AgentDesk subagent session. The main agent should use auto/current-branch when worktree isolation is unnecessary, and worktree only for parallel work that needs branch isolation. codex-cli and claude-code-cli sessions are launched by AgentDesk (external CLI) and wait up to 5 minutes for completion by default. codex-app/claude-direct/grok-direct sessions create a tracked launch plan for the host (Codex App / Claude / Grok) to spawn subagents internally using the host's native subagent mechanism; the host then records results back via record_codex_app_subagent_result. Defaults favor internal host-direct launch for codex/claude/grok.",
     inputSchema: {
       taskId: z.string().min(1).describe("Ready AgentDesk task id under <project>/.agent-desk/tasks."),
       parallelism: z.number().optional().describe("Maximum concurrent subagents. Default 6, max 24."),
-      model: z.string().optional().describe("Codex model for subagents. Default: gpt-5.5."),
-      reasoning: z.enum(["low", "medium", "high", "xhigh"]).optional().describe("Codex reasoning effort. Default: xhigh."),
+      model: z.string().optional().describe("Subagent model. Defaults by launcher: o4-mini (Codex), haiku (Claude), composer-2.5-fast (Grok)."),
+      reasoning: z.enum(["low", "medium", "high", "xhigh"]).optional().describe("Codex reasoning effort. Default: low."),
       executionMode: z.enum(["auto", "worktree", "current-branch"]).optional().describe("Execution mode. Default auto lets the main agent avoid worktrees for simple or non-conflicting tasks. codex-app uses current-branch."),
-      subagentLauncher: z.enum(["codex-cli", "codex-app", "claude-direct", "grok-direct", "direct"]).optional().describe("Subagent launcher. Default for current-branch/internal: codex-app (Codex), use claude-direct/grok-direct when the calling host is Claude or Grok for native internal subagent spawn instead of CLI."),
+      subagentLauncher: z.enum(["codex-cli", "claude-code-cli", "codex-app", "claude-direct", "grok-direct", "direct"]).optional().describe("Subagent launcher. External CLI: codex-cli or claude-code-cli. Internal host-direct default for current-branch: codex-app (Codex), claude-direct (Claude), grok-direct/direct (Grok)."),
       baseBranch: z.string().optional().describe("Local branch used as the base for worktree sessions. Defaults to the current checkout branch."),
       worktreeIntegration: z.enum(["agent-branch", "fast-forward"]).optional().describe("Worktree completion policy. Default agent-branch keeps completed subagent branches for review without advancing the base branch."),
       pushWorktreeIntegration: z.boolean().optional().describe("Whether fast-forward worktree integration should push the configured base branch upstream. Default false."),
       launchPrompt: z.string().optional().describe("Optional extra launch context included in each subagent prompt."),
-      waitForCompletion: z.boolean().optional().describe("For codex-cli sessions, wait for all subagents to finish before returning. Default: true."),
-      waitTimeoutMs: z.number().int().positive().optional().describe("Maximum time to keep the MCP call open while waiting for codex-cli completion. Default: 300000 ms (5 minutes). Ignored when waitForCompletion is false or subagentLauncher is codex-app."),
+      waitForCompletion: z.boolean().optional().describe("For external CLI sessions (codex-cli / claude-code-cli), wait for all subagents to finish before returning. Default: true."),
+      waitTimeoutMs: z.number().int().positive().optional().describe("Maximum time to keep the MCP call open while waiting for external CLI completion. Default: 300000 ms (5 minutes). Ignored when waitForCompletion is false or subagentLauncher is host-direct."),
       allowDuplicateSession: z.boolean().optional().describe("Override the active-session guard and allow another session for the same task. Default: false."),
       force: z.boolean().optional().describe("Alias for allowDuplicateSession."),
       ...contextInputSchema(),
@@ -457,7 +458,7 @@ export function createAgentDeskMcpServer(options = {}) {
       allowDuplicateSession: args.allowDuplicateSession || args.force,
     });
     const resolvedLauncher = result.subagentLauncher || "codex-cli";
-    const waitForCompletion = resolvedLauncher === "codex-cli"
+    const waitForCompletion = isExternalCliLauncher(resolvedLauncher)
       ? args.waitForCompletion ?? true
       : false;
     const waitTimeoutMs = waitForCompletion
@@ -838,9 +839,9 @@ function emptyAppLaunchPlan(sessionId, parallelism) {
     requiresHostLaunch: false,
     launchTool: "",
     parallelism,
-    model: "gpt-5.5",
-    reasoning: "xhigh",
-    serviceTier: "fast",
+    model: "o4-mini",
+    reasoning: "low",
+    serviceTier: "",
     subagents: [],
   };
 }

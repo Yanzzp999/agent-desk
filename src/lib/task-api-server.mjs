@@ -131,7 +131,7 @@ const DispatchTaskRequestSchema = z.object({
   serviceTier: z.literal("fast").optional(),
   launchBatchSize: z.literal(6).optional(),
   executionMode: z.enum(["auto", "worktree", "current-branch"]).optional(),
-  subagentLauncher: z.enum(["codex-cli", "codex-app", "claude-direct", "grok-direct", "direct"]).optional(),
+  subagentLauncher: z.enum(["codex-cli", "claude-code-cli", "codex-app", "claude-direct", "grok-direct", "direct"]).optional(),
   baseBranch: z.string().trim().min(1).optional(),
   base_branch: z.string().trim().min(1).optional(),
   worktreeIntegration: z.enum(["agent-branch", "fast-forward"]).optional(),

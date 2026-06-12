@@ -94,7 +94,7 @@ Expected local API routes:
 - `POST /api/agentdesk/tasks/:taskId/dispatch`
 - `GET /api/agentdesk/sessions/recent`
 
-Overall tasks can be user-level (`projectRoot` empty) or project-bound (`projectRoot` absolute). Coding tasks require a project root before dispatch; project-filtered views include matching project tasks plus user-level planning tasks. Task and session dispatch keeps the documented defaults of model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, and launch batch size `6`.
+Overall tasks can be user-level (`projectRoot` empty) or project-bound (`projectRoot` absolute). Coding tasks require a project root before dispatch; project-filtered views include matching project tasks plus user-level planning tasks. Task and session dispatch keeps the documented weakest-model defaults: Codex launchers use `o4-mini` + `low`, Claude launchers use `haiku`, Grok launchers use `composer-2.5-fast`, service tier unset by default, and launch batch size `6`.
 
 Frontend checks:
 
@@ -128,8 +128,8 @@ Start a session:
 ```sh
 ./scripts/verunectl.sh sessions start <taskId> \
   --project /absolute/path/to/project \
-  --model gpt-5.5 \
-  --reasoning xhigh \
+  --model o4-mini \
+  --reasoning low \
   --parallel 6
 ```
 
@@ -141,7 +141,7 @@ Useful session commands:
 ./scripts/verunectl.sh sessions logs <sessionId> <agentId> --project /absolute/path/to/project
 ```
 
-Defaults: model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, execution mode `auto`, launch batch size `6`, and maximum parallelism `6`.
+Defaults: Codex launchers use model `o4-mini` and reasoning `low`; Claude launchers use `haiku`; Grok launchers use `composer-2.5-fast`; service tier is unset by default; execution mode `auto`; launch batch size `6`; maximum parallelism `6`. External CLI launchers: `codex-cli` and `claude-code-cli`.
 
 `codex-cli` subagents are launched as resumable interactive Codex CLI sessions. `sessions show` and `session.md` include each agent's primary `codex resume <sessionId>` command, plus `codex resume --all <sessionId>` for resuming from another working directory.
 

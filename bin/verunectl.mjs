@@ -26,6 +26,7 @@ import {
 } from "../src/lib/overall-tasks.mjs";
 
 const VALUE_OPTIONS = new Set([
+  "claude-code-cli",
   "codex-cli",
   "codex-count",
   "config",
@@ -111,6 +112,7 @@ async function main() {
     worktreesRoot: parsed["worktrees-root"],
     configPath: parsed.config,
     codexCli: parsed["codex-cli"],
+    claudeCodeCli: parsed["claude-code-cli"],
     taskStoreDbPath: parsed.sqlite || parsed["sqlite-path"],
   });
 
@@ -560,20 +562,21 @@ Global options:
   --config FILE          Override the AgentDesk TOML config path. Default: <desk-root>/config.toml.
   --worktrees-root DIR   Override the persistent git worktrees root.
   --codex-cli PATH       Override the Codex CLI executable path.
+  --claude-code-cli PATH Override the Claude Code CLI executable path.
 
 Task create options:
   --rebuild              Create a fresh task even when a similar task exists.
   --continue-similar     Return the best matching existing task instead of creating a new one.
 
 Session start options:
-  --model MODEL          Codex model for subagents. Default: gpt-5.5.
-  --reasoning EFFORT     Reasoning effort: low, medium, high, or xhigh. Default: xhigh.
-  --service-tier TIER    Service tier. The supported value is fast.
+  --model MODEL          Subagent model. Defaults by launcher: o4-mini (Codex), haiku (Claude), composer-2.5-fast (Grok).
+  --reasoning EFFORT     Codex reasoning effort: low, medium, high, or xhigh. Default: low.
+  --service-tier TIER    Optional Codex service tier. Supported value: fast.
   --parallel N           Maximum concurrent subagents or app launch prompts. Default: 6, max: 24.
   --concurrency N        Alias for --parallel.
   --codex-count N        Alias for --parallel.
   --execution-mode MODE  auto, worktree, or current-branch. Default: auto.
-  --subagent-launcher L  codex-cli (external) or codex-app (codex)/claude-direct/grok-direct/direct (internal host subagent). Defaults now favor internal host-direct launch (codex-app etc) for codex/claude/grok.
+  --subagent-launcher L  External CLI: codex-cli or claude-code-cli. Internal host-direct: codex-app / claude-direct / grok-direct / direct. Defaults favor internal host-direct launch for codex/claude/grok.
   --base-branch BRANCH   Local branch used as the base for worktree sessions. Default: current checkout branch.
   --worktree-integration MODE
                           agent-branch or fast-forward. Default: agent-branch.
@@ -584,7 +587,7 @@ Session start options:
   --force                 Alias for --allow-duplicate-session.
 
 Workflow defaults:
-  Service tier: fast.
+  Service tier: unset by default (no fast/priority acceleration).
   Launch batch size: 6.
   Completed worktree sessions keep subagent branches for review unless fast-forward integration is explicitly configured.
 `);

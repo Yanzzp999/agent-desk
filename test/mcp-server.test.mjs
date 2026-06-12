@@ -461,9 +461,9 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.equal(started.structuredContent.parallelism, 12);
     assert.equal(started.structuredContent.batchSize, 6);
     assert.equal(started.structuredContent.status, "succeeded", started.structuredContent.lastError);
-    assert.equal(started.structuredContent.model, "gpt-5.5");
-    assert.equal(started.structuredContent.reasoning, "xhigh");
-    assert.equal(started.structuredContent.serviceTier, "fast");
+    assert.equal(started.structuredContent.model, "o4-mini");
+    assert.equal(started.structuredContent.reasoning, "low");
+    assert.equal(started.structuredContent.serviceTier, "");
     assert.equal(started.structuredContent.totalAgents, 7);
     assert.equal(started.structuredContent.succeededAgents, 7);
     assert.equal(started.structuredContent.failedAgents, 0);
@@ -495,8 +495,8 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
     assert.match(await fs.readFile(meta.agents[0].paths.taskSnapshotMd, "utf8"), /Inspect API surface/);
     assert.match(await fs.readFile(meta.agents[0].paths.memorySnapshotMd, "utf8"), /Existing MCP memory/);
     const firstPrompt = await fs.readFile(meta.agents[0].paths.promptMd, "utf8");
-    assert.match(firstPrompt, /Execution model: gpt-5\.5/);
-    assert.match(firstPrompt, /Execution reasoning: xhigh/);
+    assert.match(firstPrompt, /Execution model: o4-mini/);
+    assert.match(firstPrompt, /Execution reasoning: low/);
     assert.match(firstPrompt, /Execution mode: current-branch/);
     assert.match(firstPrompt, /Subagent launcher: codex-cli/);
     assert.match(firstPrompt, /AgentDesk launch token: agentdesk-/);
@@ -560,10 +560,9 @@ test("MCP server starts Codex CLI subagent sessions", async () => {
       assert.equal(entry.args.includes("-o"), false);
       assert.equal(entry.args.includes("--output-schema"), false);
       assert.equal(entry.args.includes("--no-alt-screen"), true);
-      assert.equal(entry.model, "gpt-5.5");
+      assert.equal(entry.model, "o4-mini");
       assert.deepEqual(entry.configs, [
-        "model_reasoning_effort=\"xhigh\"",
-        "service_tier=fast",
+        "model_reasoning_effort=\"low\"",
       ]);
     }
   } finally {
@@ -879,10 +878,9 @@ test("MCP create_agentdesk_task requires confirmation for similar tasks", async 
     const generationInvocation = invocations.find((entry) => entry.outputFile.endsWith("task.md"));
     assert.ok(generationInvocation, JSON.stringify(invocations, null, 2));
     assert.equal(generationInvocation.hasOutputSchema, false);
-    assert.equal(generationInvocation.model, "gpt-5.5");
+    assert.equal(generationInvocation.model, "o4-mini");
     assert.deepEqual(generationInvocation.configs, [
-      "model_reasoning_effort=\"xhigh\"",
-      "service_tier=fast",
+      "model_reasoning_effort=\"low\"",
     ]);
     assert.match(generationInvocation.prompt, /Write markdown only/);
     assert.match(generationInvocation.prompt, /Task title hint: MCP duplicate guard/);
@@ -1042,9 +1040,9 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
     assert.equal(launchPlan.requiresHostLaunch, true);
     assert.equal(launchPlan.launchTool, "spawn_agent");
     assert.equal(launchPlan.parallelism, 5);
-    assert.equal(launchPlan.model, "gpt-5.5");
-    assert.equal(launchPlan.reasoning, "xhigh");
-    assert.equal(launchPlan.serviceTier, "fast");
+    assert.equal(launchPlan.model, "o4-mini");
+    assert.equal(launchPlan.reasoning, "low");
+    assert.equal(launchPlan.serviceTier, "");
     assert.equal(launchPlan.subagents.length, 3);
     assert.deepEqual(
       launchPlan.subagents.map((subagent) => subagent.status),
@@ -1055,9 +1053,9 @@ test("MCP server prepares Codex App subagent launch plans", async () => {
       ["Inspect API surface", "Validate session launcher", "Summarize verification"],
     );
     for (const subagent of launchPlan.subagents) {
-      assert.equal(subagent.model, "gpt-5.5");
-      assert.equal(subagent.reasoning, "xhigh");
-      assert.equal(subagent.serviceTier, "fast");
+      assert.equal(subagent.model, "o4-mini");
+      assert.equal(subagent.reasoning, "low");
+      assert.equal(subagent.serviceTier, "");
       assert.match(subagent.taskSnapshotPath, /task\.snapshot\.md$/);
       assert.match(subagent.memorySnapshotPath, /memory\.snapshot\.md$/);
       assert.match(subagent.promptPath, /prompt\.md$/);

@@ -24,7 +24,8 @@ If the user later chooses a different concurrency value, respect the user-select
 
 AgentDesk now defaults to internal subagent launch for Codex / Claude / Grok hosts (no external `codex exec` CLI fanout). Worktree isolation still requires `codex-cli` (external).
 
-- `codex-cli`: AgentDesk starts Codex CLI subagents itself (external processes). Use only when you need AgentDesk to own the launches + full logs. Worktree mode forces this. Defaults are model `gpt-5.5`, reasoning `xhigh`, service tier `fast`, execution mode `auto`, and parallelism `6`.
+- `codex-cli`: AgentDesk starts Codex CLI subagents itself (external processes). Use only when you need AgentDesk to own the launches + full logs. Worktree mode allows external CLI launchers. Defaults are model `o4-mini`, reasoning `low`, service tier unset, execution mode `auto`, and parallelism `6`.
+- `claude-code-cli`: AgentDesk starts Claude Code CLI subagents itself (external `claude -p` processes). Defaults are model `haiku`, execution mode `auto`, and parallelism `6`.
 - `codex-app`: (Codex host internal) AgentDesk prepares tracked launch plan + per-subagent prompt snapshots in `current-branch` mode. Codex App host calls its native `spawn_agent` (or equivalent internal). Use for Codex.
 - `claude-direct`: (Claude host internal) Same prep + record flow; Claude uses its native subagent dispatch on the prepared prompts.
 - `grok-direct` (or `direct`): (Grok Build host internal) Same; Grok uses its internal subagent mechanism.
@@ -37,14 +38,14 @@ When the calling AI is codex/claude/grok, default to the matching *-direct / cod
 2. Confirm the checkout is on the repository-designated working branch before starting. In this AgentDesk workspace, use `agentdesk/next` as the base for new work and do not use `master` as the session base.
 3. Call `start_subagent_session` with:
    - `taskId`
-   - `subagentLauncher`: `codex-cli` or `codex-app`
+   - `subagentLauncher`: `codex-cli`, `claude-code-cli`, or host-direct launchers such as `codex-app`
    - `parallelism`: the recommended or user-selected maximum concurrency, defaulting to 6
-   - `model`: default `gpt-5.5`
-   - `reasoning`: default `xhigh`
+   - `model`: default `o4-mini` for Codex launchers, `haiku` for Claude launchers, `composer-2.5-fast` for Grok launchers
+   - `reasoning`: default `low` for Codex launchers
    - `executionMode`: default `auto`; use `current-branch` for `codex-app`; for AgentDesk validation tasks, use `current-branch` unless branch-aware no-push worktree completion has been confirmed
    - For worktree sessions in this repository, pass or verify `baseBranch=agentdesk/next`, `worktreeIntegration=agent-branch`, and `pushWorktreeIntegration=false`
 4. Never launch more subagents at once than `parallelism`. Let the model/task plan decide the useful number of subagents and batches within that cap; if the user specifies a concurrency value, it must be between 1 and the configured maximum.
-5. For `codex-cli`, rely on `start_subagent_session` to wait up to 5 minutes for status `succeeded` or `failed` unless you explicitly pass `waitForCompletion: false`. If the result has `waitTimedOut: true` or a non-terminal status, use `read_subagent_session` to continue monitoring the existing session instead of starting a duplicate. Pass `waitTimeoutMs` only when the workflow needs a different MCP wait window.
+5. For external CLI launchers (`codex-cli`, `claude-code-cli`), rely on `start_subagent_session` to wait up to 5 minutes for status `succeeded` or `failed` unless you explicitly pass `waitForCompletion: false`. If the result has `waitTimedOut: true` or a non-terminal status, use `read_subagent_session` to continue monitoring the existing session instead of starting a duplicate. Pass `waitTimeoutMs` only when the workflow needs a different MCP wait window.
 6. For host-direct launchers (`codex-app`, `claude-direct`, `grok-direct`, `direct`):
    - Confirm `requiresHostLaunch: true` (and `appLaunchPlan` / `hostLaunchPlan` style fields).
    - `prepared_for_app` (or equivalent) means prompt+context ready for host to internally spawn its subagent; AgentDesk has not run anything yet.
@@ -67,7 +68,7 @@ For internal host-direct handoff (codex/claude/grok), include `--execution-mode 
 
 ## Guardrails
 
-- Worktree mode supports only `codex-cli`.
+- Worktree mode supports only external CLI launchers: `codex-cli` and `claude-code-cli`.
 - Host-direct internal (codex-app / claude-direct / grok-direct) must use current-branch (or auto that picks it); the host AI owns the actual subagent spawning.
 - If the current AgentDesk implementation would rebase, fast-forward, merge, or push `master`, do not choose that path after the user has designated another working branch. Use `current-branch` execution from the designated branch or stop and ask for an alternate integration path.
 - For this AgentDesk workspace, future work should be based on `agentdesk/next`; never switch to `master`, create work from `master`, or merge/push `master` unless the user explicitly requests that action.

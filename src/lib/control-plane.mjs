@@ -12,13 +12,19 @@ import {
   discoverCodexModels,
   resolveCodexCliPath,
 } from "./codex-cli.mjs";
+import {
+  buildClaudeCodePrintArgs,
+  discoverClaudeCodeModels,
+  parseClaudePrintOutput,
+  resolveClaudeCodeCliPath,
+} from "./claude-code-cli.mjs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const CONTROL_PLANE_ROOT = path.resolve(MODULE_DIR, "../..");
 export const AGENT_DESK_STATE_DIRNAME = ".agent-desk";
-export const DEFAULT_SUBAGENT_MODEL = "gpt-5.5";
-export const DEFAULT_SUBAGENT_REASONING = "xhigh";
-export const DEFAULT_SERVICE_TIER = "fast";
+export const DEFAULT_SUBAGENT_MODEL = "o4-mini";
+export const DEFAULT_SUBAGENT_REASONING = "low";
+export const DEFAULT_SERVICE_TIER = "";
 export const DEFAULT_PARALLELISM = 6;
 export const DEFAULT_LAUNCH_BATCH_SIZE = 6;
 export const MAX_PARALLELISM = 24;
@@ -29,7 +35,22 @@ export const DEFAULT_WORKTREE_INTEGRATION = "agent-branch";
 export const WORKTREE_INTEGRATION_MODES = Object.freeze([DEFAULT_WORKTREE_INTEGRATION, "fast-forward"]);
 export const CONCRETE_EXECUTION_MODES = Object.freeze(["worktree", "current-branch"]);
 export const EXECUTION_MODES = Object.freeze([DEFAULT_EXECUTION_MODE, ...CONCRETE_EXECUTION_MODES]);
-export const CURRENT_BRANCH_SUBAGENT_LAUNCHERS = Object.freeze(["codex-cli", "codex-app", "claude-direct", "grok-direct", "direct"]);
+export const EXTERNAL_CLI_LAUNCHERS = Object.freeze(["codex-cli", "claude-code-cli"]);
+export const CURRENT_BRANCH_SUBAGENT_LAUNCHERS = Object.freeze([
+  ...EXTERNAL_CLI_LAUNCHERS,
+  "codex-app",
+  "claude-direct",
+  "grok-direct",
+  "direct",
+]);
+export const LAUNCHER_DEFAULT_MODELS = Object.freeze({
+  "codex-cli": "o4-mini",
+  "codex-app": "o4-mini",
+  "claude-code-cli": "haiku",
+  "claude-direct": "haiku",
+  "grok-direct": "composer-2.5-fast",
+  direct: "composer-2.5-fast",
+});
 export const DEFAULT_CONFIG_FILENAME = "config.toml";
 export const DEFAULT_TASK_MEMORY_FILENAME = "memory.md";
 export const AGENT_TASK_SNAPSHOT_FILENAME = "task.snapshot.md";
@@ -157,6 +178,12 @@ export function createContext(options = {}) {
     codexCli: resolveCodexCliPath({
       explicitPath: options.codexCli || process.env.CODEX_CLI || process.env.CODEX_CLI_PATH || process.env.CODEX_BIN,
     }),
+    claudeCodeCli: resolveClaudeCodeCliPath({
+      explicitPath: options.claudeCodeCli
+        || process.env.CLAUDE_CODE_CLI
+        || process.env.CLAUDE_CLI
+        || process.env.CLAUDE_CLI_PATH,
+    }),
   };
 }
 
@@ -259,9 +286,10 @@ export function parseAgentDeskConfigToml(text = "") {
 }
 
 export async function getRuntimeCapabilities(context) {
-  const [codexDiscovery, codexVersion] = await Promise.all([
+  const [codexDiscovery, codexVersion, claudeDiscovery] = await Promise.all([
     discoverCodexModels({ codexCliPath: context.codexCli, timeoutMs: 1000 }),
     detectCodexVersion(context.codexCli),
+    discoverClaudeCodeModels({ claudeCodeCliPath: context.claudeCodeCli, timeoutMs: 1000 }),
   ]);
   const codexModels = Array.isArray(codexDiscovery.models) ? codexDiscovery.models : [];
   const reasoningEfforts = Array.isArray(codexDiscovery.reasoningEfforts)
@@ -294,16 +322,46 @@ export async function getRuntimeCapabilities(context) {
       parallelism: DEFAULT_PARALLELISM,
     },
   };
-  return {
-    runtime: {
-      id: "codex-cli",
-      name: "Codex CLI",
-      codexBin: runtimeMetadata.codexCliPath,
-      codexVersion,
-      available: runtimeMetadata.source === "codex-cli",
-      metadata: runtimeMetadata,
-      ...runtimeMetadata,
+  const claudeModelChoices = (Array.isArray(claudeDiscovery.models) ? claudeDiscovery.models : []).map((model) => ({
+    value: model.slug,
+    label: model.displayName,
+    description: model.description,
+  }));
+  const claudeRuntimeMetadata = {
+    source: claudeDiscovery.source || "fallback",
+    claudeCodeCliPath: claudeDiscovery.claudeCodeCliPath || context.claudeCodeCli || "claude",
+    modelChoices: claudeModelChoices,
+    models: claudeModelChoices,
+    lastErrors: Array.isArray(claudeDiscovery.errors) ? claudeDiscovery.errors : [],
+    defaults: {
+      model: LAUNCHER_DEFAULT_MODELS["claude-code-cli"],
+      batchSize: DEFAULT_LAUNCH_BATCH_SIZE,
+      parallelism: DEFAULT_PARALLELISM,
     },
+  };
+  const codexRuntime = {
+    id: "codex-cli",
+    name: "Codex CLI",
+    codexBin: runtimeMetadata.codexCliPath,
+    codexVersion,
+    available: runtimeMetadata.source === "codex-cli",
+    metadata: runtimeMetadata,
+    ...runtimeMetadata,
+  };
+  const claudeCodeRuntime = {
+    id: "claude-code-cli",
+    name: "Claude Code CLI",
+    claudeBin: claudeRuntimeMetadata.claudeCodeCliPath,
+    claudeVersion: claudeDiscovery.version || "",
+    available: claudeRuntimeMetadata.source === "claude-code-cli",
+    metadata: claudeRuntimeMetadata,
+    ...claudeRuntimeMetadata,
+  };
+  return {
+    runtime: codexRuntime,
+    codexRuntime,
+    claudeCodeRuntime,
+    runtimes: Object.freeze([codexRuntime, claudeCodeRuntime]),
     capabilities: {
       tasks: {
         generation: true,
@@ -324,6 +382,8 @@ export async function getRuntimeCapabilities(context) {
         executionModes: EXECUTION_MODES,
         concreteExecutionModes: CONCRETE_EXECUTION_MODES,
         currentBranchSubagentLaunchers: CURRENT_BRANCH_SUBAGENT_LAUNCHERS,
+        externalCliLaunchers: EXTERNAL_CLI_LAUNCHERS,
+        launcherDefaultModels: LAUNCHER_DEFAULT_MODELS,
       },
     },
   };
@@ -743,6 +803,12 @@ export async function createSession(context, taskId, request = {}) {
   });
   const sessionId = meta.sessionId;
 
+  if (sessionRequest.subagentLauncher === "claude-code-cli") {
+    await assertExecutable(context.claudeCodeCli || "claude", "Claude Code CLI");
+  } else if (sessionRequest.subagentLauncher === "codex-cli") {
+    await assertExecutable(context.codexCli || "codex", "Codex CLI");
+  }
+
   if (sessionRequest.executionMode === "current-branch" && isHostDirectLauncher(sessionRequest.subagentLauncher)) {
     try {
       await prepareCodexAppSession(context, claimedTask, sessionId);
@@ -781,6 +847,8 @@ export async function createSession(context, taskId, request = {}) {
       context.configPath,
       "--codex-cli",
       context.codexCli,
+      "--claude-code-cli",
+      context.claudeCodeCli,
       "--job",
       "run-session",
       "--session",
@@ -1058,6 +1126,8 @@ async function prepareCodexAppSession(context, task, sessionId) {
       codexSessionPath: "",
       codexResumeCommand: "",
       codexResumeAllCommand: "",
+      claudeSessionId: "",
+      claudeResumeCommand: "",
       headCommit: "",
       mergedCommit: "",
       integrationMode: "current-branch",
@@ -1174,6 +1244,8 @@ export async function runSessionJob(context, sessionId) {
       codexSessionPath: "",
       codexResumeCommand: "",
       codexResumeAllCommand: "",
+      claudeSessionId: "",
+      claudeResumeCommand: "",
       headCommit: "",
       mergedCommit: "",
       integrationMode: "",
@@ -1310,21 +1382,21 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
     });
     await refreshSessionCounts(context, sessionId);
 
-    const result = await runCodexInteractivePrompt({
+    const result = await runSubagentCliPrompt(session, {
       context,
       sessionId,
       agentId: agent.id,
       launchToken,
       cwd: created.worktreePath,
-      model: session.model || DEFAULT_SUBAGENT_MODEL,
+      model: session.model || getDefaultModelForLauncher(getSessionSubagentLauncher(session)),
       reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
       serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
       prompt,
       reportJson: agent.paths.reportJson,
       stdoutLog: agent.paths.stdoutLog,
       stderrLog: agent.paths.stderrLog,
-      onSessionDiscovered: async (codexSession) => {
-        await patchSessionAgent(context, sessionId, agent.id, codexSession);
+      onSessionDiscovered: async (discoveredSession) => {
+        await patchSessionAgent(context, sessionId, agent.id, discoveredSession);
         await writeSessionDocumentation(context, sessionId);
       },
     });
@@ -1349,6 +1421,8 @@ async function runSingleAgent(context, task, session, sessionId, agent) {
       codexSessionPath: result.codexSessionPath || "",
       codexResumeCommand: result.codexResumeCommand || "",
       codexResumeAllCommand: result.codexResumeAllCommand || "",
+      claudeSessionId: result.claudeSessionId || "",
+      claudeResumeCommand: result.claudeResumeCommand || "",
       summary: normalizedReport.summary,
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
@@ -1418,21 +1492,21 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
     });
     await refreshSessionCounts(context, sessionId);
 
-    const result = await runCodexInteractivePrompt({
+    const result = await runSubagentCliPrompt(session, {
       context,
       sessionId,
       agentId: agent.id,
       launchToken,
       cwd: context.projectRoot,
-      model: session.model || DEFAULT_SUBAGENT_MODEL,
+      model: session.model || getDefaultModelForLauncher(getSessionSubagentLauncher(session)),
       reasoning: session.reasoning || DEFAULT_SUBAGENT_REASONING,
       serviceTier: session.serviceTier || DEFAULT_SERVICE_TIER,
       prompt,
       reportJson: agent.paths.reportJson,
       stdoutLog: agent.paths.stdoutLog,
       stderrLog: agent.paths.stderrLog,
-      onSessionDiscovered: async (codexSession) => {
-        await patchSessionAgent(context, sessionId, agent.id, codexSession);
+      onSessionDiscovered: async (discoveredSession) => {
+        await patchSessionAgent(context, sessionId, agent.id, discoveredSession);
         await writeSessionDocumentation(context, sessionId);
       },
     });
@@ -1453,6 +1527,8 @@ async function runSingleCurrentBranchAgent(context, task, session, sessionId, ag
       codexSessionPath: result.codexSessionPath || "",
       codexResumeCommand: result.codexResumeCommand || "",
       codexResumeAllCommand: result.codexResumeAllCommand || "",
+      claudeSessionId: result.claudeSessionId || "",
+      claudeResumeCommand: result.claudeResumeCommand || "",
       summary: normalizedReport.summary,
       testsRun: normalizedReport.testsRun,
       risks: normalizedReport.risks,
@@ -1627,13 +1703,15 @@ function scoreTaskSimilarity(request, task) {
 export function normalizeSessionRequest(request = {}) {
   const normalizedInput = normalizeSessionRequestInput(request);
   const executionMode = normalizeExecutionMode(normalizedInput.executionMode || normalizedInput.mode);
+  const subagentLauncher = normalizeSubagentLauncher(normalizedInput.subagentLauncher, executionMode);
+  const defaultModel = getDefaultModelForLauncher(subagentLauncher);
   return {
     parallelism: normalizeParallelism(normalizedInput.parallelism),
-    model: normalizeSubagentModel(normalizedInput.model),
+    model: normalizeSubagentModel(normalizedInput.model, defaultModel),
     reasoning: normalizeReasoningEffort(normalizedInput.reasoning),
     serviceTier: normalizeServiceTier(normalizedInput.serviceTier),
     executionMode,
-    subagentLauncher: normalizeSubagentLauncher(normalizedInput.subagentLauncher, executionMode),
+    subagentLauncher,
     baseBranch: normalizeBaseBranch(normalizedInput.baseBranch, { allowEmpty: true }),
     worktreeIntegration: normalizeWorktreeIntegration(normalizedInput.worktreeIntegration),
     pushWorktreeIntegration: normalizeBoolean(
@@ -1866,10 +1944,10 @@ function normalizeParallelism(value) {
   return Math.max(1, Math.min(MAX_PARALLELISM, Math.floor(number)));
 }
 
-function normalizeSubagentModel(value) {
-  const model = normalizeOptionalString(value) || DEFAULT_SUBAGENT_MODEL;
+function normalizeSubagentModel(value, fallback = DEFAULT_SUBAGENT_MODEL) {
+  const model = normalizeOptionalString(value) || fallback;
   if (/\s/.test(model)) {
-    throw new Error("model must be a single Codex CLI model id");
+    throw new Error("model must be a single subagent model id");
   }
   return model;
 }
@@ -1883,8 +1961,10 @@ function normalizeReasoningEffort(value) {
 }
 
 function normalizeServiceTier(value) {
-  const serviceTier = normalizeOptionalString(value) || DEFAULT_SERVICE_TIER;
-  if (serviceTier !== DEFAULT_SERVICE_TIER) {
+  const serviceTier = value === undefined || value === null
+    ? DEFAULT_SERVICE_TIER
+    : normalizeOptionalString(value);
+  if (serviceTier && serviceTier !== "fast") {
     throw new Error(`unsupported service tier: ${serviceTier}`);
   }
   return serviceTier;
@@ -1941,8 +2021,8 @@ function normalizeSubagentLauncher(value, executionMode) {
   }
   if (executionMode === "worktree") {
     const selected = launcher || DEFAULT_WORKTREE_SUBAGENT_LAUNCHER;
-    if (selected !== DEFAULT_WORKTREE_SUBAGENT_LAUNCHER) {
-      throw new Error("worktree execution mode only supports codex-cli subagent launcher");
+    if (!EXTERNAL_CLI_LAUNCHERS.includes(selected)) {
+      throw new Error("worktree execution mode only supports codex-cli or claude-code-cli subagent launcher");
     }
     return selected;
   }
@@ -1968,9 +2048,19 @@ function getSessionSubagentLauncher(session) {
     : "";
 }
 
+export function isExternalCliLauncher(launcher) {
+  const l = normalizeOptionalString(launcher);
+  return EXTERNAL_CLI_LAUNCHERS.includes(l);
+}
+
 export function isHostDirectLauncher(launcher) {
   const l = normalizeOptionalString(launcher);
-  return !!l && l !== "codex-cli";
+  return !!l && !isExternalCliLauncher(l);
+}
+
+export function getDefaultModelForLauncher(launcher) {
+  const normalized = normalizeOptionalString(launcher);
+  return LAUNCHER_DEFAULT_MODELS[normalized] || DEFAULT_SUBAGENT_MODEL;
 }
 
 function normalizeFastMetadata(fast) {
@@ -2630,24 +2720,34 @@ async function completeWorktreeBranch(context, worktreePath, branchName, baseBra
   }
 }
 
+function appendCodexModelConfigArgs(args, options = {}) {
+  args.push(
+    "-m",
+    options.model || DEFAULT_SUBAGENT_MODEL,
+    "--config",
+    `model_reasoning_effort="${options.reasoning || DEFAULT_SUBAGENT_REASONING}"`,
+  );
+  const serviceTier = normalizeOptionalString(options.serviceTier);
+  if (serviceTier) {
+    args.push("--config", `service_tier=${serviceTier}`);
+  }
+}
+
 export function buildCodexExecArgs(options = {}) {
   const args = [
     "-a",
     "never",
     "exec",
-    "-m",
-    options.model || DEFAULT_SUBAGENT_MODEL,
-    "--config",
-    `model_reasoning_effort="${options.reasoning || DEFAULT_SUBAGENT_REASONING}"`,
-    "--config",
-    `service_tier=${options.serviceTier || DEFAULT_SERVICE_TIER}`,
+  ];
+  appendCodexModelConfigArgs(args, options);
+  args.push(
     "-s",
     options.sandboxMode || "danger-full-access",
     "-C",
     options.cwd,
     "-o",
     options.outputFile,
-  ];
+  );
   if (options.skipGitRepoCheck) {
     args.push("--skip-git-repo-check");
   }
@@ -2659,22 +2759,20 @@ export function buildCodexExecArgs(options = {}) {
 }
 
 export function buildCodexInteractiveArgs(options = {}) {
-  return [
+  const args = [
     "-a",
     "never",
-    "-m",
-    options.model || DEFAULT_SUBAGENT_MODEL,
-    "--config",
-    `model_reasoning_effort="${options.reasoning || DEFAULT_SUBAGENT_REASONING}"`,
-    "--config",
-    `service_tier=${options.serviceTier || DEFAULT_SERVICE_TIER}`,
+  ];
+  appendCodexModelConfigArgs(args, options);
+  args.push(
     "-s",
     options.sandboxMode || "danger-full-access",
     "-C",
     options.cwd,
     "--no-alt-screen",
     String(options.prompt || ""),
-  ];
+  );
+  return args;
 }
 
 async function runCodexPrompt(options) {
@@ -2684,6 +2782,152 @@ async function runCodexPrompt(options) {
     stdin: options.prompt,
     stdoutLog: options.stdoutLog,
     stderrLog: options.stderrLog,
+  });
+}
+
+async function runSubagentCliPrompt(session, options) {
+  const launcher = getSessionSubagentLauncher(session);
+  if (launcher === "claude-code-cli") {
+    return runClaudeCodePrintPrompt(options);
+  }
+  return runCodexInteractivePrompt(options);
+}
+
+async function runClaudeCodePrintPrompt(options) {
+  const command = options.context.claudeCodeCli || "claude";
+  const args = buildClaudeCodePrintArgs({
+    cwd: options.cwd,
+    model: options.model,
+    prompt: options.prompt,
+  });
+  const startedAtMs = Date.now();
+  const reportTimeoutMs = envDurationMs("AGENT_DESK_CLAUDE_REPORT_TIMEOUT_MS", CODEX_SUBAGENT_REPORT_TIMEOUT_MS);
+  const child = spawn(command, args, {
+    cwd: options.cwd || process.cwd(),
+    env: {
+      ...process.env,
+      TERM: process.env.TERM || "xterm-256color",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let stdout = "";
+  let stderr = "";
+  let exited = false;
+  let exitInfo = { exitCode: null, signal: null };
+  let checking = false;
+  let settled = false;
+  let lastInvalidReportError = "";
+  let claudeSession = null;
+
+  child.stdout.on("data", (chunk) => {
+    const text = chunk.toString();
+    stdout += text;
+    appendFileSyncSafe(options.stdoutLog, text);
+  });
+  child.stderr.on("data", (chunk) => {
+    const text = chunk.toString();
+    stderr += `${stderr ? "\n" : ""}${text}`;
+    appendFileSyncSafe(options.stderrLog, text);
+  });
+
+  const exitPromise = new Promise((resolve) => {
+    child.on("error", (error) => {
+      exited = true;
+      exitInfo = { exitCode: 1, signal: null };
+      stderr += `${stderr ? "\n" : ""}${error.message}`;
+      resolve(exitInfo);
+    });
+    child.on("close", (exitCode, signal) => {
+      exited = true;
+      exitInfo = {
+        exitCode: exitCode ?? 1,
+        signal,
+      };
+      resolve(exitInfo);
+    });
+  });
+
+  return new Promise((resolve) => {
+    const settle = async (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearInterval(interval);
+      resolve(result);
+    };
+
+    const interval = setInterval(() => {
+      if (checking || settled) {
+        return;
+      }
+      checking = true;
+      void (async () => {
+        try {
+          const report = await readSubagentReportIfValid(options.reportJson);
+          if (report.error && report.error !== lastInvalidReportError) {
+            lastInvalidReportError = report.error;
+            appendFileSyncSafe(options.stderrLog, `invalid subagent report JSON at ${options.reportJson}: ${report.error}\n`);
+          }
+          if (report.ok) {
+            if (!claudeSession) {
+              claudeSession = parseClaudePrintOutput(stdout);
+              if (claudeSession.claudeSessionId) {
+                await options.onSessionDiscovered?.(claudeSession);
+              }
+            }
+            await killSpawnedProcess(child, exitPromise, () => exited);
+            await settle({
+              exitCode: 0,
+              signal: null,
+              stdout,
+              stderr,
+              report: report.report,
+              ...(claudeSession || {}),
+            });
+            return;
+          }
+
+          if (exited) {
+            if (!claudeSession) {
+              claudeSession = parseClaudePrintOutput(stdout);
+              if (claudeSession.claudeSessionId) {
+                await options.onSessionDiscovered?.(claudeSession);
+              }
+            }
+            const message = `Claude Code CLI exited before writing a valid report JSON: ${options.reportJson}`;
+            appendFileSyncSafe(options.stderrLog, `${message}\n`);
+            await settle({
+              exitCode: exitInfo.exitCode || 1,
+              signal: exitInfo.signal,
+              stdout,
+              stderr: `${stderr}${stderr ? "\n" : ""}${message}`,
+              ...(claudeSession || {}),
+            });
+            return;
+          }
+
+          if (Date.now() - startedAtMs > reportTimeoutMs) {
+            const message = `timed out waiting for subagent report JSON: ${options.reportJson}`;
+            appendFileSyncSafe(options.stderrLog, `${message}\n`);
+            await killSpawnedProcess(child, exitPromise, () => exited);
+            if (!claudeSession) {
+              claudeSession = parseClaudePrintOutput(stdout);
+            }
+            await settle({
+              exitCode: 1,
+              signal: null,
+              stdout,
+              stderr: `${stderr}${stderr ? "\n" : ""}${message}`,
+              ...(claudeSession || {}),
+            });
+          }
+        } finally {
+          checking = false;
+        }
+      })();
+    }, 250);
   });
 }
 

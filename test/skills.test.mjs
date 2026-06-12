@@ -216,8 +216,8 @@ test("codexapp-direct-subagents skill bypasses AgentDesk tasks by default", asyn
   assert.match(skill, /Do not create `task\.md`/);
   assert.match(skill, /call `create_agentdesk_task`/);
   assert.match(skill, /call `start_subagent_session`/);
-  assert.match(skill, /model: "gpt-5\.5"/);
-  assert.match(skill, /reasoning_effort: "xhigh"/);
+  assert.match(skill, /model: "o4-mini"/);
+  assert.match(skill, /reasoning_effort: "low"/);
   assert.match(skill, /Launch at most `6` subagents/);
 });
 

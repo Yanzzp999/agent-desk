@@ -14,6 +14,7 @@ const context = createContext({
   worktreesRoot: args["worktrees-root"],
   configPath: args.config,
   codexCli: args["codex-cli"],
+  claudeCodeCli: args["claude-code-cli"],
 });
 
 try {
