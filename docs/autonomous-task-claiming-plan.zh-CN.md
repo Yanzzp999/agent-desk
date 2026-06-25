@@ -19,7 +19,7 @@ AgentDesk 应新增一个任务池工作流：
 3. 领取动作必须原子化，写入租约、负责人、session id、过期时间和可读状态。
 4. agent 只实现自己领取的 work item，验证后提交完成报告。
 5. 系统能回收超时、失败、阻塞的 claim，并留下可审计记录。
-6. 现有 CLI/MCP-first 定位不变，Web UI 仅作为可选 beta，不引入 GUI、Electron、`prd.json`、Gemini CLI 或 Claude Code 兼容层。
+6. 现有 CLI/MCP-only 定位不变，AgentDesk 是 headless 的，不引入 web UI、HTTP API、GUI、Electron、`prd.json`、Gemini CLI 或 Claude Code 兼容层。
 
 ## 运营管理原则映射
 
@@ -324,7 +324,7 @@ verunectl queue claim <workId> --agent <agentId> --session <sessionId> [--json]
 
 ## Constraints
 
-- 保持 CLI/MCP-first；Web UI 是可选 beta，不增加 GUI、Electron、Web app 或 npm run dev 验证，除非任务明确触达该 beta surface。
+- 保持 CLI/MCP-only；AgentDesk 是 headless 的，不增加 web UI、HTTP API、GUI、Electron 或 Web app。
 - 不引入 `prd.json`、Gemini CLI 或 Claude Code 兼容层。
 - 默认模型/执行说明仍显式保持 `gpt-5.5`、`xhigh`、`fast`、并发上限 6、以 `agentdesk/next` 为默认工作分支且默认不 push。
 - 不破坏现有 `claim_next_task_item`、`complete_task_items` 和 `start_subagent_session` 行为。

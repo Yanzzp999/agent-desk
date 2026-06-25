@@ -18,7 +18,6 @@
     "src/",
     "skills/",
     "scripts/check-github-version.sh",
-    "scripts/dev-all.mjs",
     "scripts/install-mcp.sh",
     "scripts/sync-codex-skills.sh",
     "scripts/verunectl.sh",
@@ -33,11 +32,7 @@
     "access": "public"
   },
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "dev:all": "node scripts/dev-all.mjs",
-    "build": "tsc -p tsconfig.web.json && vite build",
     "test": "node --test test/*.test.mjs",
-    "test:web": "vitest run --config vitest.config.ts",
     "sync:codex-skills": "./scripts/sync-codex-skills.sh",
     "secret-scan": "gitleaks git --redact --verbose ."
   },
@@ -46,21 +41,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@uiw/react-md-editor": "^4.1.1",
-    "lucide-react": "^0.468.0",
     "node-pty": "^1.1.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
     "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^4.3.4",
-    "typescript": "^5.7.2",
-    "vite": "^6.0.6",
-    "vitest": "^2.1.8"
   }
 }

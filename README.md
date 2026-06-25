@@ -33,9 +33,9 @@ AgentDesk is built around three objects:
 
 Agents can use `claim_next_task_item` before implementation; the visible marker records `agent -> sessionId` so people and other agents can see ownership. Before subagent execution, the coordinating model should review task complexity and concurrent-edit conflict risk, choose a recommended per-batch subagent count, and tell the user; the user can still choose a different concurrency value within the configured maximum.
 
-The default AgentDesk usage path is the bundled Codex skills plus MCP/CLI: generate or read a `task.md`, claim checklist work, run or prepare subagent sessions, and review session history through `verunectl` or the MCP stdio server.
+The AgentDesk usage path is the bundled Codex skills plus MCP/CLI: generate or read a `task.md`, claim checklist work, run or prepare subagent sessions, and review session history through `verunectl` or the MCP stdio server.
 
-AgentDesk also includes an optional beta local React/Vite/TypeScript task management UI. The web runtime serves the same task.md, MCP stdio, `verunectl`, session history, and Codex subagent orchestration model, but it is not required for normal AgentDesk usage. It is not an Electron shell, Next.js app, or legacy compatibility surface.
+AgentDesk is headless: it has no web UI, HTTP API, or browser surface. Subagents are launched through the Codex (`codex-cli`) and Claude (`claude-code-cli`) CLIs, or prepared as host-direct launch plans (codex-app / claude-direct / grok-direct) for in-session dispatch.
 
 ## Local MCP Setup
 
@@ -61,49 +61,15 @@ You can also start the same MCP server through the local CLI:
 ./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
 ```
 
-## Beta Local Web UI
+## Overall Tasks (SQLite)
 
-The optional beta web UI opens directly on task management. It includes day/week/month planning, filters, an overall task list, task detail, create/edit form, claim and dispatch actions, coding `projectRoot` validation, and recent session summaries.
+AgentDesk keeps a user-level day/week/month planning store backed by SQLite, exposed through the `create_overall_task` family of MCP tools and the `verunectl overall-tasks` CLI subcommands.
 
-Start the local SQLite-backed API first, then run Vite:
-
-```sh
-./scripts/verunectl.sh api --project /absolute/path/to/project
-npm run dev
-```
-
-Or start both processes with one command:
-
-```sh
-npm run dev:all -- --project /absolute/path/to/project
-```
-
-Vite serves the app at `http://127.0.0.1:5173` by default. During development it proxies `/api/agentdesk` to the Node.js ESM HTTP API at `http://127.0.0.1:19731`; the API stores overall task metadata, period assignment, claim/dispatch state, and audit events in the **user-root-level** `~/.agent-desk/tasks.sqlite` by default.
-
-**Key design principle**: This Overall Tasks SQLite database lives **only at the user root level** (`~/.agent-desk/tasks.sqlite`). Individual project directories should **not** contain their own copy of this database. Each project's `.agent-desk/` directory only holds traditional control-plane tasks (task.md, sessions, etc.). This design enables managing tasks across multiple projects + user-level planning tasks from the user's home directory.
+**Key design principle**: This Overall Tasks SQLite database lives **only at the user root level** (`~/.agent-desk/tasks.sqlite`). Individual project directories should **not** contain their own copy of this database. Each project's `.agent-desk/` directory only holds traditional control-plane tasks (task.md, sessions, etc.). This design enables managing tasks across multiple projects plus user-level planning tasks from the user's home directory.
 
 Pass `--sqlite-path <file>` to override it for a run.
 
-Expected local API routes:
-
-- `GET /api/agentdesk/tasks`
-- `GET /api/agentdesk/tasks/:taskId`
-- `POST /api/agentdesk/tasks`
-- `PATCH /api/agentdesk/tasks/:taskId`
-- `POST /api/agentdesk/tasks/:taskId/claim`
-- `POST /api/agentdesk/tasks/:taskId/dispatch`
-- `GET /api/agentdesk/sessions/recent`
-
-Overall tasks can be user-level (`projectRoot` empty) or project-bound (`projectRoot` absolute). Coding tasks require a project root before dispatch; project-filtered views include matching project tasks plus user-level planning tasks. Task and session dispatch keeps the documented weakest-model defaults: Codex launchers use `o4-mini` + `low`, Claude launchers use `haiku`, Grok launchers use `composer-2.5-fast`, service tier unset by default, and launch batch size `6`.
-
-Frontend checks:
-
-```sh
-npm run test:web
-npm run build
-```
-
-Only use these checks for changes that touch the beta web UI or its runtime. When validating `npm run dev`, first reuse an already-running dev server when one is reachable. Use Computer Use to inspect the running UI; only use browser-based validation when explicitly requested or when Computer Use is unavailable.
+Overall tasks can be user-level (`projectRoot` empty) or project-bound (`projectRoot` absolute). Coding tasks require a project root before dispatch. Task and session dispatch keeps the documented weakest-model defaults: Codex launchers use `o4-mini` + `low`, Claude launchers use `haiku`, Grok launchers use `composer-2.5-fast`, service tier unset by default, and launch batch size `6`.
 
 ## Common CLI
 
