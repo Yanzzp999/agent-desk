@@ -35,7 +35,7 @@ agent 可以在实现前使用 `claim_next_task_item`；可见 marker 会记录 
 
 AgentDesk 的默认使用路径是内置 Codex skills 加 MCP/CLI：生成或读取 `task.md`，领取 checklist 工作，运行或准备 subagent session，并通过 `verunectl` 或 MCP stdio server 查看 session history。
 
-AgentDesk 也包含可选的 beta 本地 React / Vite / TypeScript task 管理 UI。这个 web runtime 仍然服务同一套 task.md、MCP stdio、`verunectl`、session history 和 Codex subagent 编排模型，但它不是正常使用 AgentDesk 的必要入口。它也不是 Electron shell、Next.js app 或旧兼容入口。
+AgentDesk 是 headless 的：没有 web UI、HTTP API 或浏览器入口。subagent 通过 Codex（`codex-cli`）和 Claude（`claude-code-cli`）CLI 启动，或准备成 host-direct 启动方案（codex-app / claude-direct / grok-direct）用于会话内分发。
 
 ## 本地 MCP 注册
 
@@ -61,52 +61,15 @@ codex mcp add agent-desk-my-project \
 ./scripts/verunectl.sh mcp --project /absolute/path/to/your/project
 ```
 
-## Beta 本地 Web UI
+## Overall Tasks（SQLite）
 
-可选 beta Web UI 已升级为「项目-任务树」Agent 工作区模式（类似 Codex / Claude Code）：
-左侧为可折叠的项目分组 + 任务树（支持搜索、展开持久化），中央是专注任务工作区（Markdown 编辑、进度、会话历史 + 底部 Composer 追加指令），右侧为输出面板占位。
-仍保留 Finder 导入、Claim/Dispatch、projectRoot 校验等核心能力。Web UI 仍是**可选 beta**，默认路径为 CLI/MCP + `task.md` + Codex subagent。
-旧的 Portfolio dashboard 视图已由新树导航取代。
-
-先启动本地 SQLite-backed API，再运行 Vite：
-
-```sh
-./scripts/verunectl.sh api --project /absolute/path/to/project
-npm run dev
-```
-
-也可以用一个命令同时启动两个进程：
-
-```sh
-npm run dev:all -- --project /absolute/path/to/project
-```
-
-Vite 默认在 `http://127.0.0.1:5173` 提供页面。开发时会把 `/api/agentdesk` 代理到 `http://127.0.0.1:19731` 上的 Node.js ESM HTTP API；API 默认会把总体 task 元数据、周期归属、领取/分发状态和审计事件保存在**用户根目录级**的 `~/.agent-desk/tasks.sqlite`。
+AgentDesk 维护一个用户级的 day/week/month 规划存储，由 SQLite 支撑，通过 `create_overall_task` 系列 MCP 工具和 `verunectl overall-tasks` CLI 子命令暴露。
 
 **重要设计原则**：这个 Overall Tasks 的 SQLite 数据库只存在于用户根目录级别（`~/.agent-desk/tasks.sqlite`）。单个项目目录下**不应该**有这个数据库。每个项目自己的 `.agent-desk/` 目录只存放传统的控制面任务（task.md、session 等）。这样才能支持从用户根目录统一管理多个项目的任务 + 用户级规划任务。
 
 单次运行需要覆盖路径时传 `--sqlite-path <file>`。
 
-预期本地 API routes：
-
-- `GET /api/agentdesk/tasks`
-- `GET /api/agentdesk/tasks/:taskId`
-- `POST /api/agentdesk/tasks`
-- `PATCH /api/agentdesk/tasks/:taskId`
-- `POST /api/agentdesk/tasks/:taskId/claim`
-- `POST /api/agentdesk/tasks/:taskId/dispatch`
-- `GET /api/agentdesk/sessions/recent`
-
-总体 task 可以是用户级任务（`projectRoot` 为空）或项目绑定任务（`projectRoot` 为绝对路径）。coding 任务在 dispatch 前必须绑定项目；按项目过滤时会同时显示该项目任务和用户级规划任务。Task 和 session dispatch 继续使用文档化默认值：模型 `gpt-5.5`、reasoning `xhigh`、service tier `fast`、启动批次大小 `6`。
-
-前端检查：
-
-```sh
-npm run test:web
-npm run build
-```
-
-只有改动 beta Web UI 或其运行时行为时才需要使用这些检查。验证 `npm run dev` 时，先检查是否已有可访问 dev server，并优先复用。应使用 Computer Use 检查运行中的 UI；除非用户明确要求或 Computer Use 不可用，不默认改用 browser-based validation。
+总体 task 可以是用户级任务（`projectRoot` 为空）或项目绑定任务（`projectRoot` 为绝对路径）。coding 任务在 dispatch 前必须绑定项目。Task 和 session dispatch 继续使用文档化默认值：Codex 启动器用 `o4-mini` + `low`，Claude 启动器用 `haiku`，Grok 启动器用 `composer-2.5-fast`，service tier 默认不设，启动批次大小 `6`。
 
 ## 常用 CLI
 

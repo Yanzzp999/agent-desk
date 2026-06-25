@@ -325,122 +325,6 @@ function isGitRepository(projectRoot) {
   }
 }
 
-export async function createOverallTaskApiStore(options = {}) {
-  const context = normalizeContext(options.context, options);
-  return {
-    context,
-    async getStatus() {
-      const listed = await listOverallTasks(context, { limit: 1000 });
-      return {
-        ok: true,
-        projectRoot: context.projectRoot,
-        counts: listed.summary,
-      };
-    },
-    async listTasks(query = {}) {
-      const listed = await listOverallTasks(context, normalizeApiQuery(query));
-      return {
-        items: listed.items.map(toUiTaskSummary),
-        summary: summarizeUiTasks(listed.items),
-      };
-    },
-    async getTask(taskId) {
-      const result = await getOverallTask(context, taskId);
-      return toUiTaskDetail(result.task);
-    },
-    async createTask(request) {
-      const result = await createOverallTask(context, normalizeApiMutation(request, { defaults: true }));
-      return toUiTaskDetail(result.task);
-    },
-    async updateTask(taskId, patch) {
-      const result = await updateOverallTask(context, taskId, normalizeApiMutation(patch, { defaults: false }));
-      return toUiTaskDetail(result.task);
-    },
-    async claimTask(taskId, request) {
-      const result = await claimOverallTask(context, taskId, request);
-      return toUiTaskDetail(result.task);
-    },
-    async dispatchTask(taskId, request) {
-      const result = await dispatchOverallTask(context, taskId, {
-        ...request,
-        sessionId: request.sessionId || `ui-dispatch-${Date.now()}`,
-      });
-      return toUiTaskDetail(result.task);
-    },
-    async generateBreakdown(taskId, request) {
-      return breakdownOverallTask(context, taskId, request);
-    },
-    async getTaskStatus(taskId) {
-      const result = await getOverallTask(context, taskId);
-      return {
-        taskId,
-        status: mapStoreStatusToUi(result.task.status),
-        activeSessionId: result.task.session.sessionId,
-        activeSessionStatus: result.task.session.status,
-      };
-    },
-    async listAudit(taskId, query = {}) {
-      return withOverallTaskStore(context, async (store) => ({
-        items: store.getAuditEvents(taskId, { limit: query.limit || 50 }).map((event) => ({
-          id: event.eventId,
-          taskId: event.taskId,
-          eventType: event.eventType,
-          actor: event.actor,
-          sessionId: event.sessionId,
-          message: event.message,
-          changes: event.changes,
-          createdAt: event.createdAt,
-        })),
-      }));
-    },
-    async getSessionSummary(taskId) {
-      const sessions = await recentSessionsForTask(context, taskId);
-      return {
-        taskId,
-        counts: {
-          total: sessions.length,
-          running: sessions.filter((session) => session.status === "running").length,
-          succeeded: sessions.filter((session) => session.status === "succeeded").length,
-          failed: sessions.filter((session) => session.status === "failed").length,
-        },
-        items: sessions,
-      };
-    },
-    async listRecentSessions(limit = 6) {
-      const result = await listSessions(context);
-      return result.items.slice(0, limit).map(toUiSessionSummary);
-    },
-    async importProjectTasks(projectPath) {
-      const absolutePath = normalizeProjectRootForStore(projectPath);
-      if (!absolutePath) {
-        throw new Error("projectPath is required");
-      }
-
-      // 使用已有的 backfill 能力，把该项目目录下的传统 task.md 导入到全局 Overall Tasks
-      return withOverallTaskStore(context, async (store) => {
-        const backfillResult = await backfillTaskMarkdownSources(store, {
-          projectRoot: absolutePath,
-          deskRoot: path.join(absolutePath, ".agent-desk"),
-          eventType: "import",
-          message: `Imported tasks from project at ${absolutePath}`,
-        });
-
-        return {
-          ok: true,
-          projectRoot: absolutePath,
-          importedCount: backfillResult.count,
-          tasks: backfillResult.items.map((t) => ({
-            taskId: t.id,
-            title: t.title,
-            source: t.sourcePath,
-          })),
-        };
-      });
-    },
-    async close() {},
-  };
-}
-
 function normalizeContext(contextLike, options = {}) {
   return normalizeOverallContext(contextLike, options);
 }
@@ -570,68 +454,6 @@ function normalizeStoreTaskPatch(input) {
   return patch;
 }
 
-function normalizeApiMutation(request = {}, options = {}) {
-  const useDefaults = options.defaults !== false;
-  const scope = normalizeOptionalString(request.scope);
-  const taskType = request.taskType || (scope === "user" ? "general" : "coding");
-  const normalized = {};
-  if (request.title !== undefined) {
-    normalized.title = request.title;
-  }
-  if (request.description !== undefined || request.brief !== undefined) {
-    normalized.description = request.description ?? request.brief;
-  }
-  if (request.taskType !== undefined || scope || useDefaults) {
-    normalized.taskType = taskType;
-  }
-  if (request.periodType !== undefined || request.period !== undefined || useDefaults) {
-    normalized.periodType = request.periodType || request.period || "week";
-  }
-  if (request.periodKey !== undefined) {
-    normalized.periodKey = request.periodKey;
-  }
-  if (request.status !== undefined || useDefaults) {
-    normalized.status = request.status || "ready";
-  }
-  if (request.priority !== undefined || useDefaults) {
-    normalized.priority = request.priority || "normal";
-  }
-  if (request.assignee !== undefined || request.claimedBy !== undefined) {
-    normalized.assignee = request.assignee || request.claimedBy;
-  }
-  if (request.projectRoot !== undefined || scope === "user") {
-    normalized.projectRoot = scope === "user" ? "" : request.projectRoot;
-  }
-  if (request.branch !== undefined) {
-    normalized.branch = request.branch;
-  }
-  if (request.dueAt !== undefined || useDefaults) {
-    normalized.dueAt = request.dueAt || null;
-  }
-  return normalized;
-}
-
-function normalizeApiQuery(query = {}) {
-  const normalized = {
-    periodType: query.periodType || query.period || query.range,
-    periodKey: query.periodKey,
-    status: query.status,
-    q: query.q || query.query,
-    assignee: query.assignee || query.owner,
-    limit: query.limit,
-  };
-  if (query.projectRoot !== undefined) {
-    normalized.projectRoot = query.projectRoot;
-  }
-  // The user-level view passes scope=user. Force an explicit empty projectRoot so the store
-  // returns only user-scoped tasks AND skips project markdown backfill (which would otherwise
-  // scan the ambient project root and pull in unrelated task files).
-  if (normalizeOptionalString(query.scope) === "user") {
-    normalized.projectRoot = "";
-  }
-  return normalized;
-}
-
 function toOverallTask(store, task, options = {}) {
   const audit = store.getAuditEvents(task.id);
   const latestClaim = latestAuditEvent(audit, "claim");
@@ -700,67 +522,6 @@ function loadSourceMarkdown(sourcePath) {
   }
 }
 
-function computeSubtaskStats(sourcePathOrMarkdown) {
-  let markdown = "";
-  if (typeof sourcePathOrMarkdown === "string" && sourcePathOrMarkdown.includes("\n")) {
-    markdown = sourcePathOrMarkdown;
-  } else if (sourcePathOrMarkdown) {
-    markdown = loadSourceMarkdown(sourcePathOrMarkdown);
-  }
-  const items = parseMarkdownChecklist(markdown);
-  const total = items.length;
-  const done = items.filter((i) => i.checked).length;
-  return { subtaskCount: total, completedSubtasks: done };
-}
-
-function toUiTaskSummary(task) {
-  const stats = computeSubtaskStats(task.sourcePath);
-  return {
-    taskId: task.id,
-    title: task.title,
-    brief: task.description,
-    status: mapStoreStatusToUi(task.status),
-    priority: priorityLabel(task.priority),
-    projectRoot: task.projectRoot,
-    scope: task.scope || (task.projectRoot ? "project" : "user"),
-    isProjectBound: task.isProjectBound ?? Boolean(task.projectRoot),
-    taskType: task.taskType,
-    createdAt: task.createdAt,
-    updatedAt: task.updatedAt,
-    dueAt: task.dueAt || undefined,
-    tags: [task.projectRoot ? "project" : "user", task.periodType, task.taskType].filter(Boolean),
-    subtaskCount: stats.subtaskCount,
-    completedSubtasks: stats.completedSubtasks,
-    claimedBy: task.claimedBy || undefined,
-    activeSessionId: task.dispatchSessionId || undefined,
-    activeSessionStatus: task.dispatchSessionId ? "running" : undefined,
-    paths: {
-      taskMd: task.sourcePath || "",
-    },
-  };
-}
-
-function toUiTaskDetail(task) {
-  const base = toUiTaskSummary(task);
-  // Prefer real markdown from the source file for imported/backfilled tasks (MCP task/*.task.md
-  // or .agent-desk/tasks/*/task.md). Fall back to any in-memory value or a minimal header.
-  const rawMarkdown = task.markdown
-    || loadSourceMarkdown(task.sourcePath)
-    || `# ${task.title}\n\n${task.description || ""}\n`;
-  const subtasks = parseMarkdownChecklist(rawMarkdown).map((item) => ({
-    title: item.title,
-    checked: Boolean(item.checked),
-    ...(item.parallel ? { parallel: item.parallel } : {}),
-  }));
-  return {
-    ...base,
-    markdown: rawMarkdown,
-    memory: "",
-    subtasks,
-    recentSessions: task.recentSessions || [],
-  };
-}
-
 function toUiSessionSummary(session) {
   return {
     sessionId: session.sessionId,
@@ -797,10 +558,6 @@ function summarizeOverallTasks(items) {
     blocked: items.filter((task) => task.status === "blocked").length,
     succeeded: items.filter((task) => task.status === "succeeded" || task.status === "done").length,
   };
-}
-
-function summarizeUiTasks(items) {
-  return summarizeOverallTasks(items.map((item) => ({ ...item, status: mapStoreStatusToUi(item.status) })));
 }
 
 function normalizePeriodType(value) {
@@ -880,20 +637,6 @@ function mapUiStatusToStore(status) {
   }
   if (!OVERALL_TASK_STATUSES.includes(value)) {
     throw new Error(`unsupported overall task status: ${status}`);
-  }
-  return value;
-}
-
-function mapStoreStatusToUi(status) {
-  const value = normalizeOptionalString(status || "ready").toLowerCase();
-  if (value === "backlog") {
-    return "draft";
-  }
-  if (value === "done") {
-    return "succeeded";
-  }
-  if (value === "dispatched") {
-    return "running";
   }
   return value;
 }

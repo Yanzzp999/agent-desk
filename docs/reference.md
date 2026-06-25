@@ -6,7 +6,7 @@ This page holds reference details that are useful while operating or extending A
 
 ## Codex Skills
 
-All bundled skills are explicit-invocation only. They are the default AgentDesk product path alongside the MCP stdio server and `verunectl`; the local Web UI is optional beta functionality.
+All bundled skills are explicit-invocation only. They are the AgentDesk product path alongside the MCP stdio server and `verunectl`. AgentDesk is headless — there is no web UI or HTTP API.
 
 | Skill | Purpose |
 | --- | --- |
@@ -73,4 +73,4 @@ npm test
 codex --version
 ```
 
-The local Web UI is beta and optional, so do not include UI validation for ordinary skills, MCP, CLI, task, or session changes. For changes that touch the beta UI or Web runtime, follow the repository rules: check whether a dev server is already running, start one only when needed, and prefer Computer Use for local UI validation.
+AgentDesk is headless: there is no web UI or HTTP API to validate. `npm test` covers the control plane, MCP server, CLI orchestration, and the Codex/Claude CLI launchers.

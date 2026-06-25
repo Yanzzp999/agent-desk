@@ -2,13 +2,9 @@
 
 ## Verification Workflow
 
-- The default AgentDesk workflow is the bundled Codex skills plus MCP/CLI (`task.md`, session history, `verunectl`, and Codex subagent orchestration).
-- The local Web UI is an optional beta surface. It is not required for normal AgentDesk usage, task execution, or default validation.
-- Only include UI or `npm run dev` validation when a change explicitly touches the beta Web UI, dev server, or Web runtime behavior.
-- When validating UI or runtime behavior served by `npm run dev`, Codex should default to using [@电脑](plugin://computer-use@openai-bundled) to inspect the running app.
-- Before running `npm run dev`, Codex should check whether the dev server is already running and reuse it when available.
-- Only run `npm run dev` when the dev server is not running or cannot be reached.
-- Do not use browser-based validation for `npm run dev` output unless the user explicitly asks for it or Computer Use is unavailable.
+- AgentDesk is a headless MCP + CLI orchestrator. The only surfaces are the bundled Codex skills, the MCP stdio server, and the `verunectl` CLI (`task.md`, session history, and Codex/Claude subagent orchestration).
+- There is no web UI, HTTP API, or browser surface. Do not reintroduce one.
+- Validate changes with `npm test` (`node --test test/*.test.mjs`), which covers the control plane, MCP server, CLI orchestration, and the Codex/Claude CLI launchers.
 
 ## Git Workflow
 
@@ -32,8 +28,8 @@
 
 ## Product Direction
 
-- Keep AgentDesk centered on project configuration/selection through CLI/MCP, `task.md` generation, session history, and Codex subagent orchestration.
-- Treat the skills-led MCP/CLI flow as the default product path; keep the Web UI clearly labeled as beta and optional.
-- Do not reintroduce `prd.json`, Gemini CLI, or the legacy Claude Code compatibility layer. External `claude-code-cli` launcher support is allowed alongside `codex-cli`.
+- Keep AgentDesk centered on project configuration/selection through CLI/MCP, `task.md` generation, session history, and Codex/Claude subagent orchestration.
+- The skills-led MCP/CLI flow is the only product path. Do not add a web UI, HTTP API, or any browser-based surface.
+- Do not reintroduce `prd.json`, Gemini CLI, the removed web UI/HTTP API, or the legacy Claude Code compatibility layer. External `claude-code-cli` launcher support is allowed alongside `codex-cli`.
 - Session execution defaults should remain explicit in user-facing docs: Codex launchers use `o4-mini` + `low`, Claude launchers use `haiku`, Grok launchers use `composer-2.5-fast`, service tier unset by default, batched launches of 6, and this repository's Codex development baseline of `agentdesk/next`.
-- Prefer the MCP stdio server and `verunectl` terminal commands as the primary interface.
+- The MCP stdio server and `verunectl` terminal commands are the primary interface.

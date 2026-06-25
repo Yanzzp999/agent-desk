@@ -47,27 +47,23 @@ const VALUE_OPTIONS = new Set([
   "brief",
   "agentdesk-task",
   "actor",
-  "api-base-path",
   "assignee",
   "base-branch",
   "branch",
   "date",
   "description",
   "dispatch-target",
-  "host",
   "note",
   "owner",
   "period",
   "period-key",
   "period-type",
-  "port",
   "priority",
   "q",
   "query",
   "session",
   "sqlite",
   "sqlite-path",
-  "static-dir",
   "status",
   "task-type",
   "worktree-integration",
@@ -128,11 +124,6 @@ async function main() {
 
   if (command === "sessions") {
     await handleSessions(context, parsed);
-    return;
-  }
-
-  if (command === "api") {
-    await handleApi(context, parsed);
     return;
   }
 
@@ -373,42 +364,6 @@ async function handleSessions(context, parsed) {
   throw new Error(`unknown sessions command: ${subcommand}`);
 }
 
-async function handleApi(context, parsed) {
-  const { startTaskApiServer } = await import("../src/lib/task-api-server.mjs");
-  const listener = await startTaskApiServer({
-    context,
-    host: parsed.host,
-    port: parsed.port,
-    sqlitePath: parsed.sqlite || parsed["sqlite-path"],
-    staticDir: parsed["static-dir"],
-    basePath: parsed["api-base-path"],
-  });
-  const payload = {
-    url: listener.url,
-    host: listener.host,
-    port: listener.port,
-    basePath: listener.basePath,
-    projectRoot: context.projectRoot,
-  };
-  if (parsed.json) {
-    console.log(JSON.stringify(payload, null, 2));
-  } else {
-    console.log(`AgentDesk task API listening on ${listener.url}`);
-    console.log("Use Vite dev proxy for the same base path, or pass --static-dir for built UI files.");
-  }
-  await waitForShutdown(listener);
-}
-
-async function waitForShutdown(listener) {
-  await new Promise((resolve) => {
-    const shutdown = () => {
-      void listener.close().finally(resolve);
-    };
-    process.once("SIGINT", shutdown);
-    process.once("SIGTERM", shutdown);
-  });
-}
-
 async function attachCodexAppLaunchPlan(context, session) {
   if (!isHostDirectLauncher(session.subagentLauncher)) {
     return session;
@@ -546,7 +501,6 @@ Usage:
   verunectl overall-tasks update <overallTaskId> [--title TEXT] [--description TEXT] [--status STATUS] [--assignee NAME] [--json]
   verunectl overall-tasks claim <overallTaskId> --assignee NAME [--session SESSION] [--note TEXT] [--force] [--json]
   verunectl overall-tasks dispatch <overallTaskId> --session SESSION [--assignee NAME] [--branch BRANCH] [--force] [--json]
-  verunectl api [--host HOST] [--port PORT] [--api-base-path PATH] [--static-dir DIR] [--json]
   verunectl mcp [--project DIR]
   verunectl config show [--json]
   verunectl config init [--force] [--json]
